@@ -6,9 +6,11 @@ This roadmap divides the V1 design into testable development releases implemente
 
 The roadmap follows [`DESIGN_V1.md`](DESIGN_V1.md). Each release should leave its completed behavior runnable and tested, while features assigned to [`DESIGN_V2.md`](DESIGN_V2.md) remain out of scope. V1 uses full-entity resolution over complete terminal evidence relations. It does not depend on the `output_delta_consumer` capability or affected-set resolution.
 
+The V1 design controls semantics, this roadmap controls sequencing, and the detailed plans describe implementation. Resolve contradictions in these documents before implementing the affected behavior. File layouts and SQL skeletons are starting points, not requirements to create unused modules. New features, including private implementations of V2 capabilities, require explicit project-owner approval. A missed estimate triggers review and re-estimation; removing an agreed V1 requirement also requires approval.
+
 This repository currently contains designs only. Work on v0.1 through v0.7 can start now. The foundation baseline is `pg_trickle` v0.98.0 at commit `737927d336aabfff3b69bc2b0c29917b556c3626` (tag object `168faa71074a81ba4315bf3a162dc5c32cc914dd`). CI uses the published `pg_trickle-0.98.0-pg18-linux-amd64.tar.gz` artifact with SHA-256 `6b8a9cd3bb4761ede6150c29ba01f27eecbc2e3cffd5a85096c5683809c17fa7`; v0.1 records the image digest and full build provenance derived from it. `pg_trickle` v0.98.1 was released on 9 September 2026, but it still advertises Graph V1 and Delta V1 as disabled. It does not change the gate and is not the baseline unless a reviewed dependency change qualifies it. Live graph integration in v0.8 and v0.9 remains blocked until a released `pg_trickle` capability advertises `external_graph_refresh` major 1 as enabled and passes the shared conformance gate.
 
-Before attaching calendar dates, v0.1 and v0.2 must establish the extension toolchain and test harness. Revise the remaining estimates from measured delivery. A milestone is complete only when its behavior is installed, runnable, and covered by its stated tests. Design or partially wired code does not count. If a milestone exceeds its upper range, re-estimate the remaining work and move optional behavior to V2 rather than silently extending V1.
+Before attaching calendar dates, v0.1 and v0.2 must establish the extension toolchain and test harness. Revise the remaining estimates from measured delivery. A milestone is complete only when its behavior is installed, runnable, and covered by its stated tests. Design or partially wired code does not count. If a milestone exceeds its upper range, re-estimate the remaining work and submit any proposed scope reduction for review.
 
 Until Graph V1 passes its gate, tests use an SQL-backed production-shaped path:
 
@@ -32,6 +34,22 @@ Tests may still load terminal relations directly for focused resolver cases, but
 
 The initial V1 integration supports only `pg_trickle` trigger capture. WAL capture remains out of scope until `pg_trickle` advertises it as qualified. Delta V1 also remains out of scope. A later release may use `output_delta_consumer` to optimize affected-set resolution, but V1 always reads the complete terminal evidence relations after a strict graph refresh.
 
+## Pre-implementation assessment
+
+Assessment date: 9 September 2026. The design is suitable for starting v0.1, with the following proof obligations assigned to existing releases. It is not yet evidence of a production-ready system. The main risks are the privileged execution path, preservation of versioned semantics, durable identity history, and the unavailable upstream graph contract.
+
+| Gap addressed in the plans | Required evidence | Gate |
+|---|---|---|
+| Helper ownership and direct-call authorization | Install and upgrade ownership procedure; forged helper calls cannot write protected state | v0.1, v0.2 |
+| Role replacement and changing RLS visibility | Stored role binding; same-name replacement rejected; visibility changes cannot reuse stale evidence | v0.2, Graph V1 admission |
+| Defaults and Unicode behavior introduced after definition creation | Old definitions remain immutable; incomplete artifacts cannot execute; old cleaner behavior survives supported upgrades | v0.2–v0.6 |
+| Directive history and concurrent overrides | Operation, base revision, and epoch survive restore; stale writes and failed writes preserve the prior directive | v0.5, v0.7 |
+| Split history and revision-dependent review cleanup | Split, remerge, and split replay terminates; unchanged refreshes after splits remain observations | v0.7 |
+| No-change observations and output-trigger callbacks | Observations record the consumed decision epoch; reentrant or altered publications roll back | v0.7, v0.9 |
+| Recreated output tables and protected explanations | Clean restore preserves output grants and consumer objects; omitted-pair explanations enforce source and field permissions | v0.7 |
+
+Start v0.1 with the installation and privilege proof. Complete the role-binding and semantic-manifest checks before v0.2 exits. An unresolved prerequisite blocks its dependent work; it does not require speculative implementation of later releases. Write the detailed v0.8 plan against the qualified upstream contract before v0.8 starts. Likewise, v0.9–v0.11 need reviewed task lists and executable exit cases before each starts.
+
 ## Development releases
 
 ### v0.1 — Extension foundation (3–5 person-weeks)
@@ -42,7 +60,7 @@ Establish the extension package, installation and upgrade scripts, internal and 
 
 Build the Graph V1 conformance harness in this release. Against 0.98.0, positive Graph V1 tests must skip or block according to the advertised capability state. Negative tests must prove that `pg_mdm` fails closed and never reads private catalogs or calls provisional internal APIs.
 
-Exit evidence: clean install, upgrade, privilege, hostile-`search_path`, rollback, capability-discovery, dump-policy, and negative conformance tests run on the single PostgreSQL major inherited from the selected `pg_trickle` release. The test report labels skipped capability cases separately from passes. Additional PostgreSQL majors are post-V1 scope.
+Exit evidence: clean install, ownership setup, privilege, hostile-`search_path`, rollback, capability-discovery, logical dump and restore, and negative conformance tests run on the single PostgreSQL major inherited from the selected `pg_trickle` release. Archive the base install SQL and validate migration paths; the first real extension upgrade is in v0.2. The test report labels skipped capability cases separately from passes. Additional PostgreSQL majors are post-V1 scope.
 
 ### v0.2 — Definitions and validation (5–7 person-weeks)
 
@@ -108,7 +126,7 @@ Run the shared `pg_trickle` conformance suite and the generated differential-ver
 
 ## Release evidence traceability
 
-Each release updates this table with the exact test name, artifact digest, and result. A blank or skipped blocking test does not satisfy its invariant.
+Each release records the exact test name, command, commit, artifact and fixture digests, result, and reviewed evidence link for its rows below. All evidence is currently pending because the repository contains no implementation. A blank or skipped blocking test does not satisfy its invariant. The release owner signs off the evidence before the next milestone starts.
 
 | V1 invariant | Owning release | Required executable evidence |
 |---|---|---|
@@ -124,6 +142,8 @@ Each release updates this table with the exact test name, artifact digest, and r
 | Golden provenance | v0.7 | Selector, override, provenance-only revision, retention, and restore fixtures |
 | Resource pressure fails closed | v0.4–v0.7 | Measured SQL and resolver limits with no partial publication |
 | `pg_trickle` encapsulation | v0.1, v0.8, v0.11 | Capability adapter and forbidden-private-API tests |
+| Authorization and RLS preservation | v0.1, v0.2, v0.7, v0.8 | Direct helper calls, role replacement, visibility invalidation, and explanation disclosure tests |
+| Restore and upgrade continuity | Every release from v0.2 | Archived upgrade starts; clean restore of durable state, output schema, grants, and supported consumer objects |
 
 ## Upstream integration risk
 
@@ -133,9 +153,13 @@ Each release updates this table with the exact test name, artifact digest, and r
 
 Review this risk on every upstream release and at each `pg_mdm` milestone. Record the tested artifact and unresolved conformance failures. Do not replace the gate with an upstream version-number check.
 
+The [v0.98.1 capability implementation](https://github.com/trickle-labs/pg-trickle/blob/v0.98.1/src/api/integration.rs) still returns `enabled = false` for Graph V1 and Delta V1. Source inspection confirms the gate remains closed; it does not count as running the conformance suite. Admission must also prove execution-role preservation, RLS visibility invalidation, and enforcement of the block-limit stage before pair joins. Ordinary fixture SQL alone cannot prove these upstream behaviors.
+
 ## Quality and operating evidence
 
 Use one committed, de-identified organization-resolution corpus from v0.4 onward. It must contain labeled pairs and clusters for shared contact details, weak chains, authoritative conflicts, deletions, reactivations, and identifiers that need business context. Record candidate recall, false merges, missed matches, cluster errors, and review volume against internal acceptance thresholds before v0.6 exits. This is release evidence, not the deferred user-facing V2 diagnostics product.
+
+Use synthetic records when permission to commit source data is unavailable. Record the labels' origin, permitted use, and unresolved ambiguities. Freeze metric definitions, denominators, and acceptance thresholds before tuning defaults, with separate tuning and held-out cases. Require zero false merges in the explicit cannot-link, authoritative-conflict, and weak-chain safety fixtures. The release owner must approve numeric thresholds for the remaining quality measures before the v0.5 quality gate. Report performance and accuracy separately; an oracle proves the declared algorithm, not the business correctness of a match. Do not lower a threshold merely to pass a release.
 
 The provisional pilot envelope starts in v0.4 and grows with each release. Measure source rows, block memberships and skew, repeated discoveries, unique pairs, comparisons, component checks, memory, temporary storage, publication rows and bytes, retained history, and transaction duration. Record PostgreSQL, CPU, memory, storage, data distribution, and fixture digests with every result. V0.11 qualifies the combined envelope; it does not collect these measurements for the first time.
 
