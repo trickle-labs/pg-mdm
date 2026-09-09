@@ -76,6 +76,8 @@ Implement the full-reference resolver, deterministic edge order, must-link closu
 
 ### v0.7 — Identity and publication model (8–12 person-weeks)
 
+Detailed plan: [`plans/v0.7.md`](plans/v0.7.md).
+
 Implement stable `mdm_id` allocation and reconciliation, merge and split continuity, aliases, golden-value selection, anchored overrides, provenance, reviews, and bounded machine-readable explanation. Publish the three V1 output-table shapes in resolver tests, without yet advancing a live `pg_trickle` graph.
 
 Exit evidence: generated histories preserve the specified identities and produce identical memberships, goldens, reviews, and explanations under replay and input reordering. Re-estimate integration and qualification after this release.
