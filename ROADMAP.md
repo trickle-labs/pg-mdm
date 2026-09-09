@@ -32,6 +32,8 @@ The initial V1 integration supports only `pg_trickle` trigger capture. WAL captu
 
 ### v0.1 — Extension foundation (3–5 person-weeks)
 
+Detailed plan: [`plans/v0.1.md`](plans/v0.1.md).
+
 Establish the extension package, installation and upgrade scripts, internal and public schemas, roles, privileges, fixed security-definer search paths, and durable operation records. Declare `pg_trickle` as an extension dependency and pin the exact 0.98.0 release artifact after its release build completes. Add one internal SQL adapter around `pgtrickle.integration_capabilities()`. On 0.98.0, the adapter must report `external_graph_refresh 1.0 enabled=false` and `output_delta_consumer 1.0 enabled=false` without treating either result as an installation failure. This release does not yet create or resolve entities.
 
 Build the Graph V1 conformance harness in this release. Against 0.98.0, positive Graph V1 tests must skip or block according to the advertised capability state. Negative tests must prove that `pg_mdm` fails closed and never reads private catalogs or calls provisional internal APIs.
@@ -40,15 +42,21 @@ Exit evidence: clean install, upgrade, privilege, hostile-`search_path`, rollbac
 
 ### v0.2 — Definitions and validation (5–7 person-weeks)
 
+Detailed plan: [`plans/v0.2.md`](plans/v0.2.md).
+
 Implement the entity, source, field, match, and golden-value definition model together with immutable definition versions, semantic digests, source-key validation, optimistic concurrency, and the initial `create` and `describe` surfaces. Compile each valid definition into a deterministic `pg_trickle` graph specification stored as data, but do not execute the graph. Invalid or unsupported definitions must fail without leaving partially installed state.
 
 Exit evidence: definitions round-trip through `describe`, equivalent definitions produce the same graph specification and semantic digest, semantic no-ops remain no-ops, and invalid or concurrent updates leave no partial state. Re-estimate v0.3–v0.7 from the effort measured through this release.
 
 ### v0.3 — Normalization (4–6 person-weeks)
 
+Detailed plan: [`plans/v0.3.md`](plans/v0.3.md).
+
 Implement the V1 built-in cleaners, typed normalized-value states, deterministic ordering rules, and source-record identity handling. Tests must cover supported scalar and composite keys, cleaner versioning, invalid and absent values, authoritative fields, and equivalent results across clean rebuilds.
 
 ### v0.4 — Candidate generation (6–9 person-weeks)
+
+Detailed plan: [`plans/v0.4.md`](plans/v0.4.md).
 
 Compile exact, composite, prefix, token, and other bounded V1 candidate channels into complete candidate blocks and canonical pairs. Enforce per-block and aggregate completeness limits so resource pressure fails the operation rather than truncating required work or treating an unexamined pair as a non-match.
 
@@ -56,9 +64,13 @@ Exit evidence: generated small datasets match an all-pairs reference, while over
 
 ### v0.5 — Evidence and pair decisions (7–10 person-weeks)
 
+Detailed plan: [`plans/v0.5.md`](plans/v0.5.md).
+
 Evaluate built-in exact and fuzzy comparisons for discovered pairs, group correlated evidence, apply authority conflicts, and produce deterministic automatic pair decisions. Add durable steward `MATCH` and `NOT_MATCH` decisions with precedence, optimistic concurrency, and contradiction checks.
 
 ### v0.6 — Conservative clustering (7–10 person-weeks)
+
+Detailed plan: [`plans/v0.6.md`](plans/v0.6.md).
 
 Implement the full-reference resolver, deterministic edge order, must-link closure, cannot-link enforcement, and the V1 component-admission rule that prevents weak chain accretion. Generated tests must exercise edge appearance and disappearance, conflicting constraints, large components, and stable results under input and plan reordering.
 
