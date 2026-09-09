@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Add developmental `mdm.source`, `mdm.field`, `mdm.match`, `mdm.golden_value`, and `mdm.entity` constructors.
+- Store immutable, versioned definitions and deterministic non-executable graph artifacts.
+- Validate source relations, keys, privileges, role bindings, candidate channels, and output names.
+- Add `mdm.create()` and `mdm.describe()`; Graph V1 remains disabled and no public output tables are created.
+
 ## 0.1.0
 
 - Add the PostgreSQL 18 extension package and five V1 schemas.

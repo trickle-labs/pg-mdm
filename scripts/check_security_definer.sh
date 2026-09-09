@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-archive=${1:-sql/archive/pg_mdm--0.1.0.sql}
+archive=${1:-sql/archive/pg_mdm--0.2.0.sql}
 
 test -f "$archive"
 
 count=$(rg -c 'SECURITY DEFINER' "$archive")
-test "$count" -eq 1
+test "$count" -eq 3
 
 rg -U -q 'SECURITY DEFINER[[:space:]]+SET search_path TO pg_catalog, mdm_internal, pg_temp' "$archive"
 rg -q 'REVOKE ALL ON FUNCTION mdm_admin\.verify_installation\(\) FROM PUBLIC' "$archive"
+rg -q 'REVOKE ALL ON FUNCTION mdm_internal\.persist_entity\(text, bigint, text, text\) FROM PUBLIC' "$archive"
+rg -q 'REVOKE ALL ON FUNCTION mdm_internal\.describe_entity\(text, text\) FROM PUBLIC' "$archive"
 
 if rg -n 'Spi::(run|run_with_args)\(&|client\.(select|update)\(&' src; then
     echo 'dynamic SQL passed to SPI' >&2

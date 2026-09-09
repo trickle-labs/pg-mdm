@@ -20,9 +20,25 @@ BEGIN
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.1.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.2.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.1.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.2.0 is not installed';
+    END IF;
+END
+$$;
+
+\connect postgres postgres
+CREATE DATABASE upgrade;
+\connect upgrade postgres
+CREATE EXTENSION pg_trickle;
+CREATE EXTENSION pg_mdm VERSION '0.1.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.2.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.2.0')
+       OR pg_catalog.to_regclass('mdm_internal.entities') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.definition_artifacts') IS NULL THEN
+        RAISE EXCEPTION '0.1.0 to 0.2.0 upgrade did not install definition catalog';
     END IF;
 END
 $$;
@@ -134,6 +150,7 @@ CREATE ROLE mdm_test_login LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT mdm_administrator, mdm_configurator, mdm_steward_role, mdm_output_reader,
       mdm_explanation_reader, mdm_bypass TO mdm_test_login WITH SET TRUE, INHERIT FALSE;
 GRANT USAGE ON SCHEMA mdm_admin TO mdm_administrator;
+GRANT USAGE ON SCHEMA mdm TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO mdm_administrator;
 
 \connect foundation mdm_test_login
@@ -192,10 +209,105 @@ RESET search_path;
 RESET ROLE;
 
 \connect foundation postgres
+CREATE TABLE public.crm_customer (
+    id bigint PRIMARY KEY,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+GRANT SELECT ON public.crm_customer TO mdm_administrator;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+WITH proposed AS (
+    SELECT mdm.entity(
+        name => 'customer',
+        sources => ARRAY[
+            mdm.source(
+                name => 'crm',
+                relation => 'public.crm_customer'::regclass,
+                source_id => ARRAY['id'],
+                mode => 'tracked',
+                fields => jsonb_build_object(
+                    'name', 'display_name',
+                    'email', 'email_address'
+                ),
+                row_changed_at => 'updated_at'
+            )
+        ],
+        fields => ARRAY[
+            mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
+            mdm.field(name => 'email', type => 'text', cleaner => 'email')
+        ],
+        matches => ARRAY[
+            mdm.match(
+                name => 'same_email',
+                fields => ARRAY['email'],
+                comparison => 'exact',
+                strength => 'identity',
+                evidence_group => 'email'
+            )
+        ],
+        golden_values => ARRAY[
+            mdm.golden_value(field => 'name', policy => 'prefer_source', sources => ARRAY['crm'])
+        ]
+    ) AS definition
+)
+SELECT desired_version = 1 AND changed AND octet_length(definition_digest) = 32 AND octet_length(artifact_digest) = 32 AS v02_create_ok
+FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer definition');
+
+WITH proposed AS (
+    SELECT mdm.entity(
+        name => 'customer',
+        sources => ARRAY[mdm.source(
+            name => 'crm', relation => 'public.crm_customer'::regclass,
+            source_id => ARRAY['id'], mode => 'tracked',
+            fields => jsonb_build_object('name', 'display_name', 'email', 'email_address'),
+            row_changed_at => 'updated_at')],
+        fields => ARRAY[
+            mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
+            mdm.field(name => 'email', type => 'text', cleaner => 'email')],
+        matches => ARRAY[mdm.match(
+            name => 'same_email', fields => ARRAY['email'], comparison => 'exact',
+            strength => 'identity', evidence_group => 'email')],
+        golden_values => ARRAY[mdm.golden_value(
+            field => 'name', policy => 'prefer_source', sources => ARRAY['crm'])]
+    ) AS definition
+)
+SELECT NOT changed AND desired_version = 1 AS v02_noop_ok
+FROM mdm.create((SELECT definition FROM proposed), 1, NULL);
+
+DO $$
+DECLARE
+    described jsonb;
+    definition_count bigint;
+    artifact_count bigint;
+BEGIN
+    described := mdm.describe('customer', 'definition');
+    IF described->>'name' <> 'customer' THEN
+        RAISE EXCEPTION 'definition description did not round trip';
+    END IF;
+    SELECT count(*) INTO definition_count FROM mdm_internal.definitions d
+    JOIN mdm_internal.entities e ON e.entity_id = d.entity_id
+    WHERE e.entity_name = 'customer';
+    SELECT count(*) INTO artifact_count FROM mdm_internal.definition_artifacts a
+    JOIN mdm_internal.entities e ON e.entity_id = a.entity_id
+    WHERE e.entity_name = 'customer';
+    IF definition_count <> 1 OR artifact_count <> 1 THEN
+        RAISE EXCEPTION 'unexpected definition history: % / %', definition_count, artifact_count;
+    END IF;
+    IF to_regclass('mdm_out.customer') IS NOT NULL THEN
+        RAISE EXCEPTION 'v0.2 created a public output table';
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
 DO $$
 BEGIN
-    IF (SELECT count(*) FROM mdm_internal.operations) <> 0 THEN
-        RAISE EXCEPTION 'rolled-back operation survived';
+    IF (SELECT count(*) FROM mdm_internal.operations) <> 1 THEN
+        RAISE EXCEPTION 'unexpected operation count after v0.2 create';
     END IF;
 END
 $$;
@@ -210,7 +322,7 @@ DO $$
 DECLARE
     operation mdm_internal.operations%ROWTYPE;
 BEGIN
-    SELECT * INTO STRICT operation FROM mdm_internal.operations;
+    SELECT * INTO STRICT operation FROM mdm_internal.operations WHERE operation_kind = 'foundation_check';
     IF operation.operation_kind <> 'foundation_check'
        OR operation.status <> 'succeeded'
        OR operation.result_code <> 'MDM_OK'

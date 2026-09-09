@@ -9,12 +9,12 @@ use crate::integration::require_graph_v1_sql;
 use crate::version::{PACKAGE_VERSION, PG_TRICKLE_VERSION};
 
 #[derive(Debug)]
-struct Role {
-    oid: pg_sys::Oid,
-    name: String,
-    superuser: bool,
-    can_login: bool,
-    bypass_rls: bool,
+pub(crate) struct Role {
+    pub(crate) oid: pg_sys::Oid,
+    pub(crate) name: String,
+    pub(crate) superuser: bool,
+    pub(crate) can_login: bool,
+    pub(crate) bypass_rls: bool,
 }
 
 fn role(oid: pg_sys::Oid) -> Result<Role, MdmError> {
@@ -54,21 +54,21 @@ fn role(oid: pg_sys::Oid) -> Result<Role, MdmError> {
     })
 }
 
-fn session_user_id() -> pg_sys::Oid {
+pub(crate) fn session_user_id() -> pg_sys::Oid {
     unsafe {
         // SAFETY: PostgreSQL invokes extension functions on the backend thread.
         pg_sys::GetSessionUserId()
     }
 }
 
-fn outer_user_id() -> pg_sys::Oid {
+pub(crate) fn outer_user_id() -> pg_sys::Oid {
     unsafe {
         // SAFETY: PostgreSQL preserves the invoker ID while it applies SECURITY DEFINER.
         pg_sys::GetOuterUserId()
     }
 }
 
-fn validate_helper_owner() -> Result<Role, MdmError> {
+pub(crate) fn validate_helper_owner() -> Result<Role, MdmError> {
     let owner_oid = Spi::get_one::<pg_sys::Oid>(
         "SELECT p.proowner FROM pg_catalog.pg_proc p WHERE p.oid = 'mdm_admin.verify_installation()'::pg_catalog.regprocedure",
     )
@@ -105,7 +105,7 @@ fn validate_helper_owner() -> Result<Role, MdmError> {
     Ok(owner)
 }
 
-fn validate_caller(helper_owner: &Role) -> Result<(Role, Role), MdmError> {
+pub(crate) fn validate_caller(helper_owner: &Role) -> Result<(Role, Role), MdmError> {
     let session = role(session_user_id())?;
     let selected = role(outer_user_id())?;
     if session.superuser || session.bypass_rls || selected.superuser || selected.bypass_rls {

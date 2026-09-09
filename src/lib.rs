@@ -1,9 +1,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+mod api;
 mod catalog;
+mod definition;
 mod error;
+mod graph_spec;
 mod integration;
+mod presets;
 mod schema;
 mod version;
 

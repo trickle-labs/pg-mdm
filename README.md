@@ -9,9 +9,11 @@ Most organizations have several records for the same customer, company, supplier
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.1
+## Install v0.2 (developmental definitions)
 
-v0.1 supports PostgreSQL 18 and requires `pg_trickle` 0.98.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+v0.2 supports PostgreSQL 18 and requires `pg_trickle` 0.98.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+
+The v0.2 actions store and validate definitions only. They do not execute graph SQL, resolve records, or create public output tables.
 
 Build and copy the package:
 
@@ -45,6 +47,10 @@ GRANT app_mdm_admin TO app_login WITH SET TRUE, INHERIT FALSE;
 
 GRANT USAGE ON SCHEMA mdm_admin TO app_mdm_admin;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO app_mdm_admin;
+
+-- v0.2 definition actions
+GRANT USAGE ON SCHEMA mdm TO app_mdm_admin;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mdm TO app_mdm_admin;
 ```
 
 Connect as `app_login`, select the action role, and run the check:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.1.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.2.0-e2e}
 container="pg-mdm-e2e-$$"
 dump_file=$(mktemp "${TMPDIR:-/tmp}/pg-mdm-dump.XXXXXX")
 missing_log=$(mktemp "${TMPDIR:-/tmp}/pg-mdm-missing.XXXXXX")

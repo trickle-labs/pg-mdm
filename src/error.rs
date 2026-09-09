@@ -18,6 +18,14 @@ pub(crate) enum MdmError {
     OperationState(String),
     #[error("PostgreSQL SPI failed: {0}")]
     Spi(String),
+    #[error("invalid MDM definition: {0}")]
+    DefinitionInvalid(String),
+    #[error("invalid source contract: {0}")]
+    SourceInvalid(String),
+    #[error("output name is already reserved: {0}")]
+    OutputNameConflict(String),
+    #[error("definition version conflict: {0}")]
+    VersionConflict(String),
 }
 
 impl MdmError {
@@ -31,6 +39,10 @@ impl MdmError {
             Self::Unauthorized(_) => "MDM_UNAUTHORIZED",
             Self::OperationState(_) => "MDM_OPERATION_STATE",
             Self::Spi(_) => "MDM_INTERNAL",
+            Self::DefinitionInvalid(_) => "MDM_DEFINITION_INVALID",
+            Self::SourceInvalid(_) => "MDM_SOURCE_INVALID",
+            Self::OutputNameConflict(_) => "MDM_OUTPUT_NAME_CONFLICT",
+            Self::VersionConflict(_) => "MDM_VERSION_CONFLICT",
         }
     }
 }

@@ -1,36 +1,3 @@
-use pgrx::prelude::*;
-
-#[allow(unused_imports)]
-use crate::api::constructors::{entity, field, golden_value, match_rule, source};
-#[allow(unused_imports)]
-use crate::api::create::{create, persist_entity};
-#[allow(unused_imports)]
-use crate::api::describe::{describe, describe_entity};
-#[allow(unused_imports)]
-use crate::catalog::verify_installation;
-
-extension_sql!(
-    r#"
-CREATE SCHEMA mdm;
-CREATE SCHEMA mdm_out;
-CREATE SCHEMA mdm_steward;
-CREATE SCHEMA mdm_admin;
-CREATE SCHEMA mdm_internal;
-
-CREATE TABLE mdm_internal.operations (
-    operation_id uuid PRIMARY KEY DEFAULT pg_catalog.uuidv7(),
-    operation_kind text NOT NULL,
-    entity_name pg_catalog.name,
-    status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
-    result_code text,
-    outcome jsonb NOT NULL DEFAULT '{}'::pg_catalog.jsonb,
-    actor_name text NOT NULL,
-    actor_role_name text NOT NULL,
-    started_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
-    completed_at timestamptz,
-    CHECK ((status = 'running') = (completed_at IS NULL))
-);
-
 CREATE TABLE mdm_internal.entities (
     entity_id uuid PRIMARY KEY DEFAULT pg_catalog.uuidv7(),
     entity_name pg_catalog.name NOT NULL UNIQUE,
@@ -102,37 +69,21 @@ CREATE TABLE mdm_internal.definition_artifacts (
     FOREIGN KEY (entity_id, definition_version) REFERENCES mdm_internal.definitions(entity_id, definition_version)
 );
 
-COMMENT ON TABLE mdm_internal.operations IS
-    'Durable: committed MDM operation outcomes; included in logical dumps.';
-
-SELECT pg_catalog.pg_extension_config_dump(
-    'mdm_internal.operations'::pg_catalog.regclass,
-    ''
-);
-
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.entities'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definitions'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_names'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definition_artifacts'::pg_catalog.regclass, '');
 
-REVOKE ALL ON SCHEMA mdm_internal FROM PUBLIC;
-REVOKE ALL ON ALL TABLES IN SCHEMA mdm_internal FROM PUBLIC;
-REVOKE CREATE ON SCHEMA mdm, mdm_out, mdm_steward, mdm_admin FROM PUBLIC;
-"#,
-    name = "pg_mdm_foundation",
-    bootstrap,
-);
+CREATE FUNCTION mdm_internal.describe_entity(entity_name text, format text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';
+CREATE FUNCTION mdm.describe(entity_name text, format text DEFAULT 'summary') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'describe_wrapper';
+CREATE FUNCTION mdm.entity(name text, sources jsonb[], fields jsonb[], matches jsonb[], golden_values jsonb[], preset text DEFAULT NULL, limits jsonb DEFAULT '{}'::jsonb, execution_role text DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'entity_wrapper';
+CREATE FUNCTION mdm.field(name text, type text, cleaner text, cleaner_options jsonb DEFAULT '{}'::jsonb, display text DEFAULT 'masked') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'field_wrapper';
+CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'golden_value_wrapper';
+CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_wrapper';
+CREATE FUNCTION mdm_internal.persist_entity(definition text, expected_version bigint, comment text, prepared text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
+CREATE FUNCTION mdm.create(definition jsonb, expected_version bigint DEFAULT NULL, comment text DEFAULT NULL) RETURNS TABLE (operation_id uuid, entity_name text, desired_version bigint, changed boolean, definition_digest bytea, artifact_digest bytea) LANGUAGE c AS 'MODULE_PATHNAME', 'create_wrapper';
+CREATE FUNCTION mdm.source(name text, relation regclass, source_id text[], mode text, fields jsonb, row_changed_at text DEFAULT NULL, soft_delete_when jsonb DEFAULT NULL, authority jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'source_wrapper';
 
-extension_sql!(
-    r#"
-REVOKE ALL ON FUNCTION mdm_internal.integration_capabilities() FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.require_graph_v1() FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_admin.verify_installation() FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.persist_entity(text, bigint, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.describe_entity(text, text) FROM PUBLIC;
-    "#,
-    name = "pg_mdm_acl_policy",
-    requires = [verify_installation],
-    finalize,
-);
+REVOKE ALL ON FUNCTION mdm_internal.persist_entity(text, bigint, text, text) FROM PUBLIC;
