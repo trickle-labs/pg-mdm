@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build --platform linux/amd64 --target tester -f tests/Dockerfile.e2e -t pg_mdm:test .
+      - run: docker run --rm pg_mdm:test cargo fmt -- --check
+      - run: docker run --rm pg_mdm:test cargo clippy --all-targets --features pg18 -- -D warnings
+      - run: docker run --rm pg_mdm:test cargo test --lib --features pg18
+      - run: docker run --rm pg_mdm:test cargo pgrx test pg18 --features pg_test
+      - run: docker run --rm pg_mdm:test scripts/check_security_definer.sh
+      - run: docker run --rm pg_mdm:test python3 scripts/check_upgrade_paths.py
+      - run: docker run --rm pg_mdm:test bash -c "generated=\$(find target/release/pg_mdm-pg18 -name 'pg_mdm--0.1.0.sql' -type f -print -quit); cmp \"\$generated\" sql/archive/pg_mdm--0.1.0.sql"
+      - run: docker run --rm pg_mdm:test python3 scripts/package_manifest.py target/release/pg_mdm-pg18 > package-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pg_mdm-0.1.0-package-manifest
+          path: package-manifest.json
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/run_e2e_tests.sh

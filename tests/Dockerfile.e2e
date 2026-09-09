@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+ARG POSTGRES_IMAGE=postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf
+
+FROM ${POSTGRES_IMAGE} AS pg_trickle
+ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.98.0/pg_trickle-0.98.0-pg18-linux-amd64.tar.gz
+ARG PG_TRICKLE_SHA256=6b8a9cd3bb4761ede6150c29ba01f27eecbc2e3cffd5a85096c5683809c17fa7
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "$PG_TRICKLE_URL" -o /tmp/pg_trickle.tar.gz \
+    && echo "$PG_TRICKLE_SHA256  /tmp/pg_trickle.tar.gz" | sha256sum -c - \
+    && mkdir /pg_trickle \
+    && tar -xzf /tmp/pg_trickle.tar.gz -C /pg_trickle --strip-components=1
+
+FROM ${POSTGRES_IMAGE} AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates clang curl git libclang-dev libssl-dev pkg-config postgresql-server-dev-18 ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.98.0
+ENV PATH=/root/.cargo/bin:$PATH
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    cargo install --locked cargo-pgrx --version 0.18.0 \
+    && cargo pgrx init --pg18 /usr/bin/pg_config
+WORKDIR /build
+COPY Cargo.toml Cargo.lock pg_mdm.control ./
+COPY .cargo/ .cargo/
+COPY src/ src/
+COPY scripts/ scripts/
+COPY sql/ sql/
+COPY justfile ./
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo pgrx package --pg-config /usr/bin/pg_config \
+    && mkdir -p /package \
+    && cp -R target/release/pg_mdm-pg18/. /package/
+
+FROM builder AS tester
+COPY --from=pg_trickle /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
+COPY --from=pg_trickle /pg_trickle/extension/ /usr/share/postgresql/18/extension/
+RUN chmod 0755 /root \
+    && chown -R postgres:postgres \
+        /build /root/.cargo /root/.pgrx /root/.rustup \
+        /usr/lib/postgresql/18/lib /usr/share/postgresql/18/extension
+ENV CARGO_HOME=/root/.cargo
+ENV PGRX_HOME=/root/.pgrx
+ENV RUSTUP_HOME=/root/.rustup
+ENV USER=postgres
+USER postgres
+
+FROM ${POSTGRES_IMAGE}
+COPY --from=pg_trickle /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
+COPY --from=pg_trickle /pg_trickle/extension/ /usr/share/postgresql/18/extension/
+COPY --from=builder /package/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
+COPY --from=builder /package/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
+COPY tests/e2e.sql /tests/e2e.sql
+COPY sql/configure_helper.sql /sql/configure_helper.sql
+RUN echo "shared_preload_libraries = 'pg_trickle'" >> /usr/share/postgresql/postgresql.conf.sample
+USER postgres

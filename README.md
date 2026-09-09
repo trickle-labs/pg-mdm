@@ -3,11 +3,74 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> `pg_mdm` is currently a design-stage project. This repository contains the proposed V1 contract and the V2 roadmap, not an installable extension.
+> v0.1 is an installable foundation, not an entity-resolution release. It creates the extension schemas, protects the operation log, and checks the pinned `pg_trickle` capability contract. Entity definitions start in v0.2.
 
-Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` is a proposed PostgreSQL extension for resolving those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
+Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
+
+## Install v0.1
+
+v0.1 supports PostgreSQL 18 and requires `pg_trickle` 0.98.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+
+Build and copy the package:
+
+```bash
+cargo pgrx package --pg-config "$(command -v pg_config)"
+sudo cp target/release/pg_mdm-pg18/*/lib/postgresql/18/lib/pg_mdm.* "$(pg_config --pkglibdir)/"
+sudo cp target/release/pg_mdm-pg18/*/share/postgresql/18/extension/pg_mdm* "$(pg_config --sharedir)/extension/"
+```
+
+Install both extensions as a database administrator:
+
+```sql
+CREATE EXTENSION pg_trickle;
+CREATE EXTENSION pg_mdm;
+
+CREATE ROLE mdm_helper_owner NOLOGIN NOSUPERUSER NOBYPASSRLS;
+```
+
+Assign the protected objects to the helper owner before you grant action access:
+
+```bash
+psql --set=helper_owner=mdm_helper_owner --file=sql/configure_helper.sql my_database
+```
+
+Create application roles outside the extension. v0.1 has one administrator action that verifies the installation and records the result:
+
+```sql
+CREATE ROLE app_mdm_admin NOLOGIN NOSUPERUSER NOBYPASSRLS;
+CREATE ROLE app_login LOGIN NOSUPERUSER NOBYPASSRLS;
+GRANT app_mdm_admin TO app_login WITH SET TRUE, INHERIT FALSE;
+
+GRANT USAGE ON SCHEMA mdm_admin TO app_mdm_admin;
+GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO app_mdm_admin;
+```
+
+Connect as `app_login`, select the action role, and run the check:
+
+```sql
+SET ROLE app_mdm_admin;
+SELECT mdm_admin.verify_installation();
+```
+
+The function rejects superusers, `BYPASSRLS` roles, login-capable helper owners, helper owners with role memberships, and mismatched function and table owners. It records `session_user` as `actor_name` and the selected role as `actor_role_name`. Callers cannot supply either value, the outcome, the status, or the result code.
+
+Run `sql/configure_helper.sql` again after an extension upgrade or a clean logical restore, then reapply action grants. PostgreSQL includes `mdm_internal.operations` data in logical dumps. The helper writes only committed success records; a transaction rollback removes its operation row.
+
+The v0.1 stable result codes are:
+
+| Code | Meaning |
+|---|---|
+| `MDM_OK` | The installation check succeeded. |
+| `MDM_PGT_CAPABILITY_MISSING` | Graph V1 is absent. |
+| `MDM_PGT_CAPABILITY_VERSION` | Graph V1 has an unsupported major version. |
+| `MDM_PGT_CAPABILITY_INVALID` | The capability response has duplicate or invalid rows. |
+| `MDM_PGT_CAPABILITY_DISABLED` | Graph V1 1.x exists but is disabled. |
+| `MDM_HELPER_OWNER_UNSAFE` | Protected objects do not have the documented helper owner. |
+| `MDM_UNAUTHORIZED` | The authenticated or selected role is unsafe. |
+| `MDM_OPERATION_STATE` | A running operation could not commit as succeeded. |
+| `MDM_INTERNAL` | PostgreSQL SPI returned an unexpected error. |
 
 ## How it works
 
@@ -43,7 +106,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The proposed V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
+The implemented v0.1 release stops at the extension foundation. The planned V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 
