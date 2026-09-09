@@ -45,12 +45,12 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 The proposed V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
 
-The V2 roadmap is cumulative rather than a replacement for V1. It explores those advanced capabilities while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
+The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 
 Read the design documents for the normative details:
 
 - [DESIGN_V1.md](DESIGN_V1.md) defines the proposed first open-source release, including its SQL model, algorithms, invariants, security boundary, and acceptance criteria.
-- [DESIGN_V2.md](DESIGN_V2.md) describes the post-V1 roadmap for richer source contracts, stewardship, history, integration, checkpointed MDM execution, and shared operations.
+- [DESIGN_V2.md](DESIGN_V2.md) is the post-V1 capability catalogue and dependency order. It is not an approved delivery backlog.
 - [ROADMAP.md](ROADMAP.md) divides the V1 implementation into small development releases and defines the V1.0 release gate.
 
 ## Contributing
