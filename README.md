@@ -3,7 +3,7 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.1 is an installable foundation, not an entity-resolution release. It creates the extension schemas, protects the operation log, and checks the pinned `pg_trickle` capability contract. Entity definitions start in v0.2.
+> v0.2 stores and validates entity definitions, source contracts, and deterministic graph artifacts. It does not execute graph SQL, resolve records, or create public output tables.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
@@ -62,7 +62,7 @@ SELECT mdm_admin.verify_installation();
 
 The function rejects superusers, `BYPASSRLS` roles, login-capable helper owners, helper owners with role memberships, and mismatched function and table owners. It records `session_user` as `actor_name` and the selected role as `actor_role_name`. Callers cannot supply either value, the outcome, the status, or the result code.
 
-Run `sql/configure_helper.sql` again after an extension upgrade or a clean logical restore, then reapply action grants. PostgreSQL includes `mdm_internal.operations` data in logical dumps. The helper writes only committed success records; a transaction rollback removes its operation row.
+Run `sql/configure_helper.sql` again after an extension upgrade or a clean logical restore, then reapply action grants. After a logical restore, [rebind the restored entities](#rebind-restored-entities) before using definition actions. PostgreSQL includes `mdm_internal.operations` data in logical dumps. The helper writes only committed success records; a transaction rollback removes its operation row.
 
 The v0.1 stable result codes are:
 
@@ -77,6 +77,26 @@ The v0.1 stable result codes are:
 | `MDM_UNAUTHORIZED` | The authenticated or selected role is unsafe. |
 | `MDM_OPERATION_STATE` | A running operation could not commit as succeeded. |
 | `MDM_INTERNAL` | PostgreSQL SPI returned an unexpected error. |
+
+## Rebind restored entities
+
+Logical dumps preserve entity definitions, source identities, and graph artifacts. Database-local role and relation OIDs are derived bindings and are excluded from dumps.
+
+After restoring the source tables and durable MDM data, run `sql/configure_helper.sql` and reapply action grants. Restore the execution role's source privileges and row-level security policies before rebinding.
+
+Connect as a superuser, grant the stored execution role access to `rebind`, and select that role:
+
+```sql
+GRANT USAGE ON SCHEMA mdm_admin TO app_mdm_admin;
+GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text) TO app_mdm_admin;
+SET ROLE app_mdm_admin;
+SELECT mdm_admin.rebind('customer');
+RESET ROLE;
+```
+
+Repeat the call for each restored entity under its stored execution role. `rebind` requires a superuser-authenticated session, so an application login cannot use it even with the function grant. Source validation runs under the selected role's privileges and row-level security.
+
+Rebinding checks the desired definition's mappings and every retained source identity, including sources removed from the current definition. The portable relation names and frozen key contracts must match. The call replaces derived role and source bindings and records the operation without changing definitions, artifacts, or digests. It also supports an explicitly approved replacement of a role or source table under the same name and contract.
 
 ## How it works
 
@@ -112,7 +132,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The implemented v0.1 release stops at the extension foundation. The planned V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
+The implemented v0.2 release stores developmental definitions and non-executable graph artifacts. The planned V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

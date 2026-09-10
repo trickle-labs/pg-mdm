@@ -1,14 +1,13 @@
-use pgrx::fn_call::{Arg, FnCallArg, fn_call};
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
-use pgrx::{JsonB, Uuid};
+use pgrx::{Internal, JsonB, Uuid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::catalog;
-use crate::definition::canonical::{canonical_definition, digest, json_bytes};
+use crate::definition::canonical::canonical_definition;
 use crate::definition::parse_entity;
-use crate::definition::validate::{PreparedDefinition, digest_hex, prepare, prepared_json};
+use crate::definition::validate::{PreparedDefinition, digest_hex, prepare};
 use crate::error::MdmError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -34,24 +33,14 @@ fn parse_uuid(value: &str) -> Result<Uuid, MdmError> {
     Uuid::from_slice(&bytes).map_err(|error| MdmError::OperationState(error.to_string()))
 }
 
-fn call_persist(
-    definition: Value,
+struct CreateRequest {
+    prepared: PreparedDefinition,
     expected_version: Option<i64>,
     comment: Option<String>,
-    prepared: &PreparedDefinition,
-) -> Result<CreateResult, MdmError> {
-    let definition =
-        Arg::Value(serde_json::to_string(&definition).expect("definition is serializable"));
-    let expected_version = expected_version.map_or(Arg::Null, Arg::Value);
-    let comment = comment.map_or(Arg::Null, Arg::Value);
-    let prepared = Arg::Value(
-        serde_json::to_string(&prepared_json(prepared))
-            .expect("prepared definition is serializable"),
-    );
-    let args: [&dyn FnCallArg; 4] = [&definition, &expected_version, &comment, &prepared];
-    let result = fn_call::<JsonB>("mdm_internal.persist_entity", &args)
-        .map_err(|error| MdmError::Spi(error.to_string()))?
-        .ok_or_else(|| MdmError::OperationState("catalog helper returned NULL".into()))?;
+}
+
+fn call_persist(request: CreateRequest) -> Result<CreateResult, MdmError> {
+    let result = catalog::call_helper("persist_entity", request)?;
     serde_json::from_value(result.0).map_err(|error| MdmError::OperationState(error.to_string()))
 }
 
@@ -79,7 +68,11 @@ pub(crate) fn create(
     let result = (|| {
         let user_definition = canonical_definition(definition.0);
         let prepared = prepare(user_definition.clone())?;
-        let result = call_persist(user_definition, expected_version, comment, &prepared)?;
+        let result = call_persist(CreateRequest {
+            prepared,
+            expected_version,
+            comment,
+        })?;
         Ok(vec![(
             parse_uuid(&result.operation_id)?,
             result.entity_name,
@@ -106,57 +99,6 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, MdmError> {
                 .map_err(|error| MdmError::OperationState(error.to_string()))
         })
         .collect()
-}
-
-fn prepared_from(value: &str) -> Result<PreparedDefinition, MdmError> {
-    serde_json::from_str(value).map_err(|error| {
-        MdmError::DefinitionInvalid(format!("invalid prepared definition: {error}"))
-    })
-}
-
-fn recheck_prepared(
-    definition: &Value,
-    prepared: &PreparedDefinition,
-) -> Result<crate::definition::Entity, MdmError> {
-    let canonical = canonical_definition(definition.clone());
-    if canonical != prepared.user_definition {
-        return Err(MdmError::DefinitionInvalid(
-            "prepared definition does not match input".into(),
-        ));
-    }
-    let entity =
-        parse_entity(prepared.expanded_definition.clone()).map_err(MdmError::DefinitionInvalid)?;
-    let expected = digest(
-        "pg_mdm/definition/v1",
-        &[
-            &json_bytes(&prepared.expanded_definition),
-            &json_bytes(&prepared.logical_candidate_plan),
-            &json_bytes(&prepared.semantic_manifest),
-        ],
-    );
-    if expected != prepared.definition_digest {
-        return Err(MdmError::DefinitionInvalid(
-            "definition digest does not match prepared data".into(),
-        ));
-    }
-    let artifact = digest(
-        "pg_mdm/artifact/v1",
-        &[
-            &prepared.definition_digest,
-            &1_i32.to_be_bytes(),
-            &1_i32.to_be_bytes(),
-            &prepared.artifact_bytes,
-            &json_bytes(
-                &json!({"terminal_relations": ["records", "normalized", "blocks", "pairs", "evidence", "golden"]}),
-            ),
-        ],
-    );
-    if artifact != prepared.artifact_digest {
-        return Err(MdmError::DefinitionInvalid(
-            "artifact digest does not match prepared data".into(),
-        ));
-    }
-    Ok(entity)
 }
 
 fn helper_result(
@@ -219,7 +161,6 @@ fn persist(
     comment: Option<String>,
     session_name: String,
     selected: String,
-    helper_owner: &catalog::Role,
 ) -> Result<(String, i64, bool), MdmError> {
     let name = entity.name.clone();
     let role = entity
@@ -231,15 +172,16 @@ fn persist(
             "execution role is not the selected role".into(),
         ));
     }
+    let capabilities = crate::integration::integration_capabilities()?;
     let outcome = JsonB(
-        json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": false}),
+        json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": false, "capabilities": capabilities}),
     );
     let mut operation_id = String::new();
     let mut version = 1_i64;
     let mut changed = true;
     Spi::connect_mut(|client| {
-        let existing = client.select(
-            "SELECT e.entity_id::text, e.desired_version, e.execution_role_name, b.role_oid FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE e.entity_name = $1::pg_catalog.name FOR UPDATE",
+        let existing = client.update(
+            "SELECT e.entity_id::text, e.desired_version, e.execution_role_name, b.role_oid FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE e.entity_name = $1::pg_catalog.name FOR UPDATE OF e",
             Some(1), &[name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         let entity_id: String;
         if !existing.is_empty() {
@@ -372,7 +314,7 @@ fn persist(
             for output in &prepared.output_names {
                 let objects = client
                     .select(
-                        "SELECT pg_catalog.to_regclass(pg_catalog.format('mdm_out.%I', $1)) IS NOT NULL",
+                        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mdm_out' AND c.relname = $1)",
                         Some(1),
                         &[output.name.clone().into()],
                     )
@@ -478,7 +420,6 @@ fn persist(
         }
         complete_operation(client, &operation_id)
     })?;
-    let _ = helper_owner;
     Ok((operation_id, version, changed))
 }
 
@@ -489,47 +430,33 @@ fn selected_oid() -> pg_sys::Oid {
 #[pg_extern(
     name = "persist_entity",
     security_definer,
-    sql = "CREATE FUNCTION mdm_internal.persist_entity(definition text, expected_version bigint, comment text, prepared text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';"
+    sql = "CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';"
 )]
-pub(crate) fn persist_entity(
-    definition: String,
-    expected_version: Option<i64>,
-    comment: Option<String>,
-    prepared: String,
-) -> JsonB {
+pub(crate) fn persist_entity(request: Internal) -> JsonB {
     let result = (|| {
         let helper_owner = catalog::validate_helper_owner()?;
-        let persist_owner = Spi::get_one::<pg_sys::Oid>(
-            "SELECT p.proowner FROM pg_catalog.pg_proc p WHERE p.oid = 'mdm_internal.persist_entity(text, bigint, text, text)'::pg_catalog.regprocedure",
-        )
-        .map_err(|error| MdmError::Spi(error.to_string()))?
-        .ok_or_else(|| MdmError::HelperOwnerUnsafe("catalog helper is missing".into()))?;
-        if persist_owner != helper_owner.oid {
-            return Err(MdmError::HelperOwnerUnsafe(
-                "catalog helper and protected objects have different owners".into(),
-            ));
-        }
         let (session, selected) = catalog::validate_caller(&helper_owner)?;
-        let definition = serde_json::from_str::<Value>(&definition).map_err(|error| {
-            MdmError::DefinitionInvalid(format!("invalid definition JSON: {error}"))
-        })?;
-        let prepared = prepared_from(&prepared)?;
-        let entity = recheck_prepared(&definition, &prepared)?;
+        // SAFETY: only call_persist supplies this internal request. PostgreSQL
+        // prevents SQL callers from constructing it; reject NULL explicitly.
+        let request = unsafe { request.get::<CreateRequest>() }
+            .ok_or_else(|| MdmError::Unauthorized("validated create request is required".into()))?;
+        let prepared = &request.prepared;
+        let entity = parse_entity(prepared.expanded_definition.clone())
+            .map_err(MdmError::DefinitionInvalid)?;
         let (operation_id, version, changed) = persist(
             prepared.clone(),
             entity.clone(),
-            expected_version,
-            comment,
+            request.expected_version,
+            request.comment.clone(),
             session.name,
-            selected.name.clone(),
-            &helper_owner,
+            selected.name,
         )?;
         Ok(helper_result(
             operation_id,
             entity.name,
             version,
             changed,
-            &prepared,
+            prepared,
         ))
     })();
     result.unwrap_or_else(|error| crate::raise(error))

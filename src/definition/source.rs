@@ -22,13 +22,14 @@ struct RelationInfo {
     persistence: String,
     row_security: bool,
     force_row_security: bool,
-    owner: pg_sys::Oid,
+    owner_privileges: bool,
     policies: Value,
 }
 
 #[derive(Debug)]
 struct ColumnInfo {
     type_name: String,
+    base_type: String,
     collation: Option<String>,
 }
 
@@ -41,10 +42,17 @@ fn relation_info(source: &Source) -> Result<RelationInfo, MdmError> {
     .ok_or_else(|| {
         MdmError::SourceInvalid(format!("relation {} does not exist", source.relation))
     })?;
+    // Keep the source descriptor stable until catalog persistence commits.
+    // SAFETY: relation_open checks this catalog OID and acquires the lock;
+    // NoLock closes its descriptor while retaining the lock until transaction end.
+    unsafe {
+        let relation = pg_sys::relation_open(oid, pg_sys::AccessShareLock as pg_sys::LOCKMODE);
+        pg_sys::relation_close(relation, pg_sys::NoLock as pg_sys::LOCKMODE);
+    }
     Spi::connect(|client| {
         let table = client
             .select(
-                "SELECT c.relkind::text, c.relpersistence::text, c.relrowsecurity, c.relforcerowsecurity, c.relowner::oid, COALESCE((SELECT jsonb_agg(jsonb_build_object('name', p.polname::text, 'permissive', p.polpermissive, 'roles', p.polroles::text, 'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid), 'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid)) ORDER BY p.polname), '[]'::jsonb) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid) FROM pg_catalog.pg_class c WHERE c.oid = $1",
+                "SELECT c.relkind::text, c.relpersistence::text, c.relrowsecurity, c.relforcerowsecurity, pg_catalog.pg_has_role(current_user, c.relowner, 'USAGE'), COALESCE((SELECT jsonb_agg(jsonb_build_object('name', p.polname::text, 'permissive', p.polpermissive, 'roles', p.polroles::text, 'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid), 'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid)) ORDER BY p.polname) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid), '[]'::jsonb) FROM pg_catalog.pg_class c WHERE c.oid = $1",
                 Some(1),
                 &[oid.into()],
             )
@@ -74,10 +82,10 @@ fn relation_info(source: &Source) -> Result<RelationInfo, MdmError> {
                 .get::<bool>(4)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .unwrap_or(false),
-            owner: row
-                .get::<pg_sys::Oid>(5)
+            owner_privileges: row
+                .get::<bool>(5)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::Spi("relation owner is NULL".into()))?,
+                .ok_or_else(|| MdmError::Spi("relation ownership check is NULL".into()))?,
             policies: row
                 .get::<JsonB>(6)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
@@ -91,7 +99,7 @@ fn column_info(relation_oid: pg_sys::Oid, name: &str) -> Result<ColumnInfo, MdmE
     Spi::connect(|client| {
         let table = client
             .select(
-                "SELECT a.attname::text, pg_catalog.format_type(a.atttypid, a.atttypmod), CASE WHEN a.attcollation = 0 THEN NULL ELSE a.attcollation::pg_catalog.regcollation::text END, a.attnotnull FROM pg_catalog.pg_attribute a WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = $2",
+                "SELECT pg_catalog.format_type(a.atttypid, a.atttypmod), pg_catalog.format_type(a.atttypid, NULL), CASE WHEN a.attcollation = 0 THEN NULL ELSE a.attcollation::pg_catalog.regcollation::text END FROM pg_catalog.pg_attribute a WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = $2",
                 Some(1),
                 &[relation_oid.into(), name.into()],
             )
@@ -104,6 +112,10 @@ fn column_info(relation_oid: pg_sys::Oid, name: &str) -> Result<ColumnInfo, MdmE
         let row = table.first();
         Ok(ColumnInfo {
             type_name: row
+                .get::<String>(1)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("column type is NULL".into()))?,
+            base_type: row
                 .get::<String>(2)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Spi("column type is NULL".into()))?,
@@ -116,10 +128,8 @@ fn column_info(relation_oid: pg_sys::Oid, name: &str) -> Result<ColumnInfo, MdmE
 
 fn has_select(relation_oid: pg_sys::Oid, column: Option<&str>) -> Result<bool, MdmError> {
     let sql = match column {
-        Some(_) => {
-            "SELECT pg_catalog.has_column_privilege(pg_catalog.current_user, $1, $2, 'SELECT')"
-        }
-        None => "SELECT pg_catalog.has_table_privilege(pg_catalog.current_user, $1, 'SELECT')",
+        Some(_) => "SELECT pg_catalog.has_column_privilege(current_user, $1, $2, 'SELECT')",
+        None => "SELECT pg_catalog.has_table_privilege(current_user, $1, 'SELECT')",
     };
     let args = match column {
         Some(column) => vec![relation_oid.into(), column.into()],
@@ -248,7 +258,16 @@ fn validate_mapping(
                 object.get("value").and_then(Value::as_str).ok_or_else(|| {
                     MdmError::SourceInvalid("field mapping value is required".into())
                 })?,
-                object.get("state").and_then(Value::as_str),
+                object
+                    .get("state")
+                    .map(|state| {
+                        state.as_str().ok_or_else(|| {
+                            MdmError::SourceInvalid(
+                                "field mapping state must be a column name".into(),
+                            )
+                        })
+                    })
+                    .transpose()?,
             ),
             _ => {
                 return Err(MdmError::SourceInvalid(
@@ -267,7 +286,7 @@ fn validate_mapping(
                 "execution role cannot SELECT column {value_name}"
             )));
         }
-        if !logical_type_matches(&field.logical_type, &value.type_name) {
+        if !logical_type_matches(&field.logical_type, &value.base_type) {
             return Err(MdmError::SourceInvalid(format!(
                 "field {field_name} expects {}, got {}",
                 field.logical_type, value.type_name
@@ -275,7 +294,7 @@ fn validate_mapping(
         }
         if let Some(state_name) = state_name {
             let state = column_info(relation.oid, state_name)?;
-            if state.type_name != "text" && state.type_name != "character varying" {
+            if state.base_type != "text" && state.base_type != "character varying" {
                 return Err(MdmError::SourceInvalid(format!(
                     "state column {state_name} must be text"
                 )));
@@ -325,14 +344,9 @@ pub(crate) fn validate_source(
             source.relation
         )));
     }
-    let current_oid = Spi::get_one::<pg_sys::Oid>(
-        "SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = pg_catalog.current_user",
-    )
-    .map_err(|error| MdmError::Spi(error.to_string()))?
-    .ok_or_else(|| MdmError::Unauthorized("current role does not exist".into()))?;
-    if relation.row_security && relation.owner == current_oid && !relation.force_row_security {
+    if relation.row_security && relation.owner_privileges && !relation.force_row_security {
         return Err(MdmError::SourceInvalid(format!(
-            "source {} is owned by the execution role while RLS is enabled; use FORCE ROW LEVEL SECURITY",
+            "source {} has RLS enabled but the execution role has owner privileges; use FORCE ROW LEVEL SECURITY",
             source.name
         )));
     }
@@ -342,7 +356,7 @@ pub(crate) fn validate_source(
     if let Some(column) = &source.row_changed_at {
         let info = column_info(relation.oid, column)?;
         if !matches!(
-            info.type_name.as_str(),
+            info.base_type.as_str(),
             "timestamp without time zone" | "timestamp with time zone" | "date"
         ) {
             return Err(MdmError::SourceInvalid(format!(
@@ -376,7 +390,7 @@ pub(crate) fn validate_source(
             ));
         }
         let info = column_info(relation.oid, column)?;
-        if kind == "is_true" && info.type_name != "boolean" {
+        if kind == "is_true" && info.base_type != "boolean" {
             return Err(MdmError::SourceInvalid(format!(
                 "soft-delete column {column} must be boolean"
             )));

@@ -180,6 +180,41 @@ $$;
 \set helper_owner mdm_helper_owner
 \ir /sql/configure_helper.sql
 
+DO $$
+DECLARE helper record;
+BEGIN
+    FOR helper IN
+        SELECT p.oid, p.proconfig, p.proowner, p.proacl
+        FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname IN ('mdm', 'mdm_admin', 'mdm_internal') AND p.prosecdef
+    LOOP
+        IF helper.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, mdm_internal, pg_temp']
+           OR helper.proowner <> 'mdm_helper_owner'::regrole
+           OR EXISTS (
+               SELECT FROM pg_catalog.aclexplode(COALESCE(helper.proacl, pg_catalog.acldefault('f', helper.proowner)))
+               WHERE grantee = 0 AND privilege_type = 'EXECUTE'
+           ) THEN
+            RAISE EXCEPTION 'unsafe helper configuration: %', helper.oid::regprocedure;
+        END IF;
+    END LOOP;
+    IF EXISTS (
+        SELECT FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'mdm' AND p.prosecdef
+    ) THEN
+        RAISE EXCEPTION 'public source actions must be SECURITY INVOKER';
+    END IF;
+    IF has_schema_privilege('mdm_administrator', 'mdm_internal', 'USAGE')
+       OR EXISTS (
+           SELECT FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'mdm_internal'
+             AND has_function_privilege('mdm_administrator', p.oid, 'EXECUTE')
+       ) THEN
+        RAISE EXCEPTION 'application role can access a private helper';
+    END IF;
+END
+$$;
+
 SELECT NOT has_schema_privilege('mdm_configurator', 'mdm_internal', 'USAGE') AS internal_schema_private,
        NOT has_table_privilege('mdm_configurator', 'mdm_internal.operations', 'SELECT') AS operations_private,
        NOT has_function_privilege('mdm_configurator', 'mdm_admin.verify_installation()', 'EXECUTE') AS helper_private
@@ -254,7 +289,12 @@ WITH proposed AS (
     ) AS definition
 )
 SELECT desired_version = 1 AND changed AND octet_length(definition_digest) = 32 AND octet_length(artifact_digest) = 32 AS v02_create_ok
-FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer definition');
+FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer definition')
+\gset
+\if :v02_create_ok
+\else
+\quit 1
+\endif
 
 WITH proposed AS (
     SELECT mdm.entity(
@@ -275,38 +315,77 @@ WITH proposed AS (
     ) AS definition
 )
 SELECT NOT changed AND desired_version = 1 AS v02_noop_ok
-FROM mdm.create((SELECT definition FROM proposed), 1, NULL);
+FROM mdm.create((SELECT definition FROM proposed), 1, NULL)
+\gset
+\if :v02_noop_ok
+\else
+\quit 1
+\endif
 
 DO $$
 DECLARE
     described jsonb;
-    definition_count bigint;
-    artifact_count bigint;
+    result record;
 BEGIN
     described := mdm.describe('customer', 'definition');
-    IF described->>'name' <> 'customer' THEN
+    IF described->>'name' IS DISTINCT FROM 'customer' THEN
         RAISE EXCEPTION 'definition description did not round trip';
     END IF;
-    SELECT count(*) INTO definition_count FROM mdm_internal.definitions d
-    JOIN mdm_internal.entities e ON e.entity_id = d.entity_id
-    WHERE e.entity_name = 'customer';
-    SELECT count(*) INTO artifact_count FROM mdm_internal.definition_artifacts a
-    JOIN mdm_internal.entities e ON e.entity_id = a.entity_id
-    WHERE e.entity_name = 'customer';
-    IF definition_count <> 1 OR artifact_count <> 1 THEN
-        RAISE EXCEPTION 'unexpected definition history: % / %', definition_count, artifact_count;
+    SELECT * INTO STRICT result FROM mdm.create(
+        jsonb_set(described, '{limits,max_candidate_pairs}', '100'), 1, 'definition B');
+    IF result.desired_version <> 2 OR NOT result.changed THEN
+        RAISE EXCEPTION 'A to B did not create version 2';
     END IF;
-    IF to_regclass('mdm_out.customer') IS NOT NULL THEN
-        RAISE EXCEPTION 'v0.2 created a public output table';
+    SELECT * INTO STRICT result FROM mdm.create(described, 2, 'return to definition A');
+    IF result.desired_version <> 3 OR NOT result.changed THEN
+        RAISE EXCEPTION 'B to A did not create version 3';
     END IF;
+    BEGIN
+        PERFORM mdm.create(described, 2);
+        RAISE EXCEPTION 'stale expected_version was accepted for a no-op';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_VERSION_CONFLICT') = 0 THEN RAISE; END IF;
+    END;
+    BEGIN
+        PERFORM mdm.create(jsonb_set(described, '{execution_role}', '"mdm_configurator"'), 3);
+        RAISE EXCEPTION 'unselected execution role was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_UNAUTHORIZED') = 0 THEN RAISE; END IF;
+    END;
+    BEGIN
+        PERFORM mdm_internal.describe_entity(NULL);
+        RAISE EXCEPTION 'application called a private helper';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
 END
 $$;
 RESET ROLE;
 
 \connect foundation postgres
 DO $$
+DECLARE
+    definition_count bigint;
+    artifact_count bigint;
 BEGIN
-    IF (SELECT count(*) FROM mdm_internal.operations) <> 1 THEN
+    SELECT count(*) INTO definition_count FROM mdm_internal.definitions d
+    JOIN mdm_internal.entities e ON e.entity_id = d.entity_id
+    WHERE e.entity_name = 'customer';
+    SELECT count(*) INTO artifact_count FROM mdm_internal.definition_artifacts a
+    JOIN mdm_internal.entities e ON e.entity_id = a.entity_id
+    WHERE e.entity_name = 'customer';
+    IF to_regclass('mdm_out.customer') IS NOT NULL THEN
+        RAISE EXCEPTION 'v0.2 created a public output table';
+    END IF;
+    IF definition_count <> 3 OR artifact_count <> 3 THEN
+        RAISE EXCEPTION 'unexpected definition history: % / %', definition_count, artifact_count;
+    END IF;
+    IF (SELECT count(DISTINCT definition_digest) FROM mdm_internal.definitions) <> 2 THEN
+        RAISE EXCEPTION 'A to B to A did not preserve definition identity';
+    END IF;
+    IF (SELECT count(*) FROM mdm_internal.operations) <> 4
+       OR (SELECT count(*) FROM mdm_internal.operations
+           WHERE operation_kind = 'create' AND status = 'succeeded'
+             AND actor_name = 'mdm_test_login' AND actor_role_name = 'mdm_administrator') <> 4 THEN
         RAISE EXCEPTION 'unexpected operation count after v0.2 create';
     END IF;
 END
@@ -392,3 +471,130 @@ BEGIN
     END LOOP;
 END
 $$;
+
+-- Inherited ownership bypasses ordinary RLS, even when the owner OID differs.
+CREATE ROLE mdm_source_owner NOLOGIN NOSUPERUSER NOBYPASSRLS;
+GRANT mdm_source_owner TO mdm_administrator WITH INHERIT TRUE, SET FALSE;
+CREATE TABLE public.rls_customer (LIKE public.crm_customer INCLUDING ALL);
+INSERT INTO public.rls_customer VALUES (1, 'hidden', 'hidden@example.test', now());
+ALTER TABLE public.rls_customer OWNER TO mdm_source_owner;
+ALTER TABLE public.rls_customer ENABLE ROW LEVEL SECURITY;
+CREATE POLICY deny_all ON public.rls_customer USING (false);
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE proposed jsonb;
+BEGIN
+    IF (SELECT count(*) FROM public.rls_customer) <> 1 THEN
+        RAISE EXCEPTION 'inherited-owner fixture did not bypass RLS';
+    END IF;
+    proposed := jsonb_set(jsonb_set(mdm.describe('customer', 'definition'),
+        '{name}', '"rls_customer"'), '{sources,0,relation}', '"public.rls_customer"');
+    BEGIN
+        PERFORM mdm.create(proposed);
+        RAISE EXCEPTION 'inherited owner bypass was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_SOURCE_INVALID') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+
+\connect foundation postgres
+ALTER TABLE public.rls_customer FORCE ROW LEVEL SECURITY;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+BEGIN;
+DO $$
+DECLARE proposed jsonb;
+BEGIN
+    IF (SELECT count(*) FROM public.rls_customer) <> 0 THEN
+        RAISE EXCEPTION 'FORCE RLS did not apply to selected execution role';
+    END IF;
+    proposed := jsonb_set(jsonb_set(mdm.describe('customer', 'definition'),
+        '{name}', '"rls_customer"'), '{sources,0,relation}', '"public.rls_customer"');
+    PERFORM mdm.create(proposed);
+END
+$$;
+ROLLBACK;
+
+\connect foundation postgres
+DROP TABLE public.rls_customer;
+REVOKE mdm_source_owner FROM mdm_administrator;
+DROP ROLE mdm_source_owner;
+
+CREATE TABLE public.typed_customer (
+    id bigint PRIMARY KEY, label varchar(80), amount numeric(12, 2), changed timestamp(3)
+);
+GRANT SELECT ON public.typed_customer TO mdm_administrator;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+BEGIN;
+SELECT * FROM mdm.create(mdm.entity(
+    name => 'typed_customer',
+    sources => ARRAY[mdm.source(
+        name => 'typed', relation => 'public.typed_customer'::regclass,
+        source_id => ARRAY['id'], mode => 'tracked',
+        fields => '{"label":"label","amount":"amount","changed":"changed"}'::jsonb,
+        row_changed_at => 'changed')],
+    fields => ARRAY[
+        mdm.field(name => 'label', type => 'text', cleaner => 'none'),
+        mdm.field(name => 'amount', type => 'numeric', cleaner => 'none'),
+        mdm.field(name => 'changed', type => 'timestamp', cleaner => 'none')],
+    matches => ARRAY[mdm.match(name => 'same_label', fields => ARRAY['label'],
+        comparison => 'exact', strength => 'identity', evidence_group => 'label')],
+    golden_values => ARRAY[]::jsonb[]));
+ROLLBACK;
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
+            '{sources,0,fields,email}', '{"value":"email_address","state":123}'), 3);
+        RAISE EXCEPTION 'non-string state column was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_SOURCE_INVALID') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+
+\connect foundation postgres
+DROP TABLE public.typed_customer;
+REVOKE SELECT ON public.crm_customer FROM mdm_administrator;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm.create(mdm.describe('customer', 'definition'), 3);
+        RAISE EXCEPTION 'revoked source SELECT was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_SOURCE_INVALID') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+\connect foundation postgres
+GRANT SELECT ON public.crm_customer TO mdm_administrator;
+
+-- Capability availability is operational state, outside the definition identity.
+BEGIN;
+CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
+RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
+LANGUAGE sql
+AS $$
+    VALUES ('external_graph_refresh', 1::smallint, 1::smallint, true, '{"changed":true}'::jsonb),
+           ('output_delta_consumer', 1::smallint, 1::smallint, false, '{}'::jsonb)
+$$;
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result record;
+BEGIN
+    SELECT * INTO STRICT result FROM mdm.create(mdm.describe('customer', 'definition'), 3);
+    IF result.changed OR result.desired_version <> 3 THEN
+        RAISE EXCEPTION 'capability change changed the definition identity';
+    END IF;
+END
+$$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK;

@@ -75,15 +75,22 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_names'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definition_artifacts'::pg_catalog.regclass, '');
 
-CREATE FUNCTION mdm_internal.describe_entity(entity_name text, format text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';
+CREATE FUNCTION mdm_internal.describe_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';
 CREATE FUNCTION mdm.describe(entity_name text, format text DEFAULT 'summary') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'describe_wrapper';
 CREATE FUNCTION mdm.entity(name text, sources jsonb[], fields jsonb[], matches jsonb[], golden_values jsonb[], preset text DEFAULT NULL, limits jsonb DEFAULT '{}'::jsonb, execution_role text DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'entity_wrapper';
 CREATE FUNCTION mdm.field(name text, type text, cleaner text, cleaner_options jsonb DEFAULT '{}'::jsonb, display text DEFAULT 'masked') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'field_wrapper';
 CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'golden_value_wrapper';
-CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_wrapper';
-CREATE FUNCTION mdm_internal.persist_entity(definition text, expected_version bigint, comment text, prepared text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
+CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_rule_wrapper';
+CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 CREATE FUNCTION mdm.create(definition jsonb, expected_version bigint DEFAULT NULL, comment text DEFAULT NULL) RETURNS TABLE (operation_id uuid, entity_name text, desired_version bigint, changed boolean, definition_digest bytea, artifact_digest bytea) LANGUAGE c AS 'MODULE_PATHNAME', 'create_wrapper';
 CREATE FUNCTION mdm.source(name text, relation regclass, source_id text[], mode text, fields jsonb, row_changed_at text DEFAULT NULL, soft_delete_when jsonb DEFAULT NULL, authority jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'source_wrapper';
 
-REVOKE ALL ON FUNCTION mdm_internal.describe_entity(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.persist_entity(text, bigint, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.describe_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_entity(internal) FROM PUBLIC;
+
+CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'prepare_rebind_wrapper';
+CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_rebind_wrapper';
+CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebind_wrapper';
+REVOKE ALL ON FUNCTION mdm_internal.prepare_rebind(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_rebind(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;

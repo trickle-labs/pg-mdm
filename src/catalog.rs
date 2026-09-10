@@ -1,5 +1,5 @@
-use pgrx::JsonB;
 use pgrx::prelude::*;
+use pgrx::{Internal, JsonB};
 use serde_json::{Value, json};
 
 use crate::error::MdmError;
@@ -68,20 +68,55 @@ pub(crate) fn outer_user_id() -> pg_sys::Oid {
     }
 }
 
+/// Invoke a private helper with an in-memory request that SQL callers cannot construct.
+/// Each constant helper name must be paired with its request's Rust type.
+pub(crate) fn call_helper<T: 'static>(name: &str, request: T) -> Result<JsonB, MdmError> {
+    let owner = validate_helper_owner()?;
+    let oid = Spi::get_one_with_args::<pg_sys::Oid>(
+        "SELECT p.oid FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'mdm_internal' AND p.proname = $1 AND p.pronargs = 1 AND p.proargtypes[0] = 'pg_catalog.internal'::pg_catalog.regtype AND p.prorettype = 'pg_catalog.jsonb'::pg_catalog.regtype AND p.prosecdef AND p.proowner = $2",
+        &[name.into(), owner.oid.into()],
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?
+    .ok_or_else(|| MdmError::HelperOwnerUnsafe(format!("private helper {name} is missing or has an unsafe owner")))?;
+    let argument = Internal::new(request)
+        .into_datum()
+        .expect("internal request is initialized");
+    // SAFETY: callers pair a fixed helper with its request type. PostgreSQL's fmgr
+    // applies SECURITY DEFINER and restores its context, including on ERROR.
+    // Every helper returns a non-NULL jsonb; SQL cannot construct an internal value.
+    unsafe {
+        let result = pg_sys::OidFunctionCall1Coll(oid, pg_sys::InvalidOid, argument);
+        JsonB::from_datum(result, false)
+    }
+    .ok_or_else(|| MdmError::OperationState("private helper returned NULL".into()))
+}
+
 pub(crate) fn validate_helper_owner() -> Result<Role, MdmError> {
     let owner_oid = Spi::get_one::<pg_sys::Oid>(
-        "SELECT p.proowner FROM pg_catalog.pg_proc p WHERE p.oid = 'mdm_admin.verify_installation()'::pg_catalog.regprocedure",
+        "SELECT p.proowner FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'mdm_admin' AND p.proname = 'verify_installation' AND p.pronargs = 0",
     )
     .map_err(|error| MdmError::Spi(error.to_string()))?
     .ok_or_else(|| MdmError::HelperOwnerUnsafe("verification helper is missing".into()))?;
     let table_owner = Spi::get_one::<pg_sys::Oid>(
-        "SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = 'mdm_internal.operations'::pg_catalog.regclass",
+        "SELECT c.relowner FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mdm_internal' AND c.relname = 'operations'",
     )
     .map_err(|error| MdmError::Spi(error.to_string()))?
     .ok_or_else(|| MdmError::HelperOwnerUnsafe("operations table is missing".into()))?;
     if owner_oid != table_owner {
         return Err(MdmError::HelperOwnerUnsafe(
             "the helper and operations table have different owners".into(),
+        ));
+    }
+
+    let mismatched_table = Spi::get_one_with_args::<bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mdm_internal' AND c.relkind = 'r' AND c.relowner <> $1)",
+        &[owner_oid.into()],
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?
+    .unwrap_or(true);
+    if mismatched_table {
+        return Err(MdmError::HelperOwnerUnsafe(
+            "protected tables have different owners".into(),
         ));
     }
 

@@ -7,6 +7,8 @@ use crate::api::create::{create, persist_entity};
 #[allow(unused_imports)]
 use crate::api::describe::{describe, describe_entity};
 #[allow(unused_imports)]
+use crate::api::rebind::{persist_rebind, prepare_rebind, rebind};
+#[allow(unused_imports)]
 use crate::catalog::verify_installation;
 
 extension_sql!(
@@ -129,8 +131,11 @@ extension_sql!(
 REVOKE ALL ON FUNCTION mdm_internal.integration_capabilities() FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.require_graph_v1() FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.verify_installation() FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.persist_entity(text, bigint, text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.describe_entity(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.describe_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.prepare_rebind(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_rebind(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;
     "#,
     name = "pg_mdm_acl_policy",
     requires = [verify_installation],

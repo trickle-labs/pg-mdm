@@ -15,5 +15,29 @@ pub(crate) fn expand(preset: Option<Value>) -> Result<Option<Value>, MdmError> {
             "unknown built-in preset {name}"
         )));
     }
+    if let Some(version) = preset.get("version")
+        && version.as_u64() != Some(1)
+    {
+        return Err(MdmError::DefinitionInvalid(format!(
+            "unsupported version {version} for built-in preset {name}"
+        )));
+    }
     Ok(Some(json!({"name": name, "version": 1})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_bare_presets_and_preserves_supported_versions() {
+        for name in ["person", "company", "product"] {
+            let pinned = json!({"name": name, "version": 1});
+            assert_eq!(expand(Some(json!(name))).unwrap(), Some(pinned.clone()));
+            assert_eq!(expand(Some(pinned.clone())).unwrap(), Some(pinned));
+        }
+        for version in [json!(0), json!(2), json!(-1), json!("1"), json!(null)] {
+            assert!(expand(Some(json!({"name": "person", "version": version}))).is_err());
+        }
+    }
 }

@@ -31,7 +31,8 @@ COPY sql/ sql/
 COPY justfile ./
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo pgrx package --pg-config /usr/bin/pg_config \
+    rm -rf target/release/pg_mdm-pg18 \
+    && cargo pgrx package --pg-config /usr/bin/pg_config \
     && mkdir -p /package \
     && cp -R target/release/pg_mdm-pg18/. /package/
 
@@ -53,7 +54,9 @@ COPY --from=pg_trickle /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
 COPY --from=pg_trickle /pg_trickle/extension/ /usr/share/postgresql/18/extension/
 COPY --from=builder /package/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
 COPY --from=builder /package/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
+COPY sql/archive/pg_mdm--0.1.0.sql /usr/share/postgresql/18/extension/
 COPY tests/e2e.sql /tests/e2e.sql
+COPY tests/restore.sql /tests/restore.sql
 COPY sql/configure_helper.sql /sql/configure_helper.sql
 RUN echo "shared_preload_libraries = 'pg_trickle'" >> /usr/share/postgresql/postgresql.conf.sample
 USER postgres

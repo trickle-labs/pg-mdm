@@ -155,7 +155,7 @@ pub(crate) fn field(
 
 #[pg_extern(
     name = "match",
-    sql = "CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_wrapper';"
+    sql = "CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_rule_wrapper';"
 )]
 pub(crate) fn match_rule(
     name: String,

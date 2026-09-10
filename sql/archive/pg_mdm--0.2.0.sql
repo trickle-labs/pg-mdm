@@ -7,7 +7,7 @@ The ordering of items is not stable, it is driven by a dependency graph.
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/schema.rs:12
+-- src/schema.rs:14
 -- bootstrap
 
 CREATE SCHEMA mdm;
@@ -121,13 +121,13 @@ REVOKE CREATE ON SCHEMA mdm, mdm_out, mdm_steward, mdm_admin FROM PUBLIC;
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/describe.rs:27
+-- src/api/describe.rs:29
 -- pg_mdm::api::describe::describe_entity
-CREATE FUNCTION mdm_internal.describe_entity(entity_name text, format text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';
+CREATE FUNCTION mdm_internal.describe_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/describe.rs:18
+-- src/api/describe.rs:13
 -- pg_mdm::api::describe::describe
 CREATE FUNCTION mdm.describe(entity_name text, format text DEFAULT 'summary') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'describe_wrapper';
 /* </end connected objects> */
@@ -159,19 +159,37 @@ CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capabilit
 /* <begin connected objects> */
 -- src/api/constructors.rs:156
 -- pg_mdm::api::constructors::match_rule
-CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_wrapper';
+CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_rule_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:489
+-- src/api/create.rs:430
 -- pg_mdm::api::create::persist_entity
-CREATE FUNCTION mdm_internal.persist_entity(definition text, expected_version bigint, comment text, prepared text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
+CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:59
+-- src/api/create.rs:48
 -- pg_mdm::api::create::create
 CREATE FUNCTION mdm.create(definition jsonb, expected_version bigint DEFAULT NULL, comment text DEFAULT NULL) RETURNS TABLE (operation_id uuid, entity_name text, desired_version bigint, changed boolean, definition_digest bytea, artifact_digest bytea) LANGUAGE c AS 'MODULE_PATHNAME', 'create_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/rebind.rs:179
+-- pg_mdm::api::rebind::persist_rebind
+CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_rebind_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/rebind.rs:154
+-- pg_mdm::api::rebind::prepare_rebind
+CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'prepare_rebind_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/rebind.rs:106
+-- pg_mdm::api::rebind::rebind
+CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebind_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -187,13 +205,13 @@ CREATE FUNCTION mdm.source(name text, relation regclass, source_id text[], mode 
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/catalog.rs:201
+-- src/catalog.rs:236
 -- pg_mdm::catalog::verify_installation
 CREATE FUNCTION mdm_admin.verify_installation() RETURNS text STRICT SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'verify_installation_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/schema.rs:127
+-- src/schema.rs:129
 -- requires:
 --   verify_installation
 
@@ -202,7 +220,10 @@ CREATE FUNCTION mdm_admin.verify_installation() RETURNS text STRICT SECURITY DEF
 REVOKE ALL ON FUNCTION mdm_internal.integration_capabilities() FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.require_graph_v1() FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.verify_installation() FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.persist_entity(text, bigint, text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.describe_entity(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.describe_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.prepare_rebind(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_rebind(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;
 /* </end connected objects> */
 

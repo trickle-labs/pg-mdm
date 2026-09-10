@@ -1,18 +1,13 @@
-use pgrx::JsonB;
-use pgrx::fn_call::{Arg, FnCallArg, fn_call};
 use pgrx::prelude::*;
+use pgrx::{Internal, JsonB};
 use serde_json::Value;
 
 use crate::catalog;
 use crate::error::MdmError;
 
-fn call_helper(entity_name: String, format: Option<String>) -> Result<JsonB, MdmError> {
-    let entity_name = Arg::Value(entity_name);
-    let format = Arg::Value(format.unwrap_or_else(|| "summary".into()));
-    let args: [&dyn FnCallArg; 2] = [&entity_name, &format];
-    fn_call::<JsonB>("mdm_internal.describe_entity", &args)
-        .map_err(|error| MdmError::Spi(error.to_string()))?
-        .ok_or_else(|| MdmError::OperationState("describe helper returned NULL".into()))
+struct DescribeRequest {
+    entity_name: String,
+    format: String,
 }
 
 #[pg_extern(
@@ -21,27 +16,29 @@ fn call_helper(entity_name: String, format: Option<String>) -> Result<JsonB, Mdm
     sql = "CREATE FUNCTION mdm.describe(entity_name text, format text DEFAULT 'summary') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'describe_wrapper';"
 )]
 pub(crate) fn describe(entity_name: String, format: Option<String>) -> JsonB {
-    call_helper(entity_name, format).unwrap_or_else(|error| crate::raise(error))
+    catalog::call_helper(
+        "describe_entity",
+        DescribeRequest {
+            entity_name,
+            format: format.unwrap_or_else(|| "summary".into()),
+        },
+    )
+    .unwrap_or_else(|error| crate::raise(error))
 }
 
 #[pg_extern(
     name = "describe_entity",
     security_definer,
-    sql = "CREATE FUNCTION mdm_internal.describe_entity(entity_name text, format text) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';"
+    sql = "CREATE FUNCTION mdm_internal.describe_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';"
 )]
-pub(crate) fn describe_entity(entity_name: String, format: String) -> JsonB {
+pub(crate) fn describe_entity(request: Internal) -> JsonB {
     let result = (|| {
         let helper_owner = catalog::validate_helper_owner()?;
-        let describe_owner = Spi::get_one::<pg_sys::Oid>(
-            "SELECT p.proowner FROM pg_catalog.pg_proc p WHERE p.oid = 'mdm_internal.describe_entity(text, text)'::pg_catalog.regprocedure",
-        )
-        .map_err(|error| MdmError::Spi(error.to_string()))?
-        .ok_or_else(|| MdmError::HelperOwnerUnsafe("describe helper is missing".into()))?;
-        if describe_owner != helper_owner.oid {
-            return Err(MdmError::HelperOwnerUnsafe(
-                "describe helper and protected objects have different owners".into(),
-            ));
-        }
+        // SAFETY: describe is the only caller that constructs DescribeRequest.
+        let request = unsafe { request.get::<DescribeRequest>() }
+            .ok_or_else(|| MdmError::Unauthorized("describe request is required".into()))?;
+        let entity_name = &request.entity_name;
+        let format = &request.format;
         let (_, selected) = catalog::validate_caller(&helper_owner)?;
         if !matches!(format.as_str(), "summary" | "definition") {
             return Err(MdmError::DefinitionInvalid(
@@ -50,7 +47,7 @@ pub(crate) fn describe_entity(entity_name: String, format: String) -> JsonB {
         }
         let row = Spi::connect(|client| {
             let table = client.select(
-                "SELECT e.entity_id::text, e.entity_name::text, e.desired_version, e.active_version, e.execution_role_name, d.expanded_definition, encode(d.definition_digest, 'hex'), encode(a.artifact_digest, 'hex') FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version LEFT JOIN LATERAL (SELECT artifact_digest FROM mdm_internal.definition_artifacts x WHERE x.entity_id = d.entity_id AND x.definition_version = d.definition_version ORDER BY x.artifact_id DESC LIMIT 1) a ON true WHERE e.entity_name = $1::pg_catalog.name",
+                "SELECT e.entity_id::text, e.entity_name::text, e.desired_version, e.active_version, e.execution_role_name, d.expanded_definition, encode(d.definition_digest, 'hex'), encode(a.artifact_digest, 'hex'), b.role_oid FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version LEFT JOIN LATERAL (SELECT artifact_digest FROM mdm_internal.definition_artifacts x WHERE x.entity_id = d.entity_id AND x.definition_version = d.definition_version ORDER BY x.artifact_id DESC LIMIT 1) a ON true WHERE e.entity_name = $1::pg_catalog.name",
                 Some(1), &[entity_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             if table.is_empty() {
                 return Err(MdmError::DefinitionInvalid(format!(
@@ -62,7 +59,10 @@ pub(crate) fn describe_entity(entity_name: String, format: String) -> JsonB {
                 .get::<String>(5)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Spi("execution role is NULL".into()))?;
-            if execution_role != selected.name {
+            let bound_oid = row
+                .get::<pg_sys::Oid>(9)
+                .map_err(|error| MdmError::Spi(error.to_string()))?;
+            if execution_role != selected.name || bound_oid != Some(selected.oid) {
                 return Err(MdmError::Unauthorized(
                     "entity is bound to another execution role".into(),
                 ));

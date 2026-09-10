@@ -252,6 +252,7 @@ pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
         "xmin",
         "cmin",
         "xmax",
+        "cmax",
         "ctid",
     ];
     for golden in &entity.golden_values {
@@ -331,7 +332,7 @@ fn candidate_plan(entity: &Entity) -> Value {
     })
 }
 
-fn semantic_manifest(capabilities: &crate::integration::PgTrickleCapabilities) -> Value {
+fn semantic_manifest() -> Value {
     json!({
         "format_version": 1,
         "engine_version": 1,
@@ -344,16 +345,14 @@ fn semantic_manifest(capabilities: &crate::integration::PgTrickleCapabilities) -
         "golden_policies": {"first_non_null": 1, "latest": 1, "most_common": 1, "prefer_source": 1},
         "required_pg_trickle_capability": {
             "name": "external_graph_refresh",
-            "major": capabilities.external_graph_refresh.major,
-            "minimum_minor": 0,
-            "enabled": capabilities.external_graph_refresh.enabled
-        },
-        "capabilities": capabilities
+            "major": 1,
+            "minimum_minor": 0
+        }
     })
 }
 
 fn role_checks(entity: &Entity) -> Result<(), MdmError> {
-    let current = Spi::get_one::<String>("SELECT pg_catalog.current_user::text")
+    let current = Spi::get_one::<String>("SELECT current_user::text")
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Unauthorized("current role is unavailable".into()))?;
     if entity
@@ -367,7 +366,7 @@ fn role_checks(entity: &Entity) -> Result<(), MdmError> {
     }
     let row = Spi::connect(|client| {
         let table = client.select(
-            "SELECT r.oid, r.rolsuper, r.rolbypassrls, EXISTS (SELECT 1 FROM pg_catalog.pg_extension e WHERE e.extname = 'pg_mdm' AND e.extowner = r.oid) FROM pg_catalog.pg_roles r WHERE r.rolname = pg_catalog.current_user",
+            "SELECT r.oid, r.rolsuper, r.rolbypassrls, EXISTS (SELECT 1 FROM pg_catalog.pg_extension e WHERE e.extname = 'pg_mdm' AND e.extowner = r.oid) FROM pg_catalog.pg_roles r WHERE r.rolname = current_user",
             Some(1),
             &[],
         ).map_err(|error| MdmError::Spi(error.to_string()))?;
@@ -417,7 +416,7 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
     role_checks(&entity)?;
     if entity.execution_role.is_none() {
         entity.execution_role = Some(
-            Spi::get_one::<String>("SELECT pg_catalog.current_user::text")
+            Spi::get_one::<String>("SELECT current_user::text")
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Unauthorized("current role is unavailable".into()))?,
         );
@@ -429,7 +428,6 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
     entity.preset = presets::expand(entity.preset.clone())?;
     let expanded_definition =
         canonical_definition(serde_json::to_value(&entity).expect("definition is serializable"));
-    let capabilities = crate::integration::integration_capabilities()?;
     let mut sources = Vec::with_capacity(entity.sources.len());
     for source in &entity.sources {
         sources.push(validate_source(source, &entity)?);
@@ -461,7 +459,7 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
         }
     }
     let logical_candidate_plan = canonical_definition(candidate_plan(&entity));
-    let semantic_manifest = canonical_definition(semantic_manifest(&capabilities));
+    let semantic_manifest = canonical_definition(semantic_manifest());
     let definition_digest = digest(
         "pg_mdm/definition/v1",
         &[
@@ -508,10 +506,6 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
             .collect(),
         output_names: output_names(&entity.name)?,
     })
-}
-
-pub(crate) fn prepared_json(prepared: &PreparedDefinition) -> Value {
-    serde_json::to_value(prepared).expect("prepared definition is serializable")
 }
 
 pub(crate) fn digest_hex(bytes: &[u8]) -> String {
@@ -575,5 +569,35 @@ mod tests {
     #[test]
     fn accepts_repeated_lineage_in_one_group() {
         assert!(validate_entity_local(&definition(("email", "email"))).is_ok());
+    }
+
+    #[test]
+    fn rejects_system_column_as_golden_field() {
+        let mut entity = definition(("email", "email"));
+        entity.fields[0].name = "cmax".into();
+        for rule in &mut entity.matches {
+            rule.fields = vec!["cmax".into()];
+        }
+        entity.golden_values.push(crate::definition::GoldenValue {
+            field: "cmax".into(),
+            policy: "first_non_null".into(),
+            sources: None,
+        });
+        assert_eq!(
+            validate_entity_local(&entity),
+            Err(MdmError::DefinitionInvalid(
+                "golden field cmax is reserved".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn semantic_manifest_pins_requirements_without_live_capability_state() {
+        let manifest = semantic_manifest();
+        assert_eq!(
+            manifest["required_pg_trickle_capability"],
+            json!({"name": "external_graph_refresh", "major": 1, "minimum_minor": 0})
+        );
+        assert!(manifest.get("capabilities").is_none());
     }
 }

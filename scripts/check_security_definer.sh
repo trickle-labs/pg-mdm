@@ -5,13 +5,25 @@ archive=${1:-sql/archive/pg_mdm--0.2.0.sql}
 
 test -f "$archive"
 
-count=$(rg -c 'SECURITY DEFINER' "$archive")
-test "$count" -eq 3
+python3 - "$archive" <<'PY'
+from pathlib import Path
+import re
+import sys
 
-rg -U -q 'SECURITY DEFINER[[:space:]]+SET search_path TO pg_catalog, mdm_internal, pg_temp' "$archive"
-rg -q 'REVOKE ALL ON FUNCTION mdm_admin\.verify_installation\(\) FROM PUBLIC' "$archive"
-rg -q 'REVOKE ALL ON FUNCTION mdm_internal\.persist_entity\(text, bigint, text, text\) FROM PUBLIC' "$archive"
-rg -q 'REVOKE ALL ON FUNCTION mdm_internal\.describe_entity\(text, text\) FROM PUBLIC' "$archive"
+sql = Path(sys.argv[1]).read_text()
+helpers = {}
+for name, arguments, body in re.findall(r'CREATE FUNCTION ([\w.]+)\((.*?)\)(.*?);', sql, re.S):
+    if 'SECURITY DEFINER' not in body:
+        continue
+    signature = f"{name}({', '.join(arg.split()[-1] for arg in arguments.split(',') if arg.strip())})"
+    assert re.search(r'SECURITY DEFINER\s+SET search_path TO pg_catalog, mdm_internal, pg_temp\s', body), signature
+    assert f'REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;' in sql, signature
+    helpers[name] = signature
+assert set(helpers) == {
+    'mdm_admin.verify_installation', 'mdm_internal.persist_entity', 'mdm_internal.describe_entity',
+    'mdm_internal.prepare_rebind', 'mdm_internal.persist_rebind'
+}, helpers
+PY
 
 if rg -n 'Spi::(run|run_with_args)\(&|client\.(select|update)\(&' src; then
     echo 'dynamic SQL passed to SPI' >&2
