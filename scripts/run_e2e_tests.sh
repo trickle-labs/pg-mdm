@@ -30,7 +30,7 @@ if docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d missing_de
     echo 'FAIL: installation without pg_trickle succeeded' >&2
     exit 1
 fi
-rg -q 'required extension "pg_trickle" is not installed' "$missing_log"
+grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql
 
@@ -66,7 +66,7 @@ done
 if ! wait "$writer_one"; then cat "$work_dir/writer_one.log"; exit 1; fi
 if wait "$writer_two"; then echo 'FAIL: concurrent stale version succeeded' >&2; exit 1; fi
 if [[ $overlapped != true ]]; then echo 'FAIL: writers did not contend on the entity lock' >&2; exit 1; fi
-if ! rg -q 'MDM_VERSION_CONFLICT' "$work_dir/writer_two.log"; then cat "$work_dir/writer_two.log"; exit 1; fi
+if ! grep -q 'MDM_VERSION_CONFLICT' "$work_dir/writer_two.log"; then cat "$work_dir/writer_two.log"; exit 1; fi
 
 original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'public.crm_customer'::regclass::oid")
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
