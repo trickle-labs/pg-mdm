@@ -67,6 +67,16 @@ pub enum MdmError {
     DecisionContradiction(String),
     #[error("decision check limit exceeded: {checked} > {limit}")]
     DecisionCheckLimit { checked: usize, limit: usize },
+    #[error("resolver limit exceeded for {resource}: {observed} > {limit}")]
+    ResolverLimit {
+        resource: &'static str,
+        observed: usize,
+        limit: usize,
+    },
+    #[error("invalid resolver input: {0}")]
+    ResolverInvalid(String),
+    #[error("resolver invariant failed: {0}")]
+    ResolverInvariant(String),
 }
 
 impl MdmError {
@@ -100,6 +110,9 @@ impl MdmError {
             Self::DecisionVersionConflict(_) => "MDM_DECISION_VERSION_CONFLICT",
             Self::DecisionContradiction(_) => "MDM_DECISION_CONTRADICTION",
             Self::DecisionCheckLimit { .. } => "MDM_DECISION_CHECK_LIMIT",
+            Self::ResolverLimit { .. } => "MDM_RESOLVER_LIMIT",
+            Self::ResolverInvalid(_) => "MDM_RESOLVER_INVALID",
+            Self::ResolverInvariant(_) => "MDM_RESOLVER_INVARIANT",
         }
     }
 }

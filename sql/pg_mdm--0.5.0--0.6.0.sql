@@ -1,0 +1,3 @@
+-- v0.6 adds the pure Rust conservative clustering resolver.
+-- The release adds no durable PostgreSQL objects; the semantic engine is
+-- versioned by the extension package and its definition manifest.

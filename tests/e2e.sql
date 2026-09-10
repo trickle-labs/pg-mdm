@@ -26,9 +26,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.5.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.6.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.5.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.6.0 is not installed';
     END IF;
 END
 $$;
@@ -76,6 +76,14 @@ BEGIN
     END IF;
 END
 $$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.6.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.6.0') THEN
+        RAISE EXCEPTION '0.5.0 to 0.6.0 upgrade did not update extension version';
+    END IF;
+END
+$$;
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -85,12 +93,13 @@ CREATE EXTENSION pg_mdm VERSION '0.2.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.3.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.4.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.5.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.6.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.5.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.6.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.5.0 upgrade did not install v0.5 catalog';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.6.0 upgrade did not install v0.6 catalog';
     END IF;
 END
 $$;
@@ -452,6 +461,9 @@ BEGIN
     summary := mdm.describe('customer', 'summary');
     IF summary->>'source_key_encoding' IS DISTINCT FROM '2'
        OR summary->>'row_identity_version' IS DISTINCT FROM '2'
+       OR summary->>'clustering_policy' IS DISTINCT FROM '1'
+       OR (summary->'resolver_limits' ? 'max_active_records') IS NOT TRUE
+       OR (summary->'clustering_admission' ? 'established_established') IS NOT TRUE
        OR jsonb_array_length(summary->'cleaners') <> 2
        OR summary->'cleaner_versions'->>'text' IS DISTINCT FROM '1'
        OR summary->'cleaner_versions'->>'date' IS DISTINCT FROM '1'

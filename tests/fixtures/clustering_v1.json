@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "policy_version": 1,
+  "admission": {
+    "singleton_singleton": ["identity", "strong"],
+    "singleton_established": ["identity", "strong_plus_independent_group"],
+    "established_established": ["shared_authority", "two_independent_strong_connections"]
+  },
+  "rejection_reasons": [
+    "CANNOT_LINK",
+    "AUTHORITATIVE_CONFLICT",
+    "SINGLETON_NEEDS_INDEPENDENT_GROUP",
+    "ESTABLISHED_NEEDS_TWO_STRONG_CONNECTIONS",
+    "ESTABLISHED_STRONG_CONNECTIONS_NOT_INDEPENDENT",
+    "ESTABLISHED_STRONG_CONNECTIONS_REUSE_PAIR"
+  ]
+}

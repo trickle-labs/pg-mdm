@@ -16,6 +16,7 @@ pub mod integration;
 pub mod normalization;
 pub mod pair;
 pub mod presets;
+pub mod resolver;
 pub mod schema;
 pub mod semantics;
 pub mod source_record;

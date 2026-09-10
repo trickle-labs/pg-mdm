@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Add deterministic conservative clustering with manual closure, cannot-links, authority conflicts, and component admission.
+- Return complete memberships plus accepted and rejected union facts with fail-closed resolver limits.
+- Add the v0.5.0 to v0.6.0 upgrade path and archived release artifact.
+
 ## 0.5.0
 
 - Add exact and bounded normalized-Levenshtein evidence with deterministic pair precedence and edge ordering.

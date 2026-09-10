@@ -33,6 +33,12 @@ test-evidence:
 test-decisions:
     cargo test --test pair_tests --test decision_tests --features pg18 --offline
 
+test-resolver:
+    cargo test --test resolver_tests --features pg18 --offline
+
+test-resolver-properties:
+    cargo test --test resolver_property_tests --features pg18 --offline
+
 package:
     cargo pgrx package --pg-config "{{pg_config}}"
 
@@ -50,4 +56,4 @@ check-upgrades:
     python3 scripts/check_upgrade_paths.py
 
 check-archive: package
-    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.5.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.5.0.sql
+    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.6.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.6.0.sql

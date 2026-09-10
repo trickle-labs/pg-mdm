@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use crate::candidate::CandidateLimits;
 use crate::comparators::{self, DEFAULT_MAX_COMPARATOR_WORK};
 use crate::error::MdmError;
+use crate::resolver::ResolverLimits;
 
 pub const DEFAULT_MAX_BLOCK_RECORDS: usize = 10_000;
 pub const DEFAULT_MAX_CANDIDATE_PAIRS: usize = 1_000_000;
@@ -11,6 +12,15 @@ pub const ABSOLUTE_MAX_BLOCK_RECORDS: usize = 1_000_000;
 pub const ABSOLUTE_MAX_CANDIDATE_PAIRS: usize = 100_000_000;
 pub const DEFAULT_MAX_DECISION_CLOSURE: usize = 10_000;
 pub const ABSOLUTE_MAX_DECISION_CLOSURE: usize = 1_000_000;
+pub const DEFAULT_MAX_ACTIVE_RECORDS: usize = 100_000;
+pub const DEFAULT_MAX_AUTOMATIC_EDGES: usize = 1_000_000;
+pub const DEFAULT_MAX_RECORDS_PER_COMPONENT: usize = 100_000;
+pub const DEFAULT_MAX_COMPONENT_CHECKS: usize = 1_000_000;
+pub const ABSOLUTE_MAX_ACTIVE_RECORDS: usize = 10_000_000;
+pub const ABSOLUTE_MAX_AUTOMATIC_EDGES: usize = 100_000_000;
+pub const ABSOLUTE_MAX_RECORDS_PER_COMPONENT: usize = 10_000_000;
+pub const ABSOLUTE_MAX_COMPONENT_CHECKS: usize = 100_000_000;
+pub const CLUSTERING_POLICY_VERSION: u16 = 1;
 
 pub fn candidate_limits() -> CandidateLimits {
     CandidateLimits {
@@ -36,9 +46,13 @@ pub fn validate_limit_value(name: &str, value: &Value) -> Result<usize, MdmError
         "max_candidate_pairs" => ABSOLUTE_MAX_CANDIDATE_PAIRS,
         "max_comparator_work" => comparators::ABSOLUTE_MAX_COMPARATOR_WORK,
         "max_decision_closure" => ABSOLUTE_MAX_DECISION_CLOSURE,
+        "max_active_records" => ABSOLUTE_MAX_ACTIVE_RECORDS,
+        "max_automatic_edges" => ABSOLUTE_MAX_AUTOMATIC_EDGES,
+        "max_records_per_component" => ABSOLUTE_MAX_RECORDS_PER_COMPONENT,
+        "max_component_checks" => ABSOLUTE_MAX_COMPONENT_CHECKS,
         _ => {
             return Err(MdmError::DefinitionInvalid(format!(
-                "unsupported candidate limit {name}"
+                "unsupported limit {name}"
             )));
         }
     };
@@ -97,6 +111,19 @@ pub fn expand_limits(
     limits
         .entry("max_decision_closure".into())
         .or_insert_with(|| json!(DEFAULT_MAX_DECISION_CLOSURE));
+    let resolver = ResolverLimits::default();
+    limits
+        .entry("max_active_records".into())
+        .or_insert_with(|| json!(resolver.max_active_records));
+    limits
+        .entry("max_automatic_edges".into())
+        .or_insert_with(|| json!(resolver.max_automatic_edges));
+    limits
+        .entry("max_records_per_component".into())
+        .or_insert_with(|| json!(resolver.max_records_per_component));
+    limits
+        .entry("max_component_checks".into())
+        .or_insert_with(|| json!(resolver.max_component_checks));
     validate_limits(limits)?;
     Ok(CandidateLimits {
         max_block_records: validate_limit_value("max_block_records", &limits["max_block_records"])?,
@@ -104,6 +131,28 @@ pub fn expand_limits(
             "max_candidate_pairs",
             &limits["max_candidate_pairs"],
         )?,
+    })
+}
+
+pub fn resolver_limits(
+    limits: &std::collections::BTreeMap<String, Value>,
+) -> Result<ResolverLimits, MdmError> {
+    let defaults = ResolverLimits::default();
+    let get = |name: &'static str, default| {
+        limits
+            .get(name)
+            .map(|value| validate_limit_value(name, value))
+            .transpose()
+            .map(|value| value.unwrap_or(default))
+    };
+    Ok(ResolverLimits {
+        max_active_records: get("max_active_records", defaults.max_active_records)?,
+        max_automatic_edges: get("max_automatic_edges", defaults.max_automatic_edges)?,
+        max_records_per_component: get(
+            "max_records_per_component",
+            defaults.max_records_per_component,
+        )?,
+        max_component_checks: get("max_component_checks", defaults.max_component_checks)?,
     })
 }
 
@@ -135,6 +184,26 @@ pub fn semantic_manifest() -> Value {
             "policy_version": 1,
             "default_max_decision_closure": DEFAULT_MAX_DECISION_CLOSURE,
             "absolute_max_decision_closure": ABSOLUTE_MAX_DECISION_CLOSURE
+        },
+        "clustering": {
+            "policy_version": CLUSTERING_POLICY_VERSION,
+            "defaults": {
+                "max_active_records": DEFAULT_MAX_ACTIVE_RECORDS,
+                "max_automatic_edges": DEFAULT_MAX_AUTOMATIC_EDGES,
+                "max_records_per_component": DEFAULT_MAX_RECORDS_PER_COMPONENT,
+                "max_component_checks": DEFAULT_MAX_COMPONENT_CHECKS
+            },
+            "absolute_ceilings": {
+                "max_active_records": ABSOLUTE_MAX_ACTIVE_RECORDS,
+                "max_automatic_edges": ABSOLUTE_MAX_AUTOMATIC_EDGES,
+                "max_records_per_component": ABSOLUTE_MAX_RECORDS_PER_COMPONENT,
+                "max_component_checks": ABSOLUTE_MAX_COMPONENT_CHECKS
+            },
+            "admission": {
+                "singleton_singleton": ["identity", "strong"],
+                "singleton_established": ["identity", "strong_plus_independent_group"],
+                "established_established": ["shared_authority", "two_independent_strong_connections"]
+            }
         }
     })
 }

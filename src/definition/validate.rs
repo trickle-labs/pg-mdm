@@ -372,6 +372,12 @@ fn semantic_manifest() -> Value {
     ) {
         manifest.insert("candidate".into(), candidate.clone());
     }
+    if let (Some(manifest), Some(clustering)) = (
+        manifest.as_object_mut(),
+        semantics::semantic_manifest().get("clustering"),
+    ) {
+        manifest.insert("clustering".into(), clustering.clone());
+    }
     manifest
 }
 
