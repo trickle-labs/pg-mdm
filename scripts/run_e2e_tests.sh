@@ -92,7 +92,10 @@ SQL
 docker exec "$container" createdb -U postgres restored
 chmod 0644 "$dump_file"
 docker cp "$dump_file" "$container:/tmp/foundation.dump" >/dev/null
-docker exec "$container" pg_restore -v -U postgres -d restored /tmp/foundation.dump >/dev/null
+docker exec "$container" sh -c \
+    "pg_restore -l /tmp/foundation.dump | grep -v 'TABLE DATA pgtrickle pgt_capture_instance' > /tmp/foundation.list"
+docker exec "$container" pg_restore -v -U postgres -d restored \
+    --use-list=/tmp/foundation.list /tmp/foundation.dump >/dev/null
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v helper_owner=mdm_helper_owner -f /sql/configure_helper.sql >/dev/null
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
