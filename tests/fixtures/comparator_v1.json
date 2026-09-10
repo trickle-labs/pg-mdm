@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "comparators": {
+    "exact_v1": 1,
+    "normalized_levenshtein_v1": 1
+  },
+  "vectors": [
+    {"comparator": "exact_v1", "left": "same", "right": "same", "class": "agree", "score": null},
+    {"comparator": "exact_v1", "left": "same", "right": "other", "class": "disagree", "score": null},
+    {"comparator": "normalized_levenshtein_v1", "left": "", "right": "", "class": "agree", "score": 10000, "threshold": 10000},
+    {"comparator": "normalized_levenshtein_v1", "left": "kitten", "right": "sitting", "class": "agree", "score": 5714, "threshold": 5714},
+    {"comparator": "normalized_levenshtein_v1", "left": "kitten", "right": "sitting", "class": "disagree", "score": 5714, "threshold": 5715}
+  ]
+}

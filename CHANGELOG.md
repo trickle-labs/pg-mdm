@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+- Add exact and bounded normalized-Levenshtein evidence with deterministic pair precedence and edge ordering.
+- Add durable steward `MATCH` and `NOT_MATCH` decisions with optimistic concurrency, supersession history, and contradiction checks.
+- Add the v0.4.0 to v0.5.0 upgrade path and archived release artifact.
+
 ## 0.4.0
 
 - Add deterministic exact, composite, prefix, and token candidate channels.

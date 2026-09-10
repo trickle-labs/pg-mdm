@@ -53,6 +53,20 @@ pub enum MdmError {
     CandidateCountOverflow { channel: String },
     #[error("invalid candidate plan: {0}")]
     CandidateInvalid(String),
+    #[error("invalid evidence: {0}")]
+    EvidenceInvalid(String),
+    #[error("invalid comparator: {0}")]
+    ComparatorInvalid(String),
+    #[error("comparator work limit exceeded: {work} > {limit}")]
+    ComparatorWorkLimit { work: usize, limit: usize },
+    #[error("decision is invalid: {0}")]
+    DecisionInvalid(String),
+    #[error("decision version conflict: {0}")]
+    DecisionVersionConflict(String),
+    #[error("manual decision contradiction: {0}")]
+    DecisionContradiction(String),
+    #[error("decision check limit exceeded: {checked} > {limit}")]
+    DecisionCheckLimit { checked: usize, limit: usize },
 }
 
 impl MdmError {
@@ -79,6 +93,13 @@ impl MdmError {
                 "MDM_CANDIDATE_TOTAL_LIMIT"
             }
             Self::CandidateInvalid(_) => "MDM_CANDIDATE_INVALID",
+            Self::EvidenceInvalid(_) => "MDM_EVIDENCE_INVALID",
+            Self::ComparatorInvalid(_) => "MDM_COMPARATOR_INVALID",
+            Self::ComparatorWorkLimit { .. } => "MDM_COMPARATOR_LIMIT",
+            Self::DecisionInvalid(_) => "MDM_DECISION_INVALID",
+            Self::DecisionVersionConflict(_) => "MDM_DECISION_VERSION_CONFLICT",
+            Self::DecisionContradiction(_) => "MDM_DECISION_CONTRADICTION",
+            Self::DecisionCheckLimit { .. } => "MDM_DECISION_CHECK_LIMIT",
         }
     }
 }

@@ -107,6 +107,13 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .map(|value| value.0)
         .unwrap_or_else(|| serde_json::json!([]));
+        let decision_metadata = Spi::get_one_with_args::<JsonB>(
+            "SELECT jsonb_build_object('decision_epoch', e.decision_epoch, 'publication_revision', e.publication_revision, 'current_decisions', (SELECT count(*) FROM mdm_internal.steward_decisions d WHERE d.entity_id = e.entity_id AND d.is_current)) FROM mdm_internal.entities e WHERE e.entity_name = $1::pg_catalog.name",
+            &[entity_name.clone().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .map(|value| value.0)
+        .unwrap_or_else(|| serde_json::json!({}));
         let selected_cleaners = row.3.get("fields")
             .and_then(Value::as_array)
             .map(|fields| {
@@ -131,7 +138,11 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "cleaners": selected_cleaners,
             "cleaner_versions": crate::cleaners::v1_cleaner_registry(),
             "candidate_plan": row.6,
-            "candidate_semantics": row.7,
+            "candidate_semantics": row.7.clone(),
+            "evidence_semantics": row.7.get("evidence").cloned().unwrap_or_else(|| serde_json::json!({})),
+            "comparators": row.7.get("evidence").and_then(|value| value.get("comparators")).cloned().unwrap_or_else(|| serde_json::json!({})),
+            "pair_decision_policy": 1,
+            "decisions": decision_metadata,
             "graph": capabilities.external_graph_refresh,
             "graph_executable": false,
             "sources": sources,

@@ -12,6 +12,7 @@ fn test_restore_script_integrity() {
     assert!(content.contains("mdm_internal.entities"));
     assert!(content.contains("mdm_internal.definitions"));
     assert!(content.contains("mdm_internal.source_identities"));
+    assert!(content.contains("mdm_internal.steward_decisions"));
     assert!(content.contains("mdm_admin.rebind"));
 }
 
@@ -23,4 +24,5 @@ fn test_source_records_dump_configured() {
     let content = fs::read_to_string(&schema_path).expect("schema.rs exists");
 
     assert!(content.contains("SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_records'::pg_catalog.regclass, '');"));
+    assert!(content.contains("steward_decisions"));
 }

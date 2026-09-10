@@ -1,11 +1,11 @@
 use serde_json::{Value, json};
 
 use crate::candidate::{CandidateChannel, CandidatePlan, ChannelKind};
-use crate::definition::{Entity, Field, Source};
+use crate::definition::{Entity, Field, MatchRule, Source};
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 3;
+pub const COMPILER_VERSION: i32 = 4;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
@@ -201,6 +201,93 @@ fn limits_for_entity(entity: &Entity) -> crate::candidate::CandidateLimits {
 
 fn normalized_relation(field: &str) -> String {
     quote_identifier(&format!("normalized_{field}"))
+}
+
+fn sql_text(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
+    let mut joins = Vec::new();
+    let mut usable = Vec::new();
+    let mut exact_equal = Vec::new();
+    let mut left_values = Vec::new();
+    let mut right_values = Vec::new();
+    for (index, field) in rule.fields.iter().enumerate() {
+        let left = format!("l{index}");
+        let right = format!("r{index}");
+        let field_sql = sql_text(field);
+        let relation = normalized_relation(field);
+        joins.push(format!(
+            "LEFT JOIN {relation} {left} ON {left}.source_record_id = p.left_source_record_id AND {left}.field_name = {field_sql}\nLEFT JOIN {relation} {right} ON {right}.source_record_id = p.right_source_record_id AND {right}.field_name = {field_sql}"
+        ));
+        usable.push(format!(
+            "{left}.state = 'value' AND {right}.state = 'value' AND {left}.canonical_bytes IS NOT NULL AND {right}.canonical_bytes IS NOT NULL"
+        ));
+        exact_equal.push(format!("{left}.canonical_bytes = {right}.canonical_bytes"));
+        left_values.push(format!("{left}.normalized"));
+        right_values.push(format!("{right}.normalized"));
+    }
+    let usable = usable.join(" AND ");
+    let exact_equal = exact_equal.join(" AND ");
+    let left_text = format!(
+        "pg_catalog.concat_ws(pg_catalog.chr(0), {})",
+        left_values.join(", ")
+    );
+    let right_text = format!(
+        "pg_catalog.concat_ws(pg_catalog.chr(0), {})",
+        right_values.join(", ")
+    );
+    let score = if rule.comparison == "exact" {
+        "NULL::smallint".into()
+    } else {
+        format!(
+            "mdm_internal.normalized_levenshtein_score({left_text}, {right_text}, (SELECT COALESCE((d.expanded_definition->'limits'->>'max_comparator_work')::bigint, {}::bigint) FROM mdm_internal.definitions d JOIN mdm_internal.entities e ON e.entity_id = d.entity_id AND d.definition_version = e.desired_version WHERE e.entity_name = {}::pg_catalog.name))::smallint",
+            crate::comparators::DEFAULT_MAX_COMPARATOR_WORK,
+            sql_text(entity_name)
+        )
+    };
+    let class = if rule.comparison == "exact" {
+        format!(
+            "CASE WHEN {usable} THEN CASE WHEN {exact_equal} THEN 'agree'::text ELSE 'disagree'::text END ELSE 'no_evidence'::text END"
+        )
+    } else {
+        let threshold = rule.threshold.unwrap_or(10_000);
+        format!(
+            "CASE WHEN {usable} THEN CASE WHEN {score} >= {threshold} THEN 'agree'::text ELSE 'disagree'::text END ELSE 'no_evidence'::text END"
+        )
+    };
+    let score = if rule.comparison == "exact" {
+        "NULL::smallint".into()
+    } else {
+        score
+    };
+    format!(
+        "SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, {rule}::text AS rule, {group}::text AS evidence_group, {class} AS class, CASE WHEN {usable} THEN {score} ELSE NULL::smallint END AS score, {comparator}::text AS comparator, {version}::smallint AS comparator_version, CASE WHEN {usable} THEN mdm_internal.evidence_digest({left_text}) ELSE NULL::bytea END AS left_value_digest, CASE WHEN {usable} THEN mdm_internal.evidence_digest({right_text}) ELSE NULL::bytea END AS right_value_digest\nFROM {pairs} p\n{}",
+        joins.join("\n"),
+        rule = sql_text(&rule.name),
+        group = sql_text(&rule.evidence_group),
+        class = class,
+        score = score,
+        comparator =
+            sql_text(crate::comparators::comparator_name(&rule.comparison).unwrap_or("unknown_v1")),
+        version = crate::comparators::comparator_version(&rule.comparison).unwrap_or(1),
+        pairs = quote_identifier(&format!("pairs_{entity_name}")),
+        usable = usable,
+        left_text = left_text,
+        right_text = right_text,
+    )
+}
+
+pub fn pair_evidence_sql(entity_name: &str, rules: &[MatchRule]) -> String {
+    if rules.is_empty() {
+        return "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, NULL::text AS rule, NULL::text AS evidence_group, NULL::text AS class, NULL::smallint AS score, NULL::text AS comparator, NULL::smallint AS comparator_version, NULL::bytea AS left_value_digest, NULL::bytea AS right_value_digest WHERE false".into();
+    }
+    rules
+        .iter()
+        .map(|rule| evidence_rule_sql(rule, entity_name))
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n")
 }
 
 fn block_relation(channel: &CandidateChannel) -> String {
@@ -448,14 +535,36 @@ pub fn compile(entity: &Entity) -> Value {
         candidate_pair_overflow_sql(&entity.name, &limits),
         json!({"candidate_pairs":"bigint","max_candidate_pairs":"bigint"}),
     ));
+    let evidence_dependencies = plan
+        .channels
+        .iter()
+        .map(|channel| format!("blocks/{}", channel.channel_id))
+        .chain(
+            entity
+                .fields
+                .iter()
+                .map(|field| format!("normalized/{}", field.name)),
+        )
+        .chain(std::iter::once(format!("pairs/{}", entity.name)))
+        .collect::<Vec<_>>();
     nodes.push(node(
         format!("evidence/{}", entity.name),
-        vec![
-            format!("pairs/{}", entity.name),
-            format!("pair-stats/{}", entity.name),
-        ],
-        "SELECT * FROM pair_evidence".into(),
-        json!({"left_source_id":"jsonb","right_source_id":"jsonb","decision":"text"}),
+        evidence_dependencies,
+        pair_evidence_sql(&entity.name, &entity.matches),
+        json!({
+            "left_source_record_id":"uuid",
+            "right_source_record_id":"uuid",
+            "left_sort_key":"bytea",
+            "right_sort_key":"bytea",
+            "rule":"text",
+            "evidence_group":"text",
+            "class":"text",
+            "score":"smallint",
+            "comparator":"text",
+            "comparator_version":"smallint",
+            "left_value_digest":"bytea",
+            "right_value_digest":"bytea"
+        }),
     ));
     nodes.push(node(
         format!("golden/{}", entity.name),
@@ -486,7 +595,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], false);
-        assert_eq!(graph["compiler_version"], 3);
+        assert_eq!(graph["compiler_version"], 4);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));

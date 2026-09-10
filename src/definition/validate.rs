@@ -4,6 +4,7 @@ use pgrx::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::comparators;
 use crate::definition::canonical::{canonical_definition, digest, hex, json_bytes};
 use crate::definition::source::validate_source;
 use crate::definition::{Entity, parse_entity};
@@ -207,6 +208,16 @@ pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
                 rule.name
             )));
         }
+        if (rule.comparison == "fuzzy" || rule.comparison == "normalized_levenshtein")
+            && rule.threshold.is_none()
+        {
+            return Err(MdmError::DefinitionInvalid(format!(
+                "match {} requires a fuzzy threshold",
+                rule.name
+            )));
+        }
+        comparators::validate_threshold(&rule.comparison, rule.threshold)
+            .map_err(|error| MdmError::DefinitionInvalid(error.to_string()))?;
         if !matches!(rule.strength.as_str(), "identity" | "strong" | "supporting") {
             return Err(MdmError::DefinitionInvalid(format!(
                 "match {} has unsupported strength",

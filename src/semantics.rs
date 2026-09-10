@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::candidate::CandidateLimits;
+use crate::comparators::{self, DEFAULT_MAX_COMPARATOR_WORK};
 use crate::error::MdmError;
 
 pub const DEFAULT_MAX_BLOCK_RECORDS: usize = 10_000;
@@ -8,6 +9,8 @@ pub const DEFAULT_MAX_CANDIDATE_PAIRS: usize = 1_000_000;
 pub const DEFAULT_WARNING_BLOCK_RECORDS: usize = 5_000;
 pub const ABSOLUTE_MAX_BLOCK_RECORDS: usize = 1_000_000;
 pub const ABSOLUTE_MAX_CANDIDATE_PAIRS: usize = 100_000_000;
+pub const DEFAULT_MAX_DECISION_CLOSURE: usize = 10_000;
+pub const ABSOLUTE_MAX_DECISION_CLOSURE: usize = 1_000_000;
 
 pub fn candidate_limits() -> CandidateLimits {
     CandidateLimits {
@@ -31,6 +34,8 @@ pub fn validate_limit_value(name: &str, value: &Value) -> Result<usize, MdmError
     let ceiling = match name {
         "max_block_records" | "warning_block_records" => ABSOLUTE_MAX_BLOCK_RECORDS,
         "max_candidate_pairs" => ABSOLUTE_MAX_CANDIDATE_PAIRS,
+        "max_comparator_work" => comparators::ABSOLUTE_MAX_COMPARATOR_WORK,
+        "max_decision_closure" => ABSOLUTE_MAX_DECISION_CLOSURE,
         _ => {
             return Err(MdmError::DefinitionInvalid(format!(
                 "unsupported candidate limit {name}"
@@ -86,6 +91,12 @@ pub fn expand_limits(
     limits
         .entry("warning_block_records".into())
         .or_insert_with(|| json!(DEFAULT_WARNING_BLOCK_RECORDS.min(max_block)));
+    limits
+        .entry("max_comparator_work".into())
+        .or_insert_with(|| json!(DEFAULT_MAX_COMPARATOR_WORK));
+    limits
+        .entry("max_decision_closure".into())
+        .or_insert_with(|| json!(DEFAULT_MAX_DECISION_CLOSURE));
     validate_limits(limits)?;
     Ok(CandidateLimits {
         max_block_records: validate_limit_value("max_block_records", &limits["max_block_records"])?,
@@ -110,6 +121,20 @@ pub fn semantic_manifest() -> Value {
                 "max_candidate_pairs": ABSOLUTE_MAX_CANDIDATE_PAIRS
             },
             "channels": ["exact", "composite_exact", "prefix", "token"]
+        },
+        "evidence": {
+            "version": 1,
+            "comparators": {
+                "exact_v1": 1,
+                "normalized_levenshtein_v1": 1
+            },
+            "default_max_comparator_work": DEFAULT_MAX_COMPARATOR_WORK,
+            "absolute_max_comparator_work": comparators::ABSOLUTE_MAX_COMPARATOR_WORK
+        },
+        "decisions": {
+            "policy_version": 1,
+            "default_max_decision_closure": DEFAULT_MAX_DECISION_CLOSURE,
+            "absolute_max_decision_closure": ABSOLUTE_MAX_DECISION_CLOSURE
         }
     })
 }

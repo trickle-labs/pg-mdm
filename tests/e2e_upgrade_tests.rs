@@ -7,6 +7,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_01_02 = root.join("sql").join("pg_mdm--0.1.0--0.2.0.sql");
     let upgrade_02_03 = root.join("sql").join("pg_mdm--0.2.0--0.3.0.sql");
     let upgrade_03_04 = root.join("sql").join("pg_mdm--0.3.0--0.4.0.sql");
+    let upgrade_04_05 = root.join("sql").join("pg_mdm--0.4.0--0.5.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -20,6 +21,10 @@ fn test_upgrade_scripts_exist() {
         upgrade_03_04.is_file(),
         "0.3.0 -> 0.4.0 upgrade script must exist"
     );
+    assert!(
+        upgrade_04_05.is_file(),
+        "0.4.0 -> 0.5.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -29,4 +34,8 @@ fn test_upgrade_scripts_exist() {
     let sql_03_04 = fs::read_to_string(&upgrade_03_04).expect("read 0.3.0 to 0.4.0");
     assert!(sql_03_04.contains("mdm.create"));
     assert!(sql_03_04.contains("mdm.describe"));
+    let sql_04_05 = fs::read_to_string(&upgrade_04_05).expect("read 0.4.0 to 0.5.0");
+    assert!(sql_04_05.contains("steward_decisions"));
+    assert!(sql_04_05.contains("decision_epoch"));
+    assert!(sql_04_05.contains("mdm_steward.decide"));
 }

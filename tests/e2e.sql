@@ -26,9 +26,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.4.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.5.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.4.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.5.0 is not installed';
     END IF;
 END
 $$;
@@ -66,6 +66,16 @@ BEGIN
     END IF;
 END
 $$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.5.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.5.0')
+       OR pg_catalog.to_regclass('mdm_internal.steward_decisions') IS NULL
+       OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid = 'mdm_internal.entities'::pg_catalog.regclass AND attname = 'decision_epoch') THEN
+        RAISE EXCEPTION '0.4.0 to 0.5.0 upgrade did not install steward decisions';
+    END IF;
+END
+$$;
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -74,12 +84,13 @@ CREATE EXTENSION pg_trickle;
 CREATE EXTENSION pg_mdm VERSION '0.2.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.3.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.4.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.5.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.4.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.5.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.4.0 upgrade did not install v0.4 catalog';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.5.0 upgrade did not install v0.5 catalog';
     END IF;
 END
 $$;
@@ -471,9 +482,87 @@ BEGIN
     SELECT entity_id INTO STRICT e_id FROM mdm_internal.entities WHERE entity_name = 'customer';
     SELECT source_identity_id INTO STRICT s_id FROM mdm_internal.source_identities WHERE entity_id = e_id AND source_name = 'crm';
     INSERT INTO mdm_internal.source_records (entity_id, source_identity_id, source_record_key, active)
-    VALUES (e_id, s_id, '\x01020304'::bytea, true);
+    VALUES (e_id, s_id, '\x01020304'::bytea, true),
+           (e_id, s_id, '\x01020305'::bytea, true),
+           (e_id, s_id, '\x01020306'::bytea, true);
 END
 $$;
+
+GRANT USAGE ON SCHEMA mdm_steward TO mdm_administrator;
+GRANT EXECUTE ON FUNCTION mdm_steward.decide(text, uuid, uuid, text, bigint, text) TO mdm_administrator;
+CREATE FUNCTION public.e2e_steward_ids()
+RETURNS TABLE(source_record_id uuid, source_record_key bytea)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, mdm_internal
+AS $$
+    SELECT source_record_id, source_record_key
+    FROM mdm_internal.source_records
+    WHERE source_record_key IN ('\x01020304'::bytea, '\x01020305'::bytea, '\x01020306'::bytea)
+$$;
+REVOKE ALL ON FUNCTION public.e2e_steward_ids() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_steward_ids() TO mdm_administrator;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    left_id uuid;
+    right_id uuid;
+    third_id uuid;
+    result record;
+BEGIN
+    SELECT source_record_id INTO STRICT left_id
+    FROM public.e2e_steward_ids()
+    WHERE source_record_key = '\x01020304'::bytea;
+    SELECT source_record_id INTO STRICT right_id
+    FROM public.e2e_steward_ids()
+    WHERE source_record_key = '\x01020305'::bytea;
+    SELECT source_record_id INTO STRICT third_id
+    FROM public.e2e_steward_ids()
+    WHERE source_record_key = '\x01020306'::bytea;
+    SELECT * INTO STRICT result
+    FROM mdm_steward.decide('customer', left_id, right_id, 'MATCH', 0, 'confirmed by steward');
+    IF result.decision_version <> 1 OR result.decision_epoch <> 1 THEN
+        RAISE EXCEPTION 'initial steward decision is invalid: %', result;
+    END IF;
+    SELECT * INTO STRICT result
+    FROM mdm_steward.decide('customer', right_id, third_id, 'NOT_MATCH', 0, 'contradictory source identity');
+    IF result.decision_version <> 1 OR result.decision_epoch <> 2 THEN
+        RAISE EXCEPTION 'second steward decision is invalid: %', result;
+    END IF;
+    BEGIN
+        PERFORM mdm_steward.decide('customer', left_id, third_id, 'MATCH', 0, 'must remain prohibited');
+        RAISE EXCEPTION 'contradictory MATCH was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_DECISION_CONTRADICTION') = 0 THEN RAISE; END IF;
+    END;
+    SELECT * INTO STRICT result
+    FROM mdm_steward.decide('customer', left_id, right_id, 'NOT_MATCH', 1, 'contradictory source identity');
+    IF result.decision_version <> 2 OR result.decision_epoch <> 3 THEN
+        RAISE EXCEPTION 'replacement steward decision is invalid: %', result;
+    END IF;
+    BEGIN
+        PERFORM mdm_steward.decide('customer', left_id, right_id, 'MATCH', 1, 'stale replay');
+        RAISE EXCEPTION 'stale steward decision was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_DECISION_VERSION_CONFLICT') = 0 THEN RAISE; END IF;
+    END;
+    BEGIN
+        INSERT INTO mdm_internal.steward_decisions (entity_id, left_source_record_id, right_source_record_id, decision, decision_version, reason, created_by_name, created_as_role_name, operation_id, base_publication_revision, decision_epoch)
+        SELECT e.entity_id, left_id, right_id, 'MATCH', 99, 'bypass', 'attacker', 'attacker', operation_id, 0, 99
+        FROM mdm_internal.entities e
+        CROSS JOIN LATERAL (SELECT operation_id FROM mdm_internal.operations LIMIT 1) o
+        WHERE e.entity_name = 'customer';
+        RAISE EXCEPTION 'direct steward table DML was accepted';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DROP FUNCTION public.e2e_steward_ids();
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;

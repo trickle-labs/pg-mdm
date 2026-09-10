@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "policy_version": 1,
+  "precedence": [
+    "PROHIBITED",
+    "MANUAL_MATCH",
+    "AUTHORITATIVE_CONFLICT",
+    "AUTOMATIC_IDENTITY",
+    "AUTOMATIC_STRONG",
+    "REVIEW",
+    "NO_EDGE"
+  ]
+}

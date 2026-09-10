@@ -201,9 +201,15 @@ pub(crate) fn match_rule(
                 "evidence_group must not be empty".into(),
             ));
         }
-        if threshold.is_some_and(|value| value < 0) {
+        if threshold.is_some_and(|value| !(0..=10_000).contains(&value)) {
             return Err(MdmError::DefinitionInvalid(
-                "threshold must not be negative".into(),
+                "threshold must be between 0 and 10000".into(),
+            ));
+        }
+        if matches!(comparison.as_str(), "fuzzy" | "normalized_levenshtein") && threshold.is_none()
+        {
+            return Err(MdmError::DefinitionInvalid(
+                "fuzzy matches require a threshold".into(),
             ));
         }
         if strength == "supporting" && candidate.is_some() {
