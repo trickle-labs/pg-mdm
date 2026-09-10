@@ -54,7 +54,7 @@ COPY --from=pg_trickle /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
 COPY --from=pg_trickle /pg_trickle/extension/ /usr/share/postgresql/18/extension/
 COPY --from=builder /package/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
 COPY --from=builder /package/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
-COPY sql/archive/pg_mdm--0.1.0.sql /usr/share/postgresql/18/extension/
+COPY sql/archive/pg_mdm--0.1.0.sql sql/archive/pg_mdm--0.2.0.sql /usr/share/postgresql/18/extension/
 COPY tests/e2e.sql /tests/e2e.sql
 COPY tests/restore.sql /tests/restore.sql
 COPY sql/configure_helper.sql /sql/configure_helper.sql

@@ -34,6 +34,7 @@ ALTER TABLE mdm_internal.definitions OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.source_identities OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.source_bindings OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.output_names OWNER TO :"helper_owner";
+ALTER TABLE mdm_internal.source_records OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.execution_role_bindings OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.definition_artifacts OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_admin.verify_installation() OWNER TO :"helper_owner";

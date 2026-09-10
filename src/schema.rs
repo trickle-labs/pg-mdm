@@ -10,6 +10,8 @@ use crate::api::describe::{describe, describe_entity};
 use crate::api::rebind::{persist_rebind, prepare_rebind, rebind};
 #[allow(unused_imports)]
 use crate::catalog::verify_installation;
+#[allow(unused_imports)]
+use crate::normalization::{normalize_date, normalize_text};
 
 extension_sql!(
     r#"
@@ -18,6 +20,12 @@ CREATE SCHEMA mdm_out;
 CREATE SCHEMA mdm_steward;
 CREATE SCHEMA mdm_admin;
 CREATE SCHEMA mdm_internal;
+
+CREATE TYPE mdm_internal.normalized_value AS (
+    state text,
+    normalized text,
+    canonical_bytes bytea
+);
 
 CREATE TABLE mdm_internal.operations (
     operation_id uuid PRIMARY KEY DEFAULT pg_catalog.uuidv7(),
@@ -77,6 +85,20 @@ CREATE TABLE mdm_internal.source_bindings (
     bound_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp()
 );
 
+CREATE TABLE mdm_internal.source_records (
+    entity_id uuid NOT NULL REFERENCES mdm_internal.entities(entity_id),
+    source_identity_id uuid NOT NULL
+        REFERENCES mdm_internal.source_identities(source_identity_id),
+    source_record_key bytea NOT NULL,
+    source_record_id uuid NOT NULL DEFAULT pg_catalog.uuidv7(),
+    active boolean NOT NULL DEFAULT false,
+    first_seen_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    last_seen_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    PRIMARY KEY (entity_id, source_identity_id, source_record_key),
+    UNIQUE (source_record_id),
+    UNIQUE (entity_id, source_record_id)
+);
+
 CREATE TABLE mdm_internal.output_names (
     output_name pg_catalog.name PRIMARY KEY,
     entity_id uuid NOT NULL REFERENCES mdm_internal.entities(entity_id),
@@ -115,6 +137,7 @@ SELECT pg_catalog.pg_extension_config_dump(
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.entities'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definitions'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_records'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_names'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definition_artifacts'::pg_catalog.regclass, '');
 
@@ -136,8 +159,10 @@ REVOKE ALL ON FUNCTION mdm_internal.describe_entity(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.prepare_rebind(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_rebind(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) FROM PUBLIC;
     "#,
     name = "pg_mdm_acl_policy",
-    requires = [verify_installation],
+    requires = [verify_installation, normalize_text, normalize_date],
     finalize,
 );

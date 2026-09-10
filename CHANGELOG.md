@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- Add versioned built-in cleaners: `text`, `person_name`, `company_name`, `email`, `phone`, `tax_id`, `date`, and `none`.
+- Add seven normalized-value states: `value`, `absent`, `empty`, `invalid`, `unknown`, `redacted`, and `unsupported`.
+- Implement canonical binary ordering for normalized values (`canonical_bytes`) with total locale-independent ordering.
+- Add composite type `mdm_internal.normalized_value` and internal normalizers `mdm_internal.normalize_text` and `mdm_internal.normalize_date`.
+- Add durable table `mdm_internal.source_records` and `get_or_create_source_record` with `pgtrickle.encode_row_id_v2` key generation and pg_dump configuration.
+- Generate executable record and normalization stage SQL compilation in graph artifacts (compiler version 2).
+- Extend `mdm.describe()` summary output with source-key encoding version 2, selected cleaners, cleaner versions, and options.
+- Provide tested upgrade paths for `0.1.0 -> 0.2.0 -> 0.3.0` and direct `0.2.0 -> 0.3.0`.
+
 ## 0.2.0
 
 - Add developmental `mdm.source`, `mdm.field`, `mdm.match`, `mdm.golden_value`, and `mdm.entity` constructors.

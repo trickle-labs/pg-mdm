@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.2.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.3.0-e2e}
 container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"

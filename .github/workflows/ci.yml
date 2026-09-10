@@ -20,11 +20,11 @@ jobs:
       - run: docker run --rm pg_mdm:test cargo pgrx test pg18 --features pg_test
       - run: docker run --rm pg_mdm:test scripts/check_security_definer.sh
       - run: docker run --rm pg_mdm:test python3 scripts/check_upgrade_paths.py
-      - run: docker run --rm pg_mdm:test bash -c "generated=\$(find /package -name 'pg_mdm--0.2.0.sql' -type f -print -quit); test -n \"\$generated\"; cmp \"\$generated\" sql/archive/pg_mdm--0.2.0.sql"
+      - run: docker run --rm pg_mdm:test bash -c "generated=\$(find /package -name 'pg_mdm--0.3.0.sql' -type f -print -quit); test -n \"\$generated\"; cmp \"\$generated\" sql/archive/pg_mdm--0.3.0.sql"
       - run: docker run --rm pg_mdm:test python3 scripts/package_manifest.py /package > package-manifest.json
       - uses: actions/upload-artifact@v4
         with:
-          name: pg_mdm-0.2.0-package-manifest
+          name: pg_mdm-0.3.0-package-manifest
           path: package-manifest.json
 
   e2e:

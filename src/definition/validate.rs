@@ -146,12 +146,29 @@ pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
                 field.name, field.logical_type
             )));
         }
-        if !matches!(
-            field.cleaner.as_str(),
-            "company_name" | "email" | "tax_id" | "none"
-        ) {
+        if !crate::cleaners::is_supported_cleaner(&field.cleaner) {
             return Err(MdmError::DefinitionInvalid(format!(
                 "field {} has unsupported cleaner {}",
+                field.name, field.cleaner
+            )));
+        }
+        let opts_val = serde_json::to_value(&field.cleaner_options).unwrap_or_else(|_| json!({}));
+        crate::cleaners::validate_cleaner_options(&field.cleaner, 1, &opts_val)?;
+        if field.cleaner == "date" && field.logical_type != "date" {
+            return Err(MdmError::DefinitionInvalid(format!(
+                "field {} with date cleaner requires date logical type",
+                field.name
+            )));
+        }
+        if matches!(
+            field.cleaner.as_str(),
+            "text" | "person_name" | "company_name" | "email" | "phone" | "tax_id"
+        ) && !matches!(
+            field.logical_type.as_str(),
+            "text" | "character varying" | "character"
+        ) {
+            return Err(MdmError::DefinitionInvalid(format!(
+                "field {} with {} cleaner requires text logical type",
                 field.name, field.cleaner
             )));
         }
@@ -337,7 +354,17 @@ fn semantic_manifest() -> Value {
         "format_version": 1,
         "engine_version": 1,
         "source_key_encoding": 2,
-        "cleaners": {"company_name": 1, "email": 1, "tax_id": 1, "none": 1},
+        "canonical_encoding_version": 1,
+        "cleaners": {
+            "company_name": 1,
+            "date": 1,
+            "email": 1,
+            "none": 1,
+            "person_name": 1,
+            "phone": 1,
+            "tax_id": 1,
+            "text": 1
+        },
         "comparators": {"exact": 1, "normalized_levenshtein": 1, "fuzzy": 1},
         "pair_decision_policy": 1,
         "clustering_policy": 1,

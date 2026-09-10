@@ -99,6 +99,18 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .map(|value| value.0)
         .unwrap_or_else(|| serde_json::json!([]));
+        let selected_cleaners = row.3.get("fields")
+            .and_then(Value::as_array)
+            .map(|fields| {
+                fields.iter().map(|f| serde_json::json!({
+                    "field": f.get("name").and_then(Value::as_str).unwrap_or(""),
+                    "cleaner": f.get("cleaner").and_then(Value::as_str).unwrap_or(""),
+                    "version": 1,
+                    "options": f.get("cleaner_options").cloned().unwrap_or_else(|| serde_json::json!({}))
+                })).collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         Ok(JsonB(serde_json::json!({
             "entity_name": entity_name,
             "desired_version": row.1,
@@ -106,6 +118,10 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "definition_digest": row.4,
             "artifact_digest": row.5,
             "execution_role": selected.name,
+            "source_key_encoding": 2,
+            "row_identity_version": 2,
+            "cleaners": selected_cleaners,
+            "cleaner_versions": crate::cleaners::v1_cleaner_registry(),
             "graph": capabilities.external_graph_refresh,
             "graph_executable": false,
             "sources": sources,

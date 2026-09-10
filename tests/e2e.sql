@@ -18,11 +18,17 @@ BEGIN
     IF pg_catalog.to_regclass('mdm_internal.operations') IS NULL THEN
         RAISE EXCEPTION 'operations table is missing';
     END IF;
+    IF pg_catalog.to_regclass('mdm_internal.source_records') IS NULL THEN
+        RAISE EXCEPTION 'source_records table is missing';
+    END IF;
+    IF pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
+        RAISE EXCEPTION 'normalized_value type is missing';
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.2.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.3.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.2.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.3.0 is not installed';
     END IF;
 END
 $$;
@@ -39,6 +45,32 @@ BEGIN
        OR pg_catalog.to_regclass('mdm_internal.entities') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.definition_artifacts') IS NULL THEN
         RAISE EXCEPTION '0.1.0 to 0.2.0 upgrade did not install definition catalog';
+    END IF;
+END
+$$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.3.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.3.0')
+       OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
+       OR pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
+        RAISE EXCEPTION '0.2.0 to 0.3.0 upgrade did not install v0.3 catalog';
+    END IF;
+END
+$$;
+
+\connect postgres postgres
+CREATE DATABASE upgrade_direct;
+\connect upgrade_direct postgres
+CREATE EXTENSION pg_trickle;
+CREATE EXTENSION pg_mdm VERSION '0.2.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.3.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.3.0')
+       OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
+       OR pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
+        RAISE EXCEPTION 'direct 0.2.0 to 0.3.0 upgrade did not install v0.3 catalog';
     END IF;
 END
 $$;
@@ -388,6 +420,49 @@ BEGIN
              AND actor_name = 'mdm_test_login' AND actor_role_name = 'mdm_administrator') <> 4 THEN
         RAISE EXCEPTION 'unexpected operation count after v0.2 create';
     END IF;
+END
+$$;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    summary jsonb;
+BEGIN
+    summary := mdm.describe('customer', 'summary');
+    IF summary->>'source_key_encoding' IS DISTINCT FROM '2'
+       OR summary->>'row_identity_version' IS DISTINCT FROM '2'
+       OR jsonb_array_length(summary->'cleaners') <> 2
+       OR summary->'cleaner_versions'->>'text' IS DISTINCT FROM '1'
+       OR summary->'cleaner_versions'->>'date' IS DISTINCT FROM '1'
+       OR summary->'cleaner_versions'->>'email' IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'describe summary does not have expected v0.3 metadata: %', summary;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DO $$
+DECLARE
+    norm mdm_internal.normalized_value;
+    e_id uuid;
+    s_id uuid;
+BEGIN
+    norm := mdm_internal.normalize_text('  Foo  Bar  ', 'text', 1, 'present', '{}'::jsonb);
+    IF norm.state <> 'value' OR norm.normalized <> 'foo bar' OR norm.canonical_bytes <> '\x0101666f6f20626172'::bytea THEN
+        RAISE EXCEPTION 'normalize_text failed: %', norm;
+    END IF;
+
+    norm := mdm_internal.normalize_date('2024-02-29'::date, 'date', 1, 'present', '{}'::jsonb);
+    IF norm.state <> 'value' OR norm.normalized <> '2024-02-29' OR norm.canonical_bytes <> '\x0102323032342d30322d3239'::bytea THEN
+        RAISE EXCEPTION 'normalize_date failed: %', norm;
+    END IF;
+
+    SELECT entity_id INTO STRICT e_id FROM mdm_internal.entities WHERE entity_name = 'customer';
+    SELECT source_identity_id INTO STRICT s_id FROM mdm_internal.source_identities WHERE entity_id = e_id AND source_name = 'crm';
+    INSERT INTO mdm_internal.source_records (entity_id, source_identity_id, source_record_key, active)
+    VALUES (e_id, s_id, '\x01020304'::bytea, true);
 END
 $$;
 

@@ -6,7 +6,8 @@ use crate::definition::{Entity, Source};
 use crate::error::MdmError;
 
 #[derive(Clone, Debug)]
-pub(crate) struct ValidatedSource {
+pub struct ValidatedSource {
+    pub entity_name: String,
     pub name: String,
     pub relation_name: String,
     pub relation_oid: pg_sys::Oid,
@@ -420,6 +421,7 @@ pub(crate) fn validate_source(
         "policies": relation.policies
     });
     Ok(ValidatedSource {
+        entity_name: entity.name.clone(),
         name: source.name.clone(),
         relation_name,
         relation_oid: relation.oid,

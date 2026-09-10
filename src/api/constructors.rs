@@ -119,12 +119,11 @@ pub(crate) fn field(
                 "display must be full, masked, or hashed".into(),
             ));
         }
-        if !matches!(
-            cleaner.as_str(),
-            "company_name" | "email" | "tax_id" | "none"
-        ) {
+        if !crate::cleaners::is_supported_cleaner(&cleaner) {
             return Err(MdmError::DefinitionInvalid("unsupported cleaner".into()));
         }
+        let opts = object(cleaner_options, "cleaner_options")?;
+        crate::cleaners::validate_cleaner_options(&cleaner, 1, &opts)?;
         if !matches!(
             logical_type.as_str(),
             "text"
@@ -142,11 +141,27 @@ pub(crate) fn field(
         ) {
             return Err(MdmError::DefinitionInvalid("unsupported field type".into()));
         }
+        if cleaner == "date" && logical_type != "date" {
+            return Err(MdmError::DefinitionInvalid(
+                "date cleaner requires date field type".into(),
+            ));
+        }
+        if matches!(
+            cleaner.as_str(),
+            "text" | "person_name" | "company_name" | "email" | "phone" | "tax_id"
+        ) && !matches!(
+            logical_type.as_str(),
+            "text" | "character varying" | "character"
+        ) {
+            return Err(MdmError::DefinitionInvalid(format!(
+                "{cleaner} cleaner requires text-compatible field type"
+            )));
+        }
         Ok(JsonB(canonical_definition(json!({
             "name": text(&name, "field name")?,
             "type": text(&logical_type, "field type")?,
             "cleaner": text(&cleaner, "cleaner")?,
-            "cleaner_options": object(cleaner_options, "cleaner_options")?,
+            "cleaner_options": opts,
             "display": display
         }))))
     })();

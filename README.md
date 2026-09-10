@@ -3,17 +3,17 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.2 stores and validates entity definitions, source contracts, and deterministic graph artifacts. It does not execute graph SQL, resolve records, or create public output tables.
+> v0.3 introduces normalization and durable source records with versioned cleaners. It does not execute graph SQL, resolve records, or create public output tables.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.2 (developmental definitions)
+## Install v0.3 (developmental definitions and normalization)
 
-v0.2 supports PostgreSQL 18 and requires `pg_trickle` 0.98.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+v0.3 supports PostgreSQL 18 and requires `pg_trickle` 0.98.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
 
-The v0.2 actions store and validate definitions only. They do not execute graph SQL, resolve records, or create public output tables.
+The v0.3 actions store and validate definitions and compile executable record and normalization stages. They do not execute graph SQL, resolve records, or create public output tables.
 
 Build and copy the package:
 
@@ -132,7 +132,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The implemented v0.2 release stores developmental definitions and non-executable graph artifacts. The planned V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
+The implemented v0.3 release stores developmental definitions, compiles record and normalization stage SQL, and manages durable source records. The planned V1 release resolves records already stored in supported local or partitioned PostgreSQL tables. It covers tracked and soft-delete sources, deterministic built-in matching, bounded candidate generation, full-entity resolution, stable IDs, field-level golden records, pair-level stewardship, review, explanation, and atomic publication. V1 intentionally leaves complete snapshots, custom matching code, approximate retrieval, valid-time history, direct merge and split workflows, multi-entity dependencies, resumable runs, namespaces, quotas, and other enterprise controls outside its first compatibility promise.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

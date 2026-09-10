@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub(crate) enum MdmError {
+pub enum MdmError {
     #[error("required pg_trickle capability is missing: {0}")]
     CapabilityMissing(&'static str),
     #[error("unsupported {capability} major version {major}; expected 1")]
@@ -26,10 +26,18 @@ pub(crate) enum MdmError {
     OutputNameConflict(String),
     #[error("definition version conflict: {0}")]
     VersionConflict(String),
+    #[error("cleaner {cleaner} version {version} is not supported")]
+    CleanerVersion { cleaner: String, version: i32 },
+    #[error("cleaner {0} is invalid: {1}")]
+    CleanerInvalid(String, String),
+    #[error("cleaner execution error: {0}")]
+    CleanerExecution(String),
+    #[error("source record key is invalid: {0}")]
+    SourceRecord(String),
 }
 
 impl MdmError {
-    pub(crate) const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::CapabilityMissing(_) => "MDM_PGT_CAPABILITY_MISSING",
             Self::CapabilityVersion { .. } => "MDM_PGT_CAPABILITY_VERSION",
@@ -43,6 +51,10 @@ impl MdmError {
             Self::SourceInvalid(_) => "MDM_SOURCE_INVALID",
             Self::OutputNameConflict(_) => "MDM_OUTPUT_NAME_CONFLICT",
             Self::VersionConflict(_) => "MDM_VERSION_CONFLICT",
+            Self::CleanerVersion { .. } => "MDM_CLEANER_VERSION",
+            Self::CleanerInvalid(..) => "MDM_CLEANER_INVALID",
+            Self::CleanerExecution(_) => "MDM_CLEANER_ERROR",
+            Self::SourceRecord(_) => "MDM_SOURCE_RECORD_INVALID",
         }
     }
 }

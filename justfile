@@ -15,6 +15,12 @@ test-unit:
 test-pgrx:
     cargo pgrx test pg18 --features pg_test
 
+test-normalization:
+    cargo test --test normalization_tests --features pg18
+
+test-source-records:
+    cargo test --test source_record_tests --features pg18
+
 package:
     cargo pgrx package --pg-config "{{pg_config}}"
 
@@ -32,4 +38,4 @@ check-upgrades:
     python3 scripts/check_upgrade_paths.py
 
 check-archive: package
-    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.2.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.2.0.sql
+    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.3.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.3.0.sql
