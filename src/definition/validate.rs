@@ -10,6 +10,7 @@ use crate::definition::{Entity, parse_entity};
 use crate::error::MdmError;
 use crate::graph_spec;
 use crate::presets;
+use crate::semantics;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct PreparedDefinition {
@@ -248,6 +249,7 @@ pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
             }
         }
     }
+    crate::candidate::CandidatePlan::from_entity(entity)?;
     let mut lineage = BTreeMap::<String, String>::new();
     for rule in &entity.matches {
         for field in &rule.fields {
@@ -304,11 +306,7 @@ pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
             )));
         }
     }
-    if !entity.limits.values().all(|value| value.is_number()) {
-        return Err(MdmError::DefinitionInvalid(
-            "limits must contain numeric values".into(),
-        ));
-    }
+    semantics::validate_limits(&entity.limits)?;
     Ok(())
 }
 
@@ -330,27 +328,8 @@ fn output_names(entity_name: &str) -> Result<Vec<OutputName>, MdmError> {
     Ok(names)
 }
 
-fn candidate_plan(entity: &Entity) -> Value {
-    let mut matches = entity
-        .matches
-        .iter()
-        .filter(|rule| rule.candidate.is_some())
-        .collect::<Vec<_>>();
-    matches.sort_by_key(|rule| rule.name.as_str());
-    json!({
-        "format_version": 1,
-        "channels": matches.into_iter().map(|rule| json!({
-            "name": rule.name,
-            "fields": rule.fields,
-            "candidate": rule.candidate,
-            "owners": [rule.name]
-        })).collect::<Vec<_>>(),
-        "max_candidate_pairs": entity.limits.get("max_candidate_pairs").cloned().unwrap_or_else(|| json!(1000000))
-    })
-}
-
 fn semantic_manifest() -> Value {
-    json!({
+    let mut manifest = json!({
         "format_version": 1,
         "engine_version": 1,
         "source_key_encoding": 2,
@@ -375,7 +354,14 @@ fn semantic_manifest() -> Value {
             "major": 1,
             "minimum_minor": 0
         }
-    })
+    });
+    if let (Some(manifest), Some(candidate)) = (
+        manifest.as_object_mut(),
+        semantics::semantic_manifest().get("candidate"),
+    ) {
+        manifest.insert("candidate".into(), candidate.clone());
+    }
+    manifest
 }
 
 fn role_checks(entity: &Entity) -> Result<(), MdmError> {
@@ -448,10 +434,11 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
                 .ok_or_else(|| MdmError::Unauthorized("current role is unavailable".into()))?,
         );
     }
-    entity
-        .limits
-        .entry("max_candidate_pairs".into())
-        .or_insert_with(|| json!(1_000_000));
+    let candidate_limits = semantics::expand_limits(&mut entity.limits)?;
+    let warning_block_records = semantics::validate_limit_value(
+        "warning_block_records",
+        &entity.limits["warning_block_records"],
+    )?;
     entity.preset = presets::expand(entity.preset.clone())?;
     let expanded_definition =
         canonical_definition(serde_json::to_value(&entity).expect("definition is serializable"));
@@ -485,7 +472,10 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
             )));
         }
     }
-    let logical_candidate_plan = canonical_definition(candidate_plan(&entity));
+    let logical_candidate_plan = canonical_definition(
+        crate::candidate::CandidatePlan::from_entity(&entity)?
+            .to_json_with_warning(&candidate_limits, warning_block_records),
+    );
     let semantic_manifest = canonical_definition(semantic_manifest());
     let definition_digest = digest(
         "pg_mdm/definition/v1",

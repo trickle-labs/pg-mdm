@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "channels": [
+    {"channel_id": "exact_email", "kind": "exact", "fields": ["email"], "parameters": {}, "owners": ["same_email"]},
+    {"channel_id": "name_prefix", "kind": "prefix", "fields": ["name"], "parameters": {"length": 3}, "owners": ["same_name_prefix"]},
+    {"channel_id": "name_token", "kind": "token", "fields": ["name"], "parameters": {"min_length": 4}, "owners": ["shared_name_token"]},
+    {"channel_id": "person_key", "kind": "composite_exact", "fields": ["first_name", "last_name"], "parameters": {}, "owners": ["same_person_key"]}
+  ],
+  "limits": {"max_block_records": 100, "max_candidate_pairs": 1000, "warning_block_records": 50},
+  "cases": [
+    {
+      "id": "all_channels",
+      "values": [
+        {"source_record_id": "00000000-0000-0000-0000-000000000001", "source_sort_key": "01", "field": "email", "normalized": "a@example.test", "canonical_bytes": "01"},
+        {"source_record_id": "00000000-0000-0000-0000-000000000002", "source_sort_key": "02", "field": "email", "normalized": "a@example.test", "canonical_bytes": "01"},
+        {"source_record_id": "00000000-0000-0000-0000-000000000001", "source_sort_key": "01", "field": "name", "normalized": "alice smith", "canonical_bytes": "01"},
+        {"source_record_id": "00000000-0000-0000-0000-000000000002", "source_sort_key": "02", "field": "name", "normalized": "alice jones", "canonical_bytes": "01"}
+      ],
+      "expected_pairs": [{"left_source_record_id": "00000000-0000-0000-0000-000000000001", "right_source_record_id": "00000000-0000-0000-0000-000000000002", "discovery_channels": ["exact_email", "name_token"]}]
+    }
+  ]
+}

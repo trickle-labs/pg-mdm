@@ -2,6 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 pub mod api;
+pub mod candidate;
 pub mod catalog;
 pub mod cleaners;
 pub mod definition;
@@ -11,6 +12,7 @@ pub mod integration;
 pub mod normalization;
 pub mod presets;
 pub mod schema;
+pub mod semantics;
 pub mod source_record;
 pub mod version;
 

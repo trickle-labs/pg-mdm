@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "domain": "organization",
+  "purpose": "small de-identified candidate-envelope fixture",
+  "records": [
+    {"label": "org_a", "source": "crm", "name": "Northwind Trading", "domain": "northwind.example"},
+    {"label": "org_a", "source": "erp", "name": "Northwind Trading Ltd", "domain": "northwind.example"},
+    {"label": "org_b", "source": "crm", "name": "Contoso Supplies", "domain": "contoso.example"},
+    {"label": "org_c", "source": "registry", "name": "Example Holdings", "domain": "holdings.example"}
+  ]
+}

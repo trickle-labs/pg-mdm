@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Add deterministic exact, composite, prefix, and token candidate channels.
+- Canonicalize and deduplicate candidate pairs by stable source sort key.
+- Fail closed on oversized blocks, aggregate candidate limits, invalid plans, and sort-key collisions.
+- Compile separate block, block-statistics, overflow, pair-statistics, and canonical-pair graph stages.
+- Extend `mdm.describe()` with the logical candidate plan and versioned candidate limits.
+- Add the 0.3.0 to 0.4.0 upgrade path and archived release artifact.
+
 ## 0.3.0
 
 - Add versioned built-in cleaners: `text`, `person_name`, `company_name`, `email`, `phone`, `tax_id`, `date`, and `none`.

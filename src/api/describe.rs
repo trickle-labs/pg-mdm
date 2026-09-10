@@ -47,7 +47,7 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
         }
         let row = Spi::connect(|client| {
             let table = client.select(
-                "SELECT e.entity_id::text, e.entity_name::text, e.desired_version, e.active_version, e.execution_role_name, d.expanded_definition, encode(d.definition_digest, 'hex'), encode(a.artifact_digest, 'hex'), b.role_oid FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version LEFT JOIN LATERAL (SELECT artifact_digest FROM mdm_internal.definition_artifacts x WHERE x.entity_id = d.entity_id AND x.definition_version = d.definition_version ORDER BY x.artifact_id DESC LIMIT 1) a ON true WHERE e.entity_name = $1::pg_catalog.name",
+                "SELECT e.entity_id::text, e.entity_name::text, e.desired_version, e.active_version, e.execution_role_name, d.expanded_definition, encode(d.definition_digest, 'hex'), encode(a.artifact_digest, 'hex'), b.role_oid, d.logical_candidate_plan, d.semantic_manifest FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version LEFT JOIN LATERAL (SELECT artifact_digest FROM mdm_internal.definition_artifacts x WHERE x.entity_id = d.entity_id AND x.definition_version = d.definition_version ORDER BY x.artifact_id DESC LIMIT 1) a ON true WHERE e.entity_name = $1::pg_catalog.name",
                 Some(1), &[entity_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             if table.is_empty() {
                 return Err(MdmError::DefinitionInvalid(format!(
@@ -86,6 +86,14 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
                 row.get::<String>(8)
                     .map_err(|error| MdmError::Spi(error.to_string()))?
                     .ok_or_else(|| MdmError::Spi("artifact digest is NULL".into()))?,
+                row.get::<JsonB>(10)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("candidate plan is NULL".into()))?
+                    .0,
+                row.get::<JsonB>(11)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("semantic manifest is NULL".into()))?
+                    .0,
             ))
         })?;
         if format == "definition" {
@@ -122,6 +130,8 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "row_identity_version": 2,
             "cleaners": selected_cleaners,
             "cleaner_versions": crate::cleaners::v1_cleaner_registry(),
+            "candidate_plan": row.6,
+            "candidate_semantics": row.7,
             "graph": capabilities.external_graph_refresh,
             "graph_executable": false,
             "sources": sources,

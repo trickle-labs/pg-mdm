@@ -1,9 +1,11 @@
 use serde_json::{Value, json};
 
-use crate::definition::{Entity, Field, MatchRule, Source};
+use crate::candidate::{CandidateChannel, CandidatePlan, ChannelKind};
+use crate::definition::{Entity, Field, Source};
+use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 2;
+pub const COMPILER_VERSION: i32 = 3;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
@@ -139,16 +141,24 @@ pub fn normalized_field_sql(field: &Field, sources: &[Source]) -> String {
         };
 
         let source_escaped = source.name.replace('\'', "''");
+        let records_name = format!("records_{}", source.name);
+        let records_relation = if records_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            records_name
+        } else {
+            quote_identifier(&records_name)
+        };
         let part_sql = format!(
-            "SELECT '{source_escaped}'::text AS source_name, source_record_key, '{field_escaped}'::text AS field_name, (n).state, (n).normalized, (n).canonical_bytes\nFROM (SELECT source_record_key, {normalize_call} AS n FROM records_{}) s",
-            source.name
+            "SELECT '{source_escaped}'::text AS source_name, s.source_record_key, sr.source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, (n).state, (n).normalized, (n).canonical_bytes\nFROM (SELECT source_record_key, {normalize_call} AS n FROM {records_relation}) s\nJOIN mdm_internal.source_records sr ON sr.source_record_key = s.source_record_key AND sr.active\nJOIN mdm_internal.source_identities si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
         );
         parts.push(part_sql);
     }
 
     if parts.is_empty() {
         format!(
-            "SELECT NULL::text AS source_name, NULL::bytea AS source_record_key, '{field_escaped}'::text AS field_name, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes WHERE false"
+            "SELECT NULL::text AS source_name, NULL::bytea AS source_record_key, NULL::uuid AS source_record_id, NULL::bytea AS source_sort_key, '{field_escaped}'::text AS field_name, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes WHERE false"
         )
     } else {
         parts.join("\nUNION ALL\n")
@@ -171,6 +181,8 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
         json!({
             "source_name": "text",
             "source_record_key": "bytea",
+            "source_record_id": "uuid",
+            "source_sort_key": "bytea",
             "field_name": "text",
             "state": "text",
             "normalized": "text",
@@ -179,16 +191,190 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
     )
 }
 
-fn match_node(rule: &MatchRule, fields: &[Field]) -> Value {
+fn limits_for_entity(entity: &Entity) -> crate::candidate::CandidateLimits {
+    let mut limits = entity.limits.clone();
+    match semantics::expand_limits(&mut limits) {
+        Ok(limits) => limits,
+        Err(_) => semantics::candidate_limits(),
+    }
+}
+
+fn normalized_relation(field: &str) -> String {
+    quote_identifier(&format!("normalized_{field}"))
+}
+
+fn block_relation(channel: &CandidateChannel) -> String {
+    quote_identifier(&format!("blocks_{}", channel.channel_id))
+}
+
+fn stats_relation(channel: &CandidateChannel) -> String {
+    quote_identifier(&format!("block_stats_{}", channel.channel_id))
+}
+
+fn pair_stats_relation(entity_name: &str) -> String {
+    quote_identifier(&format!("pair_stats_{entity_name}"))
+}
+
+fn channel_membership_sql(channel: &CandidateChannel) -> String {
+    let relation = normalized_relation(&channel.fields[0]);
+    let field = channel.fields[0].replace('\'', "''");
+    let where_value = format!("field_name = '{field}' AND state = 'value'");
+    match channel.kind {
+        ChannelKind::Exact => format!(
+            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_object('field', '{field}', 'value', pg_catalog.encode(canonical_bytes, 'hex')) AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND canonical_bytes IS NOT NULL",
+            channel_id = channel.channel_id.replace('\'', "''")
+        ),
+        ChannelKind::CompositeExact => {
+            let aliases = channel
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    let relation = normalized_relation(field);
+                    let alias = format!("n{index}");
+                    let field = field.replace('\'', "''");
+                    (relation, alias, field)
+                })
+                .collect::<Vec<_>>();
+            let from = format!(
+                "FROM {} {}\n{}",
+                aliases[0].0,
+                aliases[0].1,
+                aliases
+                    .iter()
+                    .skip(1)
+                    .map(|(relation, alias, _)| {
+                        format!("JOIN {relation} {alias} USING (source_record_id, source_sort_key)")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let value_filters = aliases
+                .iter()
+                .map(|(_, alias, field)| {
+                    format!("{alias}.field_name = '{field}' AND {alias}.state = 'value'")
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let block_values = aliases
+                .iter()
+                .map(|(_, alias, _)| format!("pg_catalog.encode({alias}.canonical_bytes, 'hex')"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_array({block_values}) AS block_key, n0.source_record_id, n0.source_sort_key\n{from}\nWHERE {value_filters}",
+                channel_id = channel.channel_id.replace('\'', "''"),
+                block_values = block_values,
+                from = from,
+                value_filters = value_filters,
+            )
+        }
+        ChannelKind::Prefix => format!(
+            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_object('field', '{field}', 'prefix', pg_catalog.left(normalized, {length})) AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND normalized IS NOT NULL",
+            channel_id = channel.channel_id.replace('\'', "''"),
+            length = channel.prefix_length.expect("validated prefix length")
+        ),
+        ChannelKind::Token => format!(
+            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_object('field', '{field}', 'token', token) AS block_key, source_record_id, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY token, source_record_id, source_sort_key",
+            channel_id = channel.channel_id.replace('\'', "''"),
+            min_length = channel.token_min_length.expect("validated token length")
+        ),
+    }
+}
+
+pub fn candidate_block_sql(channel: &CandidateChannel) -> String {
+    channel_membership_sql(channel)
+}
+
+pub fn candidate_block_stats_sql(channel: &CandidateChannel) -> String {
+    let relation = block_relation(channel);
+    format!(
+        "SELECT channel_id, block_key, pg_catalog.count(*)::bigint AS block_records\nFROM {relation}\nGROUP BY channel_id, block_key"
+    )
+}
+
+pub fn candidate_block_overflow_sql(
+    channel: &CandidateChannel,
+    limits: &crate::candidate::CandidateLimits,
+) -> String {
+    let relation = stats_relation(channel);
+    format!(
+        "SELECT channel_id, block_key, block_records, {limit}::bigint AS max_block_records\nFROM {relation}\nWHERE block_records > {limit}",
+        limit = limits.max_block_records
+    )
+}
+
+pub fn candidate_pairs_sql(
+    channels: &[CandidateChannel],
+    limits: &crate::candidate::CandidateLimits,
+) -> String {
+    let blocks = channels
+        .iter()
+        .map(|channel| {
+            let relation = block_relation(channel);
+            let stats = stats_relation(channel);
+            format!(
+                "SELECT b.channel_id, b.block_key, b.source_record_id, b.source_sort_key\nFROM {relation} b\nJOIN {stats} s USING (channel_id, block_key)\nWHERE s.block_records <= {limit}",
+                limit = limits.max_block_records
+            )
+        })
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        return "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, ARRAY[]::text[] AS discovery_channels WHERE false".into();
+    }
+    let union = blocks.join("\nUNION ALL\n");
+    format!(
+        "WITH complete_blocks AS (\n{union}\n), pairs AS (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key, l.channel_id\nFROM complete_blocks l\nJOIN complete_blocks r ON l.channel_id = r.channel_id AND l.block_key = r.block_key AND l.source_sort_key < r.source_sort_key\n)\nSELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key, pg_catalog.array_agg(DISTINCT channel_id ORDER BY channel_id) AS discovery_channels\nFROM pairs\nGROUP BY left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\n/* aggregate candidate limit: {limit} */",
+        limit = limits.max_candidate_pairs
+    )
+}
+
+pub fn candidate_pair_stats_sql(
+    channels: &[CandidateChannel],
+    limits: &crate::candidate::CandidateLimits,
+) -> String {
+    let blocks = channels
+        .iter()
+        .map(|channel| {
+            let relation = block_relation(channel);
+            let stats = stats_relation(channel);
+            format!(
+                "SELECT b.channel_id, b.block_key, b.source_record_id, b.source_sort_key\nFROM {relation} b\nJOIN {stats} s USING (channel_id, block_key)\nWHERE s.block_records <= {limit}",
+                limit = limits.max_block_records,
+            )
+        })
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        return "SELECT 0::bigint AS candidate_pairs".into();
+    }
+    let union = blocks.join("\nUNION ALL\n");
+    format!(
+        "WITH blocks AS (\n{union}\n), pairs AS (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id\nFROM blocks l\nJOIN blocks r ON l.channel_id = r.channel_id AND l.block_key = r.block_key AND l.source_sort_key < r.source_sort_key\nGROUP BY l.source_record_id, r.source_record_id\n)\nSELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM pairs"
+    )
+}
+
+pub fn candidate_pair_overflow_sql(
+    entity_name: &str,
+    limits: &crate::candidate::CandidateLimits,
+) -> String {
+    let relation = pair_stats_relation(entity_name);
+    format!(
+        "SELECT candidate_pairs, {limit}::bigint AS max_candidate_pairs\nFROM {relation}\nWHERE candidate_pairs > {limit}",
+        relation = relation,
+        limit = limits.max_candidate_pairs
+    )
+}
+
+fn match_node(channel: &CandidateChannel) -> Value {
     node(
-        format!("blocks/{}", rule.name),
-        rule.fields
+        format!("blocks/{}", channel.channel_id),
+        channel
+            .fields
             .iter()
-            .filter(|name| fields.iter().any(|field| &field.name == *name))
             .map(|name| format!("normalized/{name}"))
             .collect(),
-        format!("SELECT * FROM candidate_channel_{}", rule.name),
-        json!({"source_name":"text","left_source_id":"jsonb","right_source_id":"jsonb"}),
+        candidate_block_sql(channel),
+        json!({"channel_id":"text","block_key":"jsonb","source_record_id":"uuid","source_sort_key":"bytea"}),
     )
 }
 
@@ -200,26 +386,74 @@ pub fn compile(entity: &Entity) -> Value {
     for field in &entity.fields {
         nodes.push(normalized_node(field, &entity.sources));
     }
-    for rule in &entity.matches {
-        if rule.candidate.is_some() {
-            nodes.push(match_node(rule, &entity.fields));
-        }
+    let limits = limits_for_entity(entity);
+    let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
+        channels: Vec::new(),
+    });
+    for channel in &plan.channels {
+        nodes.push(match_node(channel));
+        nodes.push(node(
+            format!("block-stats/{}", channel.channel_id),
+            vec![format!("blocks/{}", channel.channel_id)],
+            candidate_block_stats_sql(channel),
+            json!({"channel_id":"text","block_key":"jsonb","block_records":"bigint"}),
+        ));
+        nodes.push(node(
+            format!("block-overflow/{}", channel.channel_id),
+            vec![format!("block-stats/{}", channel.channel_id)],
+            candidate_block_overflow_sql(channel, &limits),
+            json!({"channel_id":"text","block_key":"jsonb","block_records":"bigint","max_block_records":"bigint"}),
+        ));
     }
-    let blocks: Vec<String> = entity
-        .matches
+    let blocks: Vec<String> = plan
+        .channels
         .iter()
-        .filter(|rule| rule.candidate.is_some())
-        .map(|rule| format!("blocks/{}", rule.name))
+        .map(|channel| format!("blocks/{}", channel.channel_id))
+        .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-stats/{}", channel.channel_id)),
+        )
+        .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
+        )
+        .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
+        .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
         .collect();
     nodes.push(node(
         format!("pairs/{}", entity.name),
         blocks,
-        "SELECT DISTINCT left_source_id, right_source_id FROM candidate_blocks".into(),
-        json!({"left_source_id":"jsonb","right_source_id":"jsonb"}),
+        candidate_pairs_sql(&plan.channels, &limits),
+        json!({"left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea","discovery_channels":"text[]"}),
+    ));
+    nodes.push(node(
+        format!("pair-stats/{}", entity.name),
+        plan.channels
+            .iter()
+            .map(|channel| format!("block-stats/{}", channel.channel_id))
+            .chain(
+                plan.channels
+                    .iter()
+                    .map(|channel| format!("block-overflow/{}", channel.channel_id)),
+            )
+            .collect(),
+        candidate_pair_stats_sql(&plan.channels, &limits),
+        json!({"candidate_pairs":"bigint"}),
+    ));
+    nodes.push(node(
+        format!("pair-overflow/{}", entity.name),
+        vec![format!("pair-stats/{}", entity.name)],
+        candidate_pair_overflow_sql(&entity.name, &limits),
+        json!({"candidate_pairs":"bigint","max_candidate_pairs":"bigint"}),
     ));
     nodes.push(node(
         format!("evidence/{}", entity.name),
-        vec![format!("pairs/{}", entity.name)],
+        vec![
+            format!("pairs/{}", entity.name),
+            format!("pair-stats/{}", entity.name),
+        ],
         "SELECT * FROM pair_evidence".into(),
         json!({"left_source_id":"jsonb","right_source_id":"jsonb","decision":"text"}),
     ));
@@ -252,7 +486,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], false);
-        assert_eq!(graph["compiler_version"], 2);
+        assert_eq!(graph["compiler_version"], 3);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));

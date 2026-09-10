@@ -82,7 +82,7 @@ fn test_e2e_generated_normalization_sql_shape() {
     assert!(norm_dob_sql.contains("WHERE false"));
 
     let graph = compile(&entity);
-    assert_eq!(graph["compiler_version"], 2);
+    assert_eq!(graph["compiler_version"], 3);
     let nodes = graph["nodes"].as_array().expect("nodes array");
     assert!(nodes.iter().any(|n| n["logical_id"] == "records/crm"));
     assert!(nodes.iter().any(|n| n["logical_id"] == "normalized/email"));

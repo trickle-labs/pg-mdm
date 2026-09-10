@@ -21,6 +21,12 @@ test-normalization:
 test-source-records:
     cargo test --test source_record_tests --features pg18
 
+test-candidates:
+    cargo test --lib --features pg18 candidate::tests --offline
+
+test-candidate-properties:
+    cargo test --lib --features pg18 generated_exact_candidates_match_independent_oracle --offline
+
 package:
     cargo pgrx package --pg-config "{{pg_config}}"
 
@@ -38,4 +44,4 @@ check-upgrades:
     python3 scripts/check_upgrade_paths.py
 
 check-archive: package
-    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.3.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.3.0.sql
+    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.4.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.4.0.sql

@@ -26,9 +26,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.3.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.4.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.3.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.4.0 is not installed';
     END IF;
 END
 $$;
@@ -58,6 +58,14 @@ BEGIN
     END IF;
 END
 $$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.4.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.4.0') THEN
+        RAISE EXCEPTION '0.3.0 to 0.4.0 upgrade did not update extension version';
+    END IF;
+END
+$$;
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -65,12 +73,13 @@ CREATE DATABASE upgrade_direct;
 CREATE EXTENSION pg_trickle;
 CREATE EXTENSION pg_mdm VERSION '0.2.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.3.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.4.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.3.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.4.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.3.0 upgrade did not install v0.3 catalog';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.4.0 upgrade did not install v0.4 catalog';
     END IF;
 END
 $$;
@@ -436,7 +445,7 @@ BEGIN
        OR summary->'cleaner_versions'->>'text' IS DISTINCT FROM '1'
        OR summary->'cleaner_versions'->>'date' IS DISTINCT FROM '1'
        OR summary->'cleaner_versions'->>'email' IS DISTINCT FROM '1' THEN
-        RAISE EXCEPTION 'describe summary does not have expected v0.3 metadata: %', summary;
+        RAISE EXCEPTION 'describe summary does not have expected v0.4 metadata: %', summary;
     END IF;
 END
 $$;

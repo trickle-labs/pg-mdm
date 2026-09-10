@@ -34,6 +34,25 @@ pub enum MdmError {
     CleanerExecution(String),
     #[error("source record key is invalid: {0}")]
     SourceRecord(String),
+    #[error(
+        "candidate block for channel {channel} has {cardinality} records; limit is {limit}; raise max_block_records or split the definition"
+    )]
+    CandidateBlockLimit {
+        channel: String,
+        cardinality: usize,
+        limit: usize,
+    },
+    #[error(
+        "candidate set has at least {candidate_pairs} pairs; limit is {limit}; raise max_candidate_pairs or split the definition"
+    )]
+    CandidateTotalLimit {
+        candidate_pairs: usize,
+        limit: usize,
+    },
+    #[error("candidate pair count overflowed while evaluating channel {channel}")]
+    CandidateCountOverflow { channel: String },
+    #[error("invalid candidate plan: {0}")]
+    CandidateInvalid(String),
 }
 
 impl MdmError {
@@ -55,6 +74,11 @@ impl MdmError {
             Self::CleanerInvalid(..) => "MDM_CLEANER_INVALID",
             Self::CleanerExecution(_) => "MDM_CLEANER_ERROR",
             Self::SourceRecord(_) => "MDM_SOURCE_RECORD_INVALID",
+            Self::CandidateBlockLimit { .. } => "MDM_CANDIDATE_BLOCK_LIMIT",
+            Self::CandidateTotalLimit { .. } | Self::CandidateCountOverflow { .. } => {
+                "MDM_CANDIDATE_TOTAL_LIMIT"
+            }
+            Self::CandidateInvalid(_) => "MDM_CANDIDATE_INVALID",
         }
     }
 }
