@@ -39,6 +39,19 @@ test-resolver:
 test-resolver-properties:
     cargo test --test resolver_property_tests --features pg18 --offline
 
+test-identity:
+    cargo test --lib --features pg18 identity --offline
+
+test-golden:
+    cargo test --test golden_tests --features pg18 --offline
+
+test-publication-properties:
+    cargo test --lib --features pg18 publication --offline
+    cargo test --lib --features pg18 output --offline
+
+test-publication-e2e:
+    scripts/run_e2e_tests.sh
+
 package:
     cargo pgrx package --pg-config "{{pg_config}}"
 
@@ -56,4 +69,4 @@ check-upgrades:
     python3 scripts/check_upgrade_paths.py
 
 check-archive: package
-    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.6.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.6.0.sql
+    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.7.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.7.0.sql

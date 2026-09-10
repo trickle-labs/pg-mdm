@@ -77,6 +77,26 @@ pub enum MdmError {
     ResolverInvalid(String),
     #[error("resolver invariant failed: {0}")]
     ResolverInvariant(String),
+    #[error("invalid identity history: {0}")]
+    IdentityInvalid(String),
+    #[error("identity history exceeds the {resource} limit: {observed} > {limit}")]
+    IdentityLimit {
+        resource: &'static str,
+        observed: usize,
+        limit: usize,
+    },
+    #[error("invalid golden value: {0}")]
+    GoldenInvalid(String),
+    #[error("golden override conflict: {0}")]
+    GoldenConflict(String),
+    #[error("invalid review history: {0}")]
+    ReviewInvalid(String),
+    #[error("invalid output schema: {0}")]
+    OutputInvalid(String),
+    #[error("explanation is not retained: {0}")]
+    ExplanationNotRetained(String),
+    #[error("invalid explanation request: {0}")]
+    ExplanationInvalid(String),
 }
 
 impl MdmError {
@@ -113,6 +133,14 @@ impl MdmError {
             Self::ResolverLimit { .. } => "MDM_RESOLVER_LIMIT",
             Self::ResolverInvalid(_) => "MDM_RESOLVER_INVALID",
             Self::ResolverInvariant(_) => "MDM_RESOLVER_INVARIANT",
+            Self::IdentityInvalid(_) => "MDM_IDENTITY_INVALID",
+            Self::IdentityLimit { .. } => "MDM_IDENTITY_LIMIT",
+            Self::GoldenInvalid(_) => "MDM_GOLDEN_INVALID",
+            Self::GoldenConflict(_) => "MDM_GOLDEN_OVERRIDE_CONFLICT",
+            Self::ReviewInvalid(_) => "MDM_REVIEW_INVALID",
+            Self::OutputInvalid(_) => "MDM_OUTPUT_INVALID",
+            Self::ExplanationNotRetained(_) => "MDM_EXPLANATION_NOT_RETAINED",
+            Self::ExplanationInvalid(_) => "MDM_EXPLANATION_INVALID",
         }
     }
 }

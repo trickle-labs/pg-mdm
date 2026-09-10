@@ -3,7 +3,7 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.6 adds the pure Rust conservative clustering resolver. Publication and review persistence remain later releases.
+> v0.7 adds stable identity, golden selection, review lifecycle, bounded explanations, and publication history. Live graph refresh remains deferred.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
@@ -132,7 +132,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The implemented v0.6 release stores developmental definitions, compiles record, normalization, candidate, and evidence stages, manages durable source records and steward decisions, and runs the conservative full-reference resolver. Candidate, comparator, and resolver engines are runnable in Rust and the generated SQL is fixture-testable; graph execution, stable IDs, publication, and reviews remain later releases.
+The implemented v0.7 release stores developmental definitions, durable source records and steward decisions, runs the conservative full-reference resolver, reconciles stable IDs, selects golden values, tracks reviews, and exposes bounded retained explanations. Graph execution and live refresh remain deferred.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

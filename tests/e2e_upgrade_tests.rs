@@ -9,6 +9,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_03_04 = root.join("sql").join("pg_mdm--0.3.0--0.4.0.sql");
     let upgrade_04_05 = root.join("sql").join("pg_mdm--0.4.0--0.5.0.sql");
     let upgrade_05_06 = root.join("sql").join("pg_mdm--0.5.0--0.6.0.sql");
+    let upgrade_06_07 = root.join("sql").join("pg_mdm--0.6.0--0.7.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -30,6 +31,10 @@ fn test_upgrade_scripts_exist() {
         upgrade_05_06.is_file(),
         "0.5.0 -> 0.6.0 upgrade script must exist"
     );
+    assert!(
+        upgrade_06_07.is_file(),
+        "0.6.0 -> 0.7.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -45,4 +50,8 @@ fn test_upgrade_scripts_exist() {
     assert!(sql_04_05.contains("mdm_steward.decide"));
     let sql_05_06 = fs::read_to_string(&upgrade_05_06).expect("read 0.5.0 to 0.6.0");
     assert!(sql_05_06.contains("clustering resolver"));
+    let sql_06_07 = fs::read_to_string(&upgrade_06_07).expect("read 0.6.0 to 0.7.0");
+    assert!(sql_06_07.contains("identity_registry"));
+    assert!(sql_06_07.contains("golden_override_directives"));
+    assert!(sql_06_07.contains("mdm.explain"));
 }

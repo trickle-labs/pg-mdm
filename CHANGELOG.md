@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Add deterministic stable identity reconciliation with merge aliases, split history, and membership tombstones.
+- Add golden selectors, anchored override history, review occurrences, bounded explanations, and publication/output metadata.
+- Add the v0.6.0 to v0.7.0 upgrade path and archived release artifact.
+
 ## 0.6.0
 
 - Add deterministic conservative clustering with manual closure, cannot-links, authority conflicts, and component admission.

@@ -21,6 +21,11 @@ pub const ABSOLUTE_MAX_AUTOMATIC_EDGES: usize = 100_000_000;
 pub const ABSOLUTE_MAX_RECORDS_PER_COMPONENT: usize = 10_000_000;
 pub const ABSOLUTE_MAX_COMPONENT_CHECKS: usize = 100_000_000;
 pub const CLUSTERING_POLICY_VERSION: u16 = 1;
+pub const STABLE_ID_POLICY_VERSION: u16 = 1;
+pub const GOLDEN_POLICY_VERSION: u16 = 1;
+pub const REVIEW_ISSUE_KEY_VERSION: u16 = 1;
+pub const EXPLANATION_VERSION: u16 = 1;
+pub const PUBLICATION_FORMAT_VERSION: u16 = 1;
 
 pub fn candidate_limits() -> CandidateLimits {
     CandidateLimits {
@@ -204,6 +209,23 @@ pub fn semantic_manifest() -> Value {
                 "singleton_established": ["identity", "strong_plus_independent_group"],
                 "established_established": ["shared_authority", "two_independent_strong_connections"]
             }
+        },
+        "identity": {
+            "policy_version": STABLE_ID_POLICY_VERSION
+        },
+        "golden": {
+            "policy_version": GOLDEN_POLICY_VERSION,
+            "policies": ["first_non_null", "latest", "most_common", "prefer_source"]
+        },
+        "review": {
+            "issue_key_version": REVIEW_ISSUE_KEY_VERSION
+        },
+        "explanation": {
+            "version": EXPLANATION_VERSION,
+            "max_facts": 500
+        },
+        "publication": {
+            "format_version": PUBLICATION_FORMAT_VERSION
         }
     })
 }

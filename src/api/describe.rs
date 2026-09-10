@@ -114,6 +114,17 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .map(|value| value.0)
         .unwrap_or_else(|| serde_json::json!({}));
+        let publication_metadata = Spi::get_one_with_args::<JsonB>(
+            "SELECT jsonb_build_object('publication_revision', e.publication_revision, 'output_schema', COALESCE((SELECT jsonb_agg(jsonb_build_object('name', f.field_name::text, 'ordinal', f.field_ordinal, 'type', f.field_type_name) ORDER BY f.field_ordinal) FROM mdm_internal.output_fields f WHERE f.entity_id = e.entity_id), '[]'::jsonb), 'entity_count', (SELECT count(*) FROM mdm_internal.identity_registry i WHERE i.entity_id = e.entity_id AND i.status = 'active'), 'review_count', (SELECT count(*) FROM mdm_internal.reviews r WHERE r.entity_id = e.entity_id AND r.status = 'open'), 'identity_policy_version', $2, 'golden_policy_version', $3, 'result_digest', (SELECT encode(p.result_digest, 'hex') FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id AND p.publication_revision = e.publication_revision), 'earliest_retained_explanation_revision', (SELECT min(f.publication_revision) FROM mdm_internal.resolution_facts f WHERE f.entity_id = e.entity_id), 'pending_stewardship', COALESCE((SELECT o.decision_epoch <> e.decision_epoch FROM mdm_internal.publication_observations o WHERE o.entity_id = e.entity_id ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1), e.decision_epoch > 0)) FROM mdm_internal.entities e WHERE e.entity_name = $1::pg_catalog.name",
+            &[
+                entity_name.clone().into(),
+                (crate::semantics::STABLE_ID_POLICY_VERSION as i32).into(),
+                (crate::semantics::GOLDEN_POLICY_VERSION as i32).into(),
+            ],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .map(|value| value.0)
+        .unwrap_or_else(|| serde_json::json!({}));
         let selected_cleaners = row.3.get("fields")
             .and_then(Value::as_array)
             .map(|fields| {
@@ -146,6 +157,7 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "clustering_admission": row.7.get("clustering").and_then(|value| value.get("admission")).cloned().unwrap_or_else(|| serde_json::json!({})),
             "resolver_limits": row.3.get("limits").cloned().unwrap_or_else(|| serde_json::json!({})),
             "decisions": decision_metadata,
+            "publication": publication_metadata,
             "graph": capabilities.external_graph_refresh,
             "graph_executable": false,
             "sources": sources,

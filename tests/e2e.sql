@@ -26,9 +26,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.6.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.7.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.6.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.7.0 is not installed';
     END IF;
 END
 $$;
@@ -84,6 +84,16 @@ BEGIN
     END IF;
 END
 $$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.7.0')
+       OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.identity_registry') IS NULL THEN
+        RAISE EXCEPTION '0.6.0 to 0.7.0 upgrade did not install v0.7 catalog';
+    END IF;
+END
+$$;
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -94,12 +104,13 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.3.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.4.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.5.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.6.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.6.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.7.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
-       OR pg_catalog.to_regtype('mdm_internal.normalized_value') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.6.0 upgrade did not install v0.6 catalog';
+       OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL THEN
+        RAISE EXCEPTION 'direct 0.2.0 to 0.7.0 upgrade did not install v0.7 catalog';
     END IF;
 END
 $$;
