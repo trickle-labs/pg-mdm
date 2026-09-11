@@ -9,11 +9,11 @@ Most organizations have several records for the same customer, company, supplier
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.6 (conservative clustering)
+## Install v0.7
 
-v0.6 supports PostgreSQL 18 and requires `pg_trickle` 0.98.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+v0.7 supports PostgreSQL 18 and requires `pg_trickle` 0.104.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
 
-The v0.6 actions store and validate definitions, compile record, normalization, candidate, and evidence stages, accept explicit steward decisions, and resolve complete terminal inputs in pure Rust. They do not execute graph SQL or create public output tables.
+The v0.7 actions store and validate definitions, compile record, normalization, candidate, and evidence stages, accept steward decisions, and resolve complete terminal inputs in Rust. They do not execute graph SQL or create public output tables.
 
 Build and copy the package:
 

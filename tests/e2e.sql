@@ -197,17 +197,10 @@ $$;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()
-        WHERE major_version = 1 AND minor_version = 0 AND NOT enabled) <> 2 THEN
+        WHERE major_version = 1 AND minor_version = 0 AND enabled) <> 2 THEN
         RAISE EXCEPTION 'baseline capabilities do not match';
     END IF;
-    BEGIN
-        PERFORM mdm_internal.require_graph_v1();
-        RAISE EXCEPTION 'Graph V1 gate did not fail';
-    EXCEPTION WHEN OTHERS THEN
-        IF pg_catalog.strpos(SQLERRM, 'MDM_PGT_CAPABILITY_DISABLED') = 0 THEN
-            RAISE;
-        END IF;
-    END;
+    PERFORM mdm_internal.require_graph_v1();
 END
 $$;
 
@@ -225,7 +218,123 @@ GRANT USAGE ON SCHEMA mdm_admin TO mdm_administrator;
 GRANT USAGE ON SCHEMA mdm TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO mdm_administrator;
 
+\connect postgres postgres
+CREATE DATABASE graph_conformance;
+\connect graph_conformance postgres
+CREATE EXTENSION pg_trickle;
+CREATE EXTENSION pg_mdm;
+CREATE TABLE public.mdm_graph_source (
+    id integer PRIMARY KEY,
+    owner_name text NOT NULL,
+    value text NOT NULL
+);
+INSERT INTO public.mdm_graph_source VALUES
+    (1, 'mdm_administrator', 'visible'),
+    (2, 'another_role', 'hidden');
+ALTER TABLE public.mdm_graph_source ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mdm_graph_source FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.mdm_graph_source OWNER TO mdm_administrator;
+CREATE POLICY mdm_graph_owner_rows ON public.mdm_graph_source
+    TO mdm_administrator USING (owner_name = current_user);
+CREATE TABLE public.mdm_graph_publication (
+    graph_refresh_id bigint NOT NULL,
+    source_boundary_digest bytea NOT NULL
+);
+GRANT USAGE ON SCHEMA pgtrickle TO mdm_administrator;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_administrator;
+GRANT CREATE ON SCHEMA public TO mdm_administrator;
+GRANT SELECT ON public.mdm_graph_source TO mdm_administrator;
+GRANT SELECT, INSERT ON public.mdm_graph_publication TO mdm_administrator;
+
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_graph_probe',
+    query => 'SELECT id, owner_name, value FROM public.mdm_graph_source',
+    schedule => '1h',
+    refresh_mode => 'AUTO',
+    initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+DO $$
+DECLARE stream_contract record;
+DECLARE graph_contract record;
+BEGIN
+    SELECT * INTO STRICT stream_contract
+      FROM pgtrickle.stream_table_contract('public.mdm_graph_probe'::regclass);
+    IF stream_contract.contract_version <> 1
+       OR octet_length(stream_contract.contract_digest) <> 32
+       OR stream_contract.contract->>'orchestration_mode' <> 'EXTERNAL'
+       OR stream_contract.contract #>> '{relation,owner}' <> 'mdm_administrator' THEN
+        RAISE EXCEPTION 'unexpected stream contract: %', stream_contract.contract;
+    END IF;
+    SELECT * INTO STRICT graph_contract
+      FROM pgtrickle.graph_contract(ARRAY['public.mdm_graph_probe'::regclass]);
+    IF graph_contract.contract_version <> 1
+       OR octet_length(graph_contract.graph_digest) <> 32
+       OR NOT graph_contract.contract->'members' @> '[{"orchestration_mode":"EXTERNAL"}]'::jsonb THEN
+        RAISE EXCEPTION 'unexpected graph contract: %', graph_contract.contract;
+    END IF;
+END
+$$;
+
+BEGIN;
+DO $$
+DECLARE expected_digest bytea;
+DECLARE refreshed record;
+BEGIN
+    SELECT graph_digest INTO STRICT expected_digest
+      FROM pgtrickle.graph_contract(ARRAY['public.mdm_graph_probe'::regclass]);
+    SELECT * INTO STRICT refreshed FROM pgtrickle.refresh_graph_strict(
+        ARRAY['public.mdm_graph_probe'::regclass], expected_digest, 'ALLOW');
+    IF refreshed.contract_version <> 1
+       OR refreshed.source_boundary->>'completeness' <> 'PROVEN'
+       OR octet_length(refreshed.source_boundary_digest) <> 32
+       OR (SELECT count(*) FROM public.mdm_graph_probe) <> 1 THEN
+        RAISE EXCEPTION 'unexpected graph refresh: %', row_to_json(refreshed);
+    END IF;
+    INSERT INTO public.mdm_graph_publication
+    VALUES (refreshed.graph_refresh_id, refreshed.source_boundary_digest);
+END
+$$;
+ROLLBACK;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM public.mdm_graph_probe) <> 0
+       OR (SELECT count(*) FROM public.mdm_graph_publication) <> 0 THEN
+        RAISE EXCEPTION 'graph refresh and publication did not roll back together';
+    END IF;
+END
+$$;
+
+BEGIN;
+DO $$
+DECLARE expected_digest bytea;
+DECLARE refreshed record;
+BEGIN
+    SELECT graph_digest INTO STRICT expected_digest
+      FROM pgtrickle.graph_contract(ARRAY['public.mdm_graph_probe'::regclass]);
+    SELECT * INTO STRICT refreshed FROM pgtrickle.refresh_graph_strict(
+        ARRAY['public.mdm_graph_probe'::regclass], expected_digest, 'ALLOW');
+    INSERT INTO public.mdm_graph_publication
+    VALUES (refreshed.graph_refresh_id, refreshed.source_boundary_digest);
+END
+$$;
+COMMIT;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM public.mdm_graph_probe) <> 1
+       OR (SELECT owner_name FROM public.mdm_graph_probe) <> 'mdm_administrator'
+       OR (SELECT count(*) FROM public.mdm_graph_publication) <> 1 THEN
+        RAISE EXCEPTION 'Graph V1 commit or owner-scoped RLS failed';
+    END IF;
+END
+$$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
 \connect foundation mdm_test_login
+
 SET ROLE mdm_administrator;
 DO $$
 DECLARE
@@ -604,8 +713,8 @@ BEGIN
        OR operation.actor_name <> 'mdm_test_login'
        OR operation.actor_role_name <> 'mdm_administrator'
        OR operation.completed_at IS NULL
-       OR operation.outcome #>> '{external_graph_refresh,enabled}' <> 'false'
-       OR operation.outcome #>> '{output_delta_consumer,enabled}' <> 'false' THEN
+       OR operation.outcome #>> '{external_graph_refresh,enabled}' <> 'true'
+       OR operation.outcome #>> '{output_delta_consumer,enabled}' <> 'true' THEN
         RAISE EXCEPTION 'operation record is invalid: %', row_to_json(operation);
     END IF;
     IF pg_catalog.to_regprocedure('mdm_admin.verify_installation(text)') IS NOT NULL THEN
@@ -794,3 +903,7 @@ $$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;
+
+\connect postgres postgres
+DROP DATABASE graph_conformance WITH (FORCE);
+\connect foundation postgres

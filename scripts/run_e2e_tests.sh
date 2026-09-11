@@ -103,6 +103,5 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
 restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
 test "$original_artifacts" = "$restored_artifacts"
 
-echo 'PASS: installation, upgrade, authorization, definition history, concurrency, and restore/rebind'
-echo 'BLOCKED: Graph V1 positive conformance, external_graph_refresh 1.0 is disabled'
+echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'SKIPPED: Delta V1 positive conformance, output_delta_consumer is not used by V1'

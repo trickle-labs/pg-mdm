@@ -39,9 +39,9 @@ mod tests {
     use pgrx::prelude::*;
 
     #[pg_test]
-    fn baseline_capabilities_are_reported_as_disabled() {
+    fn graph_v1_capabilities_are_enabled() {
         let rows = Spi::get_one::<i64>(
-            "SELECT count(*) FROM mdm_internal.integration_capabilities() WHERE major_version = 1 AND minor_version = 0 AND NOT enabled",
+            "SELECT count(*) FROM mdm_internal.integration_capabilities() WHERE major_version = 1 AND minor_version = 0 AND enabled",
         )
         .expect("capability query must run");
         assert_eq!(rows, Some(2));

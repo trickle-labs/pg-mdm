@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Pin and admit `pg_trickle` v0.104.0 with stable Graph V1 capability, contract, ownership, RLS, source-boundary, and transactional rollback coverage.
+- Keep Delta V1 outside the V1 publication path and record Graph V1's owner-equivalent source requirement for v0.8.
+
 ## 0.7.0
 
 - Add deterministic stable identity reconciliation with merge aliases, split history, and membership tombstones.
