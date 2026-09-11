@@ -10,6 +10,8 @@ The V1 design controls semantics, this roadmap controls sequencing, and the deta
 
 Versions v0.1 through v0.7 were built on `pg_trickle` v0.98.0. The integration baseline is now `pg_trickle` v0.104.0 at commit `c9eee742c2ac96eb12023bdfd3898aeedaf9b6b6` (tag object `bb2601cd85e1b5223facb9a5a3566d708dc17f45`). CI uses the published `pg_trickle-0.104.0-pg18-linux-amd64.tar.gz` artifact with SHA-256 `ee23aaa3c646ac6d4982a7bad78cb5628e4b6e07ba2ebbda259149198f427c3d`. This release advertises stable, enabled Graph V1 and Delta V1 contracts. The public-SQL admission test now exercises Graph V1 capability discovery, durable `EXTERNAL` orchestration, owner-scoped RLS, canonical contracts, proven source boundaries, and transactional commit and rollback. Delta V1 remains outside the V1 pg-mdm publication path.
 
+Upstream commit [`e995812`](https://github.com/trickle-labs/pg-trickle/commit/e99581268c99697bba02db50726390a48f538585) proposes owner-approved Graph V1 source delegation through PostgreSQL schema `USAGE` and table `SELECT, MAINTAIN`. It is not yet a released dependency, so the immutable v0.104.0 baseline and its owner-equivalent admission fixture remain unchanged. v0.8 starts only after a released artifact containing that behavior passes the updated admission suite.
+
 Before attaching calendar dates, v0.1 and v0.2 must establish the extension toolchain and test harness. Revise the remaining estimates from measured delivery. A milestone is complete only when its behavior is installed, runnable, and covered by its stated tests. Design or partially wired code does not count. If a milestone exceeds its upper range, re-estimate the remaining work and submit any proposed scope reduction for review.
 
 Until Graph V1 passes its gate, tests use an SQL-backed production-shaped path:
@@ -48,7 +50,7 @@ Assessment date: 9 September 2026. The design is suitable for starting v0.1, wit
 | No-change observations and output-trigger callbacks | Observations record the consumed decision epoch; reentrant or altered publications roll back | v0.7, v0.9 |
 | Recreated output tables and protected explanations | Clean restore preserves output grants and consumer objects; omitted-pair explanations enforce source and field permissions | v0.7 |
 
-Start v0.1 with the installation and privilege proof. Complete the role-binding and semantic-manifest checks before v0.2 exits. An unresolved prerequisite blocks its dependent work; it does not require speculative implementation of later releases. Write the detailed v0.8 plan against the qualified upstream contract before v0.8 starts. Likewise, v0.9–v0.11 need reviewed task lists and executable exit cases before each starts.
+Start v0.1 with the installation and privilege proof. Complete the role-binding and semantic-manifest checks before v0.2 exits. An unresolved prerequisite blocks its dependent work; it does not require speculative implementation of later releases. The detailed [v0.8 plan](plans/v0.8.md) records its upstream gate, task order, and executable exit cases. Likewise, v0.9–v0.11 need reviewed task lists and executable exit cases before each starts.
 
 ## Development releases
 
@@ -106,6 +108,8 @@ Exit evidence: generated histories preserve the specified identities and produce
 
 ### v0.8 — `pg_trickle` graph integration (6–10 person-weeks after upstream availability)
 
+Detailed plan: [`plans/v0.8.md`](plans/v0.8.md).
+
 Select one immutable compiled artifact for a definition version and create its private stream-table graph without rewriting either row. Create every member with `EXTERNAL` orchestration and initialization disabled. Obtain `stream_table_contract()` for each member and `graph_contract()` for the complete closure, then store an append-only graph binding with the artifact digest, database-local execution-role and source bindings, canonical graph digest, member contracts, and graph-binding digest. Add the supported lifecycle operations without reading private catalogs or calling provisional internal APIs.
 
 This release starts only after `pg_trickle` advertises `external_graph_refresh` major 1 as enabled and passes the v0.1 conformance harness. Run the admission suite against each qualifying upstream release when it appears; do not wait for v0.8 to discover its behavior. Re-run the previously skipped positive tests as the admission gate. Private catalogs and provisional internal APIs are not substitutes for the public contract.
@@ -149,7 +153,7 @@ Each release records the exact test name, command, commit, artifact and fixture 
 
 | Risk | Owner | Baseline | Admission cases | Current state |
 |---|---|---|---|---|
-| `RISK-PGT-GRAPH-V1` | `pg_mdm` release owner | v0.104.0 commit `c9eee742`; Linux AMD64 package SHA-256 `ee23aaa3…27c3d` | Capability absence, disabled state, major mismatch, contract canonicalization, durable `EXTERNAL` mode, source-boundary completeness, strict rollback and frontier rollback, concurrency and lifecycle locking, clone, restore, upgrade, and forbidden private access | Stable Graph V1 is available; the public-SQL admission path passes for owner-equivalent sources, while v0.8 must reconcile Graph V1's source-ownership requirement with pg-mdm's broader `SELECT`-grant source model |
+| `RISK-PGT-GRAPH-V1` | `pg_mdm` release owner | v0.104.0 commit `c9eee742`; Linux AMD64 package SHA-256 `ee23aaa3…27c3d`; delegation candidate `e995812` | Capability absence, disabled state, major mismatch, contract canonicalization, durable `EXTERNAL` mode, delegated source authorization and revocation, source-boundary completeness, strict rollback and frontier rollback, concurrency and lifecycle locking, clone, restore, upgrade, and forbidden private access | Stable Graph V1 passes on v0.104.0 for owner-equivalent sources. The source-delegation fix is pushed for upstream review but is not yet released or admitted, so v0.8 remains gated. |
 
 Review this risk on every upstream release and at each `pg_mdm` milestone. Record the tested artifact and unresolved conformance failures. Do not replace the gate with an upstream version-number check.
 
@@ -167,4 +171,4 @@ The provisional pilot envelope starts in v0.4 and grows with each release. Measu
 
 V1.0 freezes the public compatibility contract only after every V1 acceptance criterion passes. The supported `pg_trickle` release must advertise `external_graph_refresh` major 1 as enabled, and the shared suite must prove canonical graph contracts, durable external orchestration, strict transactional refresh, complete source boundaries, rollback, concurrency, clone isolation, recovery, and supported upgrades. V1 does not use `output_delta_consumer` and supports only trigger capture.
 
-Versions v0.1 through v0.7 are complete. Graph V1 is now available and its public-SQL admission path passes on v0.104.0 for owner-equivalent sources, so v0.8 graph integration can start with that ownership boundary unresolved. Continue with separate reviewed changes through v0.11; every compiler revision retains its graph-specific admission and differential-equivalence gates.
+Versions v0.1 through v0.7 are complete. The v0.8 plan and upstream source-delegation candidate are ready, but implementation remains blocked until that behavior ships in an immutable `pg_trickle` release and passes pg-mdm admission. Continue with separate reviewed changes through v0.11; every compiler revision retains its graph-specific admission and differential-equivalence gates.

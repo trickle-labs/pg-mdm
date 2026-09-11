@@ -4,6 +4,9 @@
 
 - Pin and admit `pg_trickle` v0.104.0 with stable Graph V1 capability, contract, ownership, RLS, source-boundary, and transactional rollback coverage.
 - Keep Delta V1 outside the V1 publication path and record Graph V1's owner-equivalent source requirement for v0.8.
+- Add the detailed v0.8 graph-integration plan and record the upstream
+  `SELECT, MAINTAIN` source-delegation candidate without replacing the released
+  dependency pin.
 
 ## 0.7.0
 
