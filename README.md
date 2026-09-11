@@ -3,17 +3,17 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.9 adds strict Graph V1 refresh, deterministic resolution, and atomic publication through pg-trickle 0.105.1.
+> v0.10 adds operational hardening, bounded refresh loading, and cumulative recovery and restore coverage through pg-trickle 0.105.1.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.9
+## Install v0.10
 
-v0.9 supports PostgreSQL 18 and requires `pg_trickle` 0.105.1. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+v0.10 supports PostgreSQL 18 and requires `pg_trickle` 0.105.1. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
 
-The v0.9 actions store and validate definitions, compile executable graph stages, install private stream members transactionally, refresh complete Graph V1 evidence, and publish ordinary PostgreSQL output tables atomically.
+The v0.10 actions store and validate definitions, compile executable graph stages, install private stream members transactionally, refresh complete Graph V1 evidence with bounded resource loading, and publish ordinary PostgreSQL output tables atomically.
 
 Build and copy the package:
 
@@ -132,7 +132,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The implemented v0.9 release stores definitions and durable MDM state, installs private Graph V1 members through pg-trickle, refreshes complete evidence, publishes stable identities and golden values, and exposes graph and publication state through `mdm.describe()`.
+The implemented v0.10 release stores definitions and durable MDM state, installs private Graph V1 members through pg-trickle, refreshes complete evidence, publishes stable identities and golden values, and includes operational tests for limits, retry, upgrade, backup, restore, and clone isolation.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

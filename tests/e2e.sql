@@ -33,12 +33,16 @@ BEGIN
 END
 $$;
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.9.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.10.0')
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
-       OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL THEN
-        RAISE EXCEPTION '0.8.0 to 0.9.0 upgrade did not install refresh catalog';
+       OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.graph_bindings_entity_definition_generation') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.graph_members_binding_ordinal') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
+        RAISE EXCEPTION '0.8.0 to 0.10.0 upgrade did not install operational hardening';
     END IF;
 END
 $$;
@@ -106,6 +110,7 @@ END
 $$;
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -119,13 +124,15 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.6.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.9.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.10.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
-       OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.9.0 upgrade did not install v0.9 catalog';
+       OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
+        RAISE EXCEPTION 'direct 0.2.0 to 0.10.0 upgrade did not install v0.10 catalog';
     END IF;
 END
 $$;

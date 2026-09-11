@@ -66,6 +66,7 @@ ALTER FUNCTION mdm_internal.explain_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.prepare_rebind(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_rebind(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_refresh(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_internal.refresh_access(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.preview_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_decision(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_golden_override(internal) OWNER TO :"helper_owner";

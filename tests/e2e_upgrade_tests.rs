@@ -11,6 +11,8 @@ fn test_upgrade_scripts_exist() {
     let upgrade_05_06 = root.join("sql").join("pg_mdm--0.5.0--0.6.0.sql");
     let upgrade_06_07 = root.join("sql").join("pg_mdm--0.6.0--0.7.0.sql");
     let upgrade_07_08 = root.join("sql").join("pg_mdm--0.7.0--0.8.0.sql");
+    let upgrade_08_09 = root.join("sql").join("pg_mdm--0.8.0--0.9.0.sql");
+    let upgrade_09_10 = root.join("sql").join("pg_mdm--0.9.0--0.10.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -40,6 +42,14 @@ fn test_upgrade_scripts_exist() {
         upgrade_07_08.is_file(),
         "0.7.0 -> 0.8.0 upgrade script must exist"
     );
+    assert!(
+        upgrade_08_09.is_file(),
+        "0.8.0 -> 0.9.0 upgrade script must exist"
+    );
+    assert!(
+        upgrade_09_10.is_file(),
+        "0.9.0 -> 0.10.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -62,4 +72,10 @@ fn test_upgrade_scripts_exist() {
     let sql_07_08 = fs::read_to_string(&upgrade_07_08).expect("read 0.7.0 to 0.8.0");
     assert!(sql_07_08.contains("mdm_internal.graph_bindings"));
     assert!(sql_07_08.contains("mdm_admin.drop_entity"));
+    let sql_08_09 = fs::read_to_string(&upgrade_08_09).expect("read 0.8.0 to 0.9.0");
+    assert!(sql_08_09.contains("graph_refresh_id"));
+    assert!(sql_08_09.contains("refresh_wrapper"));
+    let sql_09_10 = fs::read_to_string(&upgrade_09_10).expect("read 0.9.0 to 0.10.0");
+    assert!(sql_09_10.contains("graph_bindings_entity_definition_generation"));
+    assert!(sql_09_10.contains("operations_entity_started"));
 }

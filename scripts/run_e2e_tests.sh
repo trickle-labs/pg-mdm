@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.9.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.10.0-e2e}
 container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
@@ -73,6 +73,54 @@ original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundati
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
 original_artifacts=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$artifact_query")
 docker exec "$container" pg_dump -Fc -U postgres foundation >"$dump_file"
+before_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
+before_output_rows=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT count(*) FROM mdm_out.customer")
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL'
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    failed boolean := false;
+    create_result record;
+    result jsonb;
+BEGIN
+    SELECT * INTO STRICT create_result
+    FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
+        '{limits,max_active_records}', '2'), 4);
+    BEGIN
+        PERFORM mdm.refresh('customer', 'ALLOW');
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_RESOLVER_LIMIT') = 0 THEN
+            RAISE;
+        END IF;
+        failed := true;
+    END;
+    IF NOT failed THEN
+        RAISE EXCEPTION 'resolver limit did not fail closed';
+    END IF;
+
+    SELECT * INTO STRICT create_result
+    FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
+        '{limits,max_active_records}', '100'), 5);
+    IF create_result.desired_version <> 6 THEN
+        RAISE EXCEPTION 'resolver-limit retry did not create version 6';
+    END IF;
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'false'
+       OR (result->>'publication_revision')::bigint <> 1 THEN
+        RAISE EXCEPTION 'resolver-limit retry changed the publication: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+SQL
+after_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
+after_output_rows=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT count(*) FROM mdm_out.customer")
+test "$after_revision" = "$before_revision"
+test "$after_output_rows" = "$before_output_rows"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
@@ -109,5 +157,32 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
 restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
 test "$original_artifacts" = "$restored_artifacts"
 
+docker exec "$container" createdb -U postgres --template=restored pg_mdm_clone
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d pg_mdm_clone <<'SQL'
+DO $$
+DECLARE
+    clone_entity_id uuid;
+    clone_source_identity_id uuid;
+BEGIN
+    SELECT e.entity_id INTO STRICT clone_entity_id
+    FROM mdm_internal.entities e
+    WHERE e.entity_name = 'customer';
+    SELECT s.source_identity_id INTO STRICT clone_source_identity_id
+    FROM mdm_internal.source_identities s
+    WHERE s.entity_id = clone_entity_id AND s.source_name = 'crm';
+    INSERT INTO mdm_internal.source_records
+        (entity_id, source_identity_id, source_record_key, active)
+    VALUES (clone_entity_id, clone_source_identity_id, '\x01020307'::bytea, true);
+END
+$$;
+SQL
+clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone \
+    -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
+restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
+    -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
+test "$clone_sources" = 4
+test "$restored_sources" = 3
+
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
+echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'
 echo 'SKIPPED: Delta V1 positive conformance, output_delta_consumer is not used by V1'

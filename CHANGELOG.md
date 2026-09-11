@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- Bound source-record loading by the configured resolver limit before resolution.
+- Scope refresh helper grants to the entity's current graph binding.
+- Add operational coverage for resource-limit rollback and retry, upgrades, backup, restore, and clone isolation.
+- Add the 0.9.0 to 0.10.0 upgrade path and archived release artifact.
+
 ## 0.9.0
 
 - Add strict Graph V1 refresh with proven source-boundary metadata.

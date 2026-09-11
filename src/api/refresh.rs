@@ -28,6 +28,10 @@ struct RefreshRequest {
     rebuild: bool,
 }
 
+struct RefreshAccessRequest {
+    entity_name: String,
+}
+
 struct PreviewRequest {
     entity_name: String,
     mode: String,
@@ -205,7 +209,7 @@ fn load_context(
         .ok_or_else(|| MdmError::Spi("artifact ID is NULL".into()))?;
     let binding = client
         .select(
-            "SELECT b.graph_digest, gm.relation_name FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC LIMIT 1",
+            "SELECT b.graph_binding_id::text, b.graph_digest, gm.relation_name FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC LIMIT 1",
             Some(1),
             &[entity_id.clone().into(), definition_version.into(), format!("golden/{}", entity_name).into()],
         )
@@ -216,19 +220,23 @@ fn load_context(
         ));
     }
     let binding_row = binding.first();
+    let binding_id = binding_row
+        .get::<String>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("graph binding ID is NULL".into()))?;
     let graph_digest = binding_row
-        .get::<Vec<u8>>(1)
+        .get::<Vec<u8>>(2)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Spi("graph digest is NULL".into()))?;
     let graph_root = binding_row
-        .get::<String>(2)
+        .get::<String>(3)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Spi("graph root relation is NULL".into()))?;
     let members = client
         .select(
-            "SELECT logical_id, relation_name FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b ON b.graph_binding_id = m.graph_binding_id WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC, m.topological_ordinal",
+            "SELECT m.logical_id, m.relation_name, m.relation_oid, pg_catalog.to_regclass(m.relation_name)::pg_catalog.oid, c.relowner FROM mdm_internal.graph_members m LEFT JOIN pg_catalog.pg_class c ON c.oid = m.relation_oid WHERE m.graph_binding_id = $1::pg_catalog.uuid ORDER BY m.topological_ordinal",
             None,
-            &[entity_id.clone().into(), definition_version.into()],
+            &[binding_id.into()],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
     let mut relations = BTreeMap::new();
@@ -241,6 +249,21 @@ fn load_context(
             .get::<String>(2)
             .map_err(|error| MdmError::Spi(error.to_string()))?
             .ok_or_else(|| MdmError::Spi("graph relation name is NULL".into()))?;
+        let relation_oid = member
+            .get::<pg_sys::Oid>(3)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("graph relation OID is NULL".into()))?;
+        let current_oid = member
+            .get::<pg_sys::Oid>(4)
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        let owner = member
+            .get::<pg_sys::Oid>(5)
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if current_oid != Some(relation_oid) || owner != Some(selected.oid) {
+            return Err(MdmError::GraphBinding(format!(
+                "graph member {relation_name} no longer matches its binding"
+            )));
+        }
         relations.entry(logical_id).or_insert(relation_name);
     }
     Ok(Context {
@@ -261,31 +284,28 @@ fn load_context(
     })
 }
 
-fn grant_refresh_access(_entity_name: &str) -> Result<(), MdmError> {
+fn grant_refresh_access(entity_name: &str) -> Result<(), MdmError> {
     let helper_owner = catalog::validate_helper_owner()?;
-    let (_, selected) = catalog::validate_caller(&helper_owner)?;
+    let relations = catalog::call_helper(
+        "refresh_access",
+        RefreshAccessRequest {
+            entity_name: entity_name.to_owned(),
+        },
+    )?
+    .0
+    .get("relations")
+    .and_then(Value::as_array)
+    .ok_or_else(|| MdmError::Spi("refresh access helper returned invalid relations".into()))?
+    .iter()
+    .map(|relation| {
+        relation
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| MdmError::Spi("refresh access relation is not text".into()))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
     Spi::connect_mut(|client| {
-        let members = client
-            .select(
-                "SELECT n.nspname::text, c.relname::text FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mdm_graph' AND c.relkind = 'r' AND c.relname LIKE 'mdm_g_%' AND c.relowner = $1 ORDER BY c.oid",
-                None,
-                &[selected.oid.into()],
-            )
-            .map_err(|error| MdmError::Spi(error.to_string()))?;
-        for member in members {
-            let schema_name = member
-                .get::<String>(1)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::Spi("graph schema name is NULL".into()))?;
-            let table_name = member
-                .get::<String>(2)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::Spi("graph relation name is NULL".into()))?;
-            let relation_name = format!(
-                "{}.{}",
-                quote_sql_identifier(&schema_name),
-                quote_sql_identifier(&table_name)
-            );
+        for relation_name in relations {
             client
                 .update(
                     &format!(
@@ -299,6 +319,41 @@ fn grant_refresh_access(_entity_name: &str) -> Result<(), MdmError> {
         }
         Ok(())
     })
+}
+
+#[pg_extern(
+    name = "refresh_access",
+    security_definer,
+    sql = "CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_access_wrapper';"
+)]
+#[search_path(pg_catalog, mdm_internal, pg_temp)]
+pub(crate) fn refresh_access(request: Internal) -> JsonB {
+    let result = (|| {
+        // SAFETY: only refresh constructs RefreshAccessRequest.
+        let request = unsafe { request.get::<RefreshAccessRequest>() }
+            .ok_or_else(|| MdmError::Unauthorized("refresh access request is required".into()))?;
+        let helper_owner = catalog::validate_helper_owner()?;
+        let (_, selected) = catalog::validate_caller(&helper_owner)?;
+        Spi::connect(|client| {
+            let rows = client
+                .select(
+                    "SELECT m.relation_name FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b ON b.graph_binding_id = m.graph_binding_id JOIN mdm_internal.entities e ON e.entity_id = b.entity_id WHERE e.entity_name = $1::pg_catalog.name AND b.definition_version = e.desired_version AND b.execution_role_oid = $2 AND b.graph_generation = (SELECT max(b2.graph_generation) FROM mdm_internal.graph_bindings b2 WHERE b2.entity_id = e.entity_id AND b2.definition_version = e.desired_version AND b2.execution_role_oid = $2) ORDER BY m.topological_ordinal",
+                    None,
+                    &[request.entity_name.clone().into(), selected.oid.into()],
+                )
+                .map_err(|error| MdmError::Spi(error.to_string()))?;
+            let relations = rows
+                .map(|member| {
+                    member
+                        .get::<String>(1)
+                        .map_err(|error| MdmError::Spi(error.to_string()))?
+                        .ok_or_else(|| MdmError::Spi("graph relation name is NULL".into()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(JsonB(json!({"relations": relations})))
+        })
+    })();
+    result.unwrap_or_else(|error| crate::raise(error))
 }
 
 fn refresh_graph(
@@ -424,14 +479,28 @@ fn refresh_graph(
     })
 }
 
-fn load_sources(client: &mut SpiClient<'_>, context: &Context) -> Result<Vec<SourceRow>, MdmError> {
+fn load_sources(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    max_active_records: usize,
+) -> Result<Vec<SourceRow>, MdmError> {
+    let limit = i64::try_from(max_active_records.saturating_add(1)).map_err(|_| {
+        MdmError::ResolverInvalid("max_active_records cannot be represented as bigint".into())
+    })?;
     let rows = client
         .select(
-            "SELECT r.source_record_id, s.source_name::text, r.source_record_key FROM mdm_internal.source_records r JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id WHERE r.entity_id = $1::pg_catalog.uuid AND r.active ORDER BY r.source_record_key, r.source_record_id",
+            "SELECT r.source_record_id, s.source_name::text, r.source_record_key FROM mdm_internal.source_records r JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id WHERE r.entity_id = $1::pg_catalog.uuid AND r.active ORDER BY r.source_record_key, r.source_record_id LIMIT $2::bigint",
             None,
-            &[context.entity_id.clone().into()],
+            &[context.entity_id.clone().into(), limit.into()],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if rows.len() > max_active_records {
+        return Err(MdmError::ResolverLimit {
+            resource: "max_active_records",
+            observed: rows.len(),
+            limit: max_active_records,
+        });
+    }
     rows.into_iter()
         .map(|row| {
             Ok(SourceRow {
@@ -1344,7 +1413,9 @@ fn persist_refresh_inner(
             session,
         )?;
         let graph = refresh_graph(client, &context, &request.full_policy)?;
-        let sources = load_sources(client, &context)?;
+        let limits = load_limits(&context);
+        limits.validate()?;
+        let sources = load_sources(client, &context, limits.max_active_records)?;
         let active = sources.iter().map(|row| row.id).collect::<BTreeSet<_>>();
         let records = sources
             .iter()
@@ -1360,8 +1431,6 @@ fn persist_refresh_inner(
             .map(|source| (source.id, source.source_name.clone()))
             .collect::<BTreeMap<_, _>>();
         let pair_decisions = load_pair_decisions(client, &context, &active, &source_names)?;
-        let limits = load_limits(&context);
-        limits.validate()?;
         let resolution = crate::resolver::resolve(ResolverInput {
             records,
             manual_matches,
