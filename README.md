@@ -3,17 +3,17 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.7 adds stable identity, golden selection, review lifecycle, bounded explanations, and publication history. Live graph refresh remains deferred.
+> v0.8 installs immutable, private Graph V1 bindings through pg-trickle 0.105.1. Graph refresh remains deferred to v0.9.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.7
+## Install v0.8
 
-v0.7 supports PostgreSQL 18 and requires `pg_trickle` 0.104.0. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+v0.8 supports PostgreSQL 18 and requires `pg_trickle` 0.105.1. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
 
-The v0.7 actions store and validate definitions, compile record, normalization, candidate, and evidence stages, accept steward decisions, and resolve complete terminal inputs in Rust. They do not execute graph SQL or create public output tables.
+The v0.8 actions store and validate definitions, compile executable graph stages, install private stream members transactionally, and record public Graph V1 contracts. They do not refresh graphs or create public output tables.
 
 Build and copy the package:
 
@@ -132,7 +132,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The implemented v0.7 release stores developmental definitions, durable source records and steward decisions, runs the conservative full-reference resolver, reconciles stable IDs, selects golden values, tracks reviews, and exposes bounded retained explanations. Graph execution and live refresh remain deferred.
+The implemented v0.8 release stores definitions and durable MDM state, installs private Graph V1 members through pg-trickle, records immutable graph bindings, and exposes bounded graph state through `mdm.describe()`. Graph refresh and publication remain deferred.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

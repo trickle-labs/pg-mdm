@@ -10,6 +10,16 @@ pub enum MdmError {
     CapabilityInvalid(String),
     #[error("external_graph_refresh 1.x is disabled by pg_trickle")]
     GraphCapabilityDisabled,
+    #[error("invalid graph artifact: {0}")]
+    GraphArtifact(String),
+    #[error("graph installation failed: {0}")]
+    GraphInstallation(String),
+    #[error("graph contract is invalid: {0}")]
+    GraphContract(String),
+    #[error("graph binding is invalid: {0}")]
+    GraphBinding(String),
+    #[error("graph lifecycle failed: {0}")]
+    GraphLifecycle(String),
     #[error("helper ownership is unsafe: {0}")]
     HelperOwnerUnsafe(String),
     #[error("caller is not authorized: {0}")]
@@ -106,6 +116,11 @@ impl MdmError {
             Self::CapabilityVersion { .. } => "MDM_PGT_CAPABILITY_VERSION",
             Self::CapabilityInvalid(_) => "MDM_PGT_CAPABILITY_INVALID",
             Self::GraphCapabilityDisabled => "MDM_PGT_CAPABILITY_DISABLED",
+            Self::GraphArtifact(_) => "MDM_GRAPH_ARTIFACT",
+            Self::GraphInstallation(_) => "MDM_GRAPH_INSTALLATION",
+            Self::GraphContract(_) => "MDM_GRAPH_CONTRACT",
+            Self::GraphBinding(_) => "MDM_GRAPH_BINDING",
+            Self::GraphLifecycle(_) => "MDM_GRAPH_LIFECYCLE",
             Self::HelperOwnerUnsafe(_) => "MDM_HELPER_OWNER_UNSAFE",
             Self::Unauthorized(_) => "MDM_UNAUTHORIZED",
             Self::OperationState(_) => "MDM_OPERATION_STATE",

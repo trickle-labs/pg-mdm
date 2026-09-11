@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.7.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.8.0-e2e}
 container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
@@ -93,7 +93,7 @@ docker exec "$container" createdb -U postgres restored
 chmod 0644 "$dump_file"
 docker cp "$dump_file" "$container:/tmp/foundation.dump" >/dev/null
 docker exec "$container" sh -c \
-    "pg_restore -l /tmp/foundation.dump | grep -v 'TABLE DATA pgtrickle pgt_capture_instance' > /tmp/foundation.list"
+    "pg_restore -l /tmp/foundation.dump | grep -v 'TABLE DATA pgtrickle ' > /tmp/foundation.list"
 docker exec "$container" pg_restore -v -U postgres -d restored \
     --use-list=/tmp/foundation.list /tmp/foundation.dump >/dev/null
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \

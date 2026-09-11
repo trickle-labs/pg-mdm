@@ -119,6 +119,16 @@ pub(crate) fn validate_helper_owner() -> Result<Role, MdmError> {
             "protected tables have different owners".into(),
         ));
     }
+    let graph_schema_owner = Spi::get_one::<pg_sys::Oid>(
+        "SELECT nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'mdm_graph'",
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?
+    .ok_or_else(|| MdmError::HelperOwnerUnsafe("mdm_graph schema is missing".into()))?;
+    if graph_schema_owner != owner_oid {
+        return Err(MdmError::HelperOwnerUnsafe(
+            "mdm_graph schema has a different owner".into(),
+        ));
+    }
 
     let owner = role(owner_oid)?;
     if owner.superuser || owner.can_login || owner.bypass_rls {

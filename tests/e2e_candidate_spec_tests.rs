@@ -35,7 +35,7 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         .find(|node| node["logical_id"] == "pairs/organization")
         .unwrap();
     let pair_sql = pair["defining_sql"].as_str().unwrap();
-    assert!(pair_sql.contains("block_stats_same_email"));
+    assert!(pair_sql.contains("@{block-stats/same_email}"));
     assert!(pair_sql.contains("source_sort_key < r.source_sort_key"));
     assert!(
         candidate_block_overflow_sql(

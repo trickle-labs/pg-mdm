@@ -1,11 +1,15 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::candidate::{CandidateChannel, CandidatePlan, ChannelKind};
 use crate::definition::{Entity, Field, MatchRule, Source};
+use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 4;
+pub const COMPILER_VERSION: i32 = 5;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
@@ -16,8 +20,123 @@ fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Va
         "defining_sql": sql,
         "initialize": false,
         "orchestration_mode": "EXTERNAL",
-        "executable": false
+        "executable": true
     })
+}
+
+fn node_ref(logical_id: &str) -> String {
+    format!("@{{{logical_id}}}")
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct GraphNode {
+    pub logical_id: String,
+    pub dependencies: Vec<String>,
+    pub output_schema: Value,
+    pub defining_sql: String,
+    pub initialize: bool,
+    pub orchestration_mode: String,
+    pub executable: bool,
+}
+
+pub fn artifact_nodes(artifact: &[u8]) -> Result<(Vec<GraphNode>, Vec<String>), MdmError> {
+    let value: Value = serde_json::from_slice(artifact)
+        .map_err(|error| MdmError::GraphArtifact(format!("artifact JSON is invalid: {error}")))?;
+    if value["format_version"] != ARTIFACT_FORMAT_VERSION
+        || value["compiler_version"] != COMPILER_VERSION
+        || value["executable"] != true
+    {
+        return Err(MdmError::GraphArtifact(
+            "artifact format, compiler, or executable flag is unsupported".into(),
+        ));
+    }
+    let nodes: Vec<GraphNode> = serde_json::from_value(value["nodes"].clone())
+        .map_err(|error| MdmError::GraphArtifact(format!("nodes are invalid: {error}")))?;
+    let roots: Vec<String> = serde_json::from_value(value["roots"].clone())
+        .map_err(|error| MdmError::GraphArtifact(format!("roots are invalid: {error}")))?;
+    if nodes.is_empty() || roots.is_empty() {
+        return Err(MdmError::GraphArtifact(
+            "artifact must contain nodes and roots".into(),
+        ));
+    }
+
+    let mut by_id = BTreeMap::new();
+    for node in &nodes {
+        if !node.executable || node.initialize || node.orchestration_mode != "EXTERNAL" {
+            return Err(MdmError::GraphArtifact(format!(
+                "node {} is not an executable external node",
+                node.logical_id
+            )));
+        }
+        if by_id.insert(node.logical_id.clone(), node).is_some() {
+            return Err(MdmError::GraphArtifact(format!(
+                "duplicate logical node {}",
+                node.logical_id
+            )));
+        }
+    }
+    for root in &roots {
+        if !by_id.contains_key(root) {
+            return Err(MdmError::GraphArtifact(format!(
+                "missing graph root {root}"
+            )));
+        }
+    }
+
+    let mut indegree = BTreeMap::<String, usize>::new();
+    let mut dependents = BTreeMap::<String, Vec<String>>::new();
+    for node in &nodes {
+        indegree.insert(node.logical_id.clone(), node.dependencies.len());
+        for dependency in &node.dependencies {
+            if !by_id.contains_key(dependency) {
+                return Err(MdmError::GraphArtifact(format!(
+                    "node {} depends on missing node {dependency}",
+                    node.logical_id
+                )));
+            }
+            dependents
+                .entry(dependency.clone())
+                .or_default()
+                .push(node.logical_id.clone());
+        }
+    }
+    let mut ready: BTreeSet<String> = indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut ordered = Vec::with_capacity(nodes.len());
+    while let Some(id) = ready.pop_first() {
+        ordered.push(by_id[&id].clone());
+        for dependent in dependents.get(&id).into_iter().flatten() {
+            let degree = indegree
+                .get_mut(dependent)
+                .expect("dependent was inserted with an indegree");
+            *degree -= 1;
+            if *degree == 0 {
+                ready.insert(dependent.clone());
+            }
+        }
+    }
+    if ordered.len() != nodes.len() {
+        return Err(MdmError::GraphArtifact(
+            "graph dependencies contain a cycle".into(),
+        ));
+    }
+    Ok((ordered, roots))
+}
+
+pub fn render_sql(sql: &str, relations: &BTreeMap<String, String>) -> Result<String, MdmError> {
+    let mut rendered = sql.to_string();
+    for (logical_id, relation) in relations {
+        rendered = rendered.replace(&node_ref(logical_id), relation);
+    }
+    if rendered.contains("@{") {
+        return Err(MdmError::GraphArtifact(
+            "defining SQL contains an unresolved logical relation".into(),
+        ));
+    }
+    Ok(rendered)
 }
 
 pub fn source_record_sql(entity_name: &str, source: &Source) -> String {
@@ -32,7 +151,7 @@ pub fn source_record_sql(entity_name: &str, source: &Source) -> String {
     let mut select_items = vec![
         format!("'{}'::text AS source_name", source_name_escaped),
         format!(
-            "pgtrickle.encode_row_id_v2('MDM_SOURCE_KEY_V1', ROW((SELECT entity_id FROM mdm_internal.entities WHERE entity_name = '{entity_name_escaped}'), (SELECT source_identity_id FROM mdm_internal.source_identities WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = '{entity_name_escaped}') AND source_name = '{source_name_escaped}'), {})) AS source_record_key",
+            "pgtrickle.encode_row_id_v2('MDM_SOURCE_KEY_V1', ROW((SELECT entity_id FROM mdm_graph.source_identity_map WHERE entity_name = '{entity_name_escaped}' AND source_name = '{source_name_escaped}'), (SELECT source_identity_id FROM mdm_graph.source_identity_map WHERE entity_name = '{entity_name_escaped}' AND source_name = '{source_name_escaped}'), {})) AS source_record_key",
             key_cols.join(", ")
         ),
     ];
@@ -128,37 +247,38 @@ pub fn normalized_field_sql(field: &Field, sources: &[Source]) -> String {
 
         let normalize_call = if field.cleaner == "date" || field.logical_type == "date" {
             format!(
-                "mdm_internal.normalize_date({}, '{cleaner_escaped}', 1, {}, '{options_escaped}'::jsonb)",
+                "mdm_graph.normalize_date(({})::date, '{cleaner_escaped}', 1, {}, '{options_escaped}'::jsonb)",
                 quote_identifier(&field.name),
                 quote_identifier(&format!("{}_state", field.name))
             )
         } else {
             format!(
-                "mdm_internal.normalize_text({}, '{cleaner_escaped}', 1, {}, '{options_escaped}'::jsonb)",
+                "mdm_graph.normalize_text(({})::text, '{cleaner_escaped}', 1, {}, '{options_escaped}'::jsonb)",
                 quote_identifier(&field.name),
                 quote_identifier(&format!("{}_state", field.name))
             )
         };
 
+        let raw_value = format!("{}::text", quote_identifier(&field.name));
+        let row_changed_at: String = source.row_changed_at.as_deref().map_or_else(
+            || "NULL::timestamptz".into(),
+            |_| "row_changed_at::timestamptz".into(),
+        );
         let source_escaped = source.name.replace('\'', "''");
-        let records_name = format!("records_{}", source.name);
-        let records_relation = if records_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        {
-            records_name
-        } else {
-            quote_identifier(&records_name)
-        };
+        let records_relation = node_ref(&format!("records/{}", source.name));
         let part_sql = format!(
-            "SELECT '{source_escaped}'::text AS source_name, s.source_record_key, sr.source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, (n).state, (n).normalized, (n).canonical_bytes\nFROM (SELECT source_record_key, {normalize_call} AS n FROM {records_relation}) s\nJOIN mdm_internal.source_records sr ON sr.source_record_key = s.source_record_key AND sr.active\nJOIN mdm_internal.source_identities si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
+            "SELECT '{source_escaped}'::text AS source_name, s.source_record_key, sr.source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, s.raw_value, s.row_changed_at, (n).state, (n).normalized, (n).canonical_bytes\nFROM (SELECT source_record_key, {raw_value} AS raw_value, {row_changed_at} AS row_changed_at, {normalize_call} AS n FROM {records_relation}) s\nJOIN mdm_graph.source_records sr ON sr.source_record_key = s.source_record_key AND sr.active\nJOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
         );
         parts.push(part_sql);
     }
 
     if parts.is_empty() {
+        let fallback = sources
+            .first()
+            .map(|source| node_ref(&format!("records/{}", source.name)))
+            .unwrap_or_else(|| "pg_catalog.pg_class".into());
         format!(
-            "SELECT NULL::text AS source_name, NULL::bytea AS source_record_key, NULL::uuid AS source_record_id, NULL::bytea AS source_sort_key, '{field_escaped}'::text AS field_name, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes WHERE false"
+            "SELECT NULL::text AS source_name, NULL::bytea AS source_record_key, NULL::uuid AS source_record_id, NULL::bytea AS source_sort_key, '{field_escaped}'::text AS field_name, NULL::text AS raw_value, NULL::timestamptz AS row_changed_at, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback} AS empty WHERE false"
         )
     } else {
         parts.join("\nUNION ALL\n")
@@ -166,11 +286,16 @@ pub fn normalized_field_sql(field: &Field, sources: &[Source]) -> String {
 }
 
 fn normalized_node(field: &Field, sources: &[Source]) -> Value {
-    let deps: Vec<String> = sources
+    let mut deps: Vec<String> = sources
         .iter()
         .filter(|source| source.fields.contains_key(&field.name))
         .map(|source| format!("records/{}", source.name))
         .collect();
+    if deps.is_empty()
+        && let Some(source) = sources.first()
+    {
+        deps.push(format!("records/{}", source.name));
+    }
 
     let sql = normalized_field_sql(field, sources);
 
@@ -184,6 +309,8 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
             "source_record_id": "uuid",
             "source_sort_key": "bytea",
             "field_name": "text",
+            "raw_value": "text",
+            "row_changed_at": "timestamptz",
             "state": "text",
             "normalized": "text",
             "canonical_bytes": "bytea"
@@ -200,7 +327,7 @@ fn limits_for_entity(entity: &Entity) -> crate::candidate::CandidateLimits {
 }
 
 fn normalized_relation(field: &str) -> String {
-    quote_identifier(&format!("normalized_{field}"))
+    node_ref(&format!("normalized/{field}"))
 }
 
 fn sql_text(value: &str) -> String {
@@ -242,7 +369,7 @@ fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
         "NULL::smallint".into()
     } else {
         format!(
-            "mdm_internal.normalized_levenshtein_score({left_text}, {right_text}, (SELECT COALESCE((d.expanded_definition->'limits'->>'max_comparator_work')::bigint, {}::bigint) FROM mdm_internal.definitions d JOIN mdm_internal.entities e ON e.entity_id = d.entity_id AND d.definition_version = e.desired_version WHERE e.entity_name = {}::pg_catalog.name))::smallint",
+            "mdm_graph.normalized_levenshtein_score({left_text}, {right_text}, (SELECT COALESCE((d.expanded_definition->'limits'->>'max_comparator_work')::bigint, {}::bigint) FROM mdm_graph.definition_limits d WHERE d.entity_name = {}::text))::smallint",
             crate::comparators::DEFAULT_MAX_COMPARATOR_WORK,
             sql_text(entity_name)
         )
@@ -263,7 +390,7 @@ fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
         score
     };
     format!(
-        "SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, {rule}::text AS rule, {group}::text AS evidence_group, {class} AS class, CASE WHEN {usable} THEN {score} ELSE NULL::smallint END AS score, {comparator}::text AS comparator, {version}::smallint AS comparator_version, CASE WHEN {usable} THEN mdm_internal.evidence_digest({left_text}) ELSE NULL::bytea END AS left_value_digest, CASE WHEN {usable} THEN mdm_internal.evidence_digest({right_text}) ELSE NULL::bytea END AS right_value_digest\nFROM {pairs} p\n{}",
+        "SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, {rule}::text AS rule, {group}::text AS evidence_group, {class} AS class, CASE WHEN {usable} THEN {score} ELSE NULL::smallint END AS score, {comparator}::text AS comparator, {version}::smallint AS comparator_version, CASE WHEN {usable} THEN mdm_graph.evidence_digest({left_text}) ELSE NULL::bytea END AS left_value_digest, CASE WHEN {usable} THEN mdm_graph.evidence_digest({right_text}) ELSE NULL::bytea END AS right_value_digest\nFROM {pairs} p\n{}",
         joins.join("\n"),
         rule = sql_text(&rule.name),
         group = sql_text(&rule.evidence_group),
@@ -272,16 +399,22 @@ fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
         comparator =
             sql_text(crate::comparators::comparator_name(&rule.comparison).unwrap_or("unknown_v1")),
         version = crate::comparators::comparator_version(&rule.comparison).unwrap_or(1),
-        pairs = quote_identifier(&format!("pairs_{entity_name}")),
+        pairs = node_ref(&format!("pairs/{entity_name}")),
         usable = usable,
         left_text = left_text,
         right_text = right_text,
     )
 }
 
-pub fn pair_evidence_sql(entity_name: &str, rules: &[MatchRule]) -> String {
+fn pair_evidence_sql_with_relation(
+    entity_name: &str,
+    rules: &[MatchRule],
+    fallback_relation: &str,
+) -> String {
     if rules.is_empty() {
-        return "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, NULL::text AS rule, NULL::text AS evidence_group, NULL::text AS class, NULL::smallint AS score, NULL::text AS comparator, NULL::smallint AS comparator_version, NULL::bytea AS left_value_digest, NULL::bytea AS right_value_digest WHERE false".into();
+        return format!(
+            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, NULL::text AS rule, NULL::text AS evidence_group, NULL::text AS class, NULL::smallint AS score, NULL::text AS comparator, NULL::smallint AS comparator_version, NULL::bytea AS left_value_digest, NULL::bytea AS right_value_digest FROM {fallback_relation} AS empty WHERE false"
+        );
     }
     rules
         .iter()
@@ -290,16 +423,20 @@ pub fn pair_evidence_sql(entity_name: &str, rules: &[MatchRule]) -> String {
         .join("\nUNION ALL\n")
 }
 
+pub fn pair_evidence_sql(entity_name: &str, rules: &[MatchRule]) -> String {
+    pair_evidence_sql_with_relation(entity_name, rules, "pg_catalog.pg_class")
+}
+
 fn block_relation(channel: &CandidateChannel) -> String {
-    quote_identifier(&format!("blocks_{}", channel.channel_id))
+    node_ref(&format!("blocks/{}", channel.channel_id))
 }
 
 fn stats_relation(channel: &CandidateChannel) -> String {
-    quote_identifier(&format!("block_stats_{}", channel.channel_id))
+    node_ref(&format!("block-stats/{}", channel.channel_id))
 }
 
 fn pair_stats_relation(entity_name: &str) -> String {
-    quote_identifier(&format!("pair_stats_{entity_name}"))
+    node_ref(&format!("pair-stats/{entity_name}"))
 }
 
 fn channel_membership_sql(channel: &CandidateChannel) -> String {
@@ -391,9 +528,10 @@ pub fn candidate_block_overflow_sql(
     )
 }
 
-pub fn candidate_pairs_sql(
+fn candidate_pairs_sql_with_relation(
     channels: &[CandidateChannel],
     limits: &crate::candidate::CandidateLimits,
+    fallback_relation: &str,
 ) -> String {
     let blocks = channels
         .iter()
@@ -407,7 +545,9 @@ pub fn candidate_pairs_sql(
         })
         .collect::<Vec<_>>();
     if blocks.is_empty() {
-        return "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, ARRAY[]::text[] AS discovery_channels WHERE false".into();
+        return format!(
+            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, ARRAY[]::text[] AS discovery_channels FROM {fallback_relation} AS empty WHERE false"
+        );
     }
     let union = blocks.join("\nUNION ALL\n");
     format!(
@@ -416,9 +556,17 @@ pub fn candidate_pairs_sql(
     )
 }
 
-pub fn candidate_pair_stats_sql(
+pub fn candidate_pairs_sql(
     channels: &[CandidateChannel],
     limits: &crate::candidate::CandidateLimits,
+) -> String {
+    candidate_pairs_sql_with_relation(channels, limits, "pg_catalog.pg_class")
+}
+
+fn candidate_pair_stats_sql_with_relation(
+    channels: &[CandidateChannel],
+    limits: &crate::candidate::CandidateLimits,
+    fallback_relation: &str,
 ) -> String {
     let blocks = channels
         .iter()
@@ -432,12 +580,21 @@ pub fn candidate_pair_stats_sql(
         })
         .collect::<Vec<_>>();
     if blocks.is_empty() {
-        return "SELECT 0::bigint AS candidate_pairs".into();
+        return format!(
+            "SELECT 0::bigint AS candidate_pairs FROM {fallback_relation} AS empty WHERE false"
+        );
     }
     let union = blocks.join("\nUNION ALL\n");
     format!(
         "WITH blocks AS (\n{union}\n), pairs AS (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id\nFROM blocks l\nJOIN blocks r ON l.channel_id = r.channel_id AND l.block_key = r.block_key AND l.source_sort_key < r.source_sort_key\nGROUP BY l.source_record_id, r.source_record_id\n)\nSELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM pairs"
     )
+}
+
+pub fn candidate_pair_stats_sql(
+    channels: &[CandidateChannel],
+    limits: &crate::candidate::CandidateLimits,
+) -> String {
+    candidate_pair_stats_sql_with_relation(channels, limits, "pg_catalog.pg_class")
 }
 
 pub fn candidate_pair_overflow_sql(
@@ -465,6 +622,62 @@ fn match_node(channel: &CandidateChannel) -> Value {
     )
 }
 
+fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String]) -> String {
+    let guards = dependency_ids
+        .iter()
+        .map(|logical_id| {
+            format!(
+                "(SELECT pg_catalog.count(*) FROM {}) >= 0",
+                node_ref(logical_id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let guards = if guards.is_empty() {
+        "true".into()
+    } else {
+        guards
+    };
+    let rows = entity
+        .golden_values
+        .iter()
+        .map(|golden| {
+            let priority = entity
+                .sources
+                .iter()
+                .enumerate()
+                .map(|(index, source)| {
+                    format!(
+                        "WHEN {} THEN {}",
+                        sql_text(&source.name),
+                        index
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(
+                "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name {priority} ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes\nFROM {} n\nWHERE n.field_name = {} AND {guards}",
+                node_ref(&format!("normalized/{}", golden.field)),
+                sql_text(&golden.field),
+                guards = guards
+            )
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        format!(
+            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty WHERE false AND {guards} /* {} */",
+            node_ref(&format!("evidence/{}", entity.name)),
+            guards = guards
+        )
+    } else {
+        format!(
+            "{}\n/* {} */",
+            rows.join("\nUNION ALL\n"),
+            node_ref(&format!("evidence/{}", entity.name))
+        )
+    }
+}
+
 pub fn compile(entity: &Entity) -> Value {
     let mut nodes = Vec::new();
     for source in &entity.sources {
@@ -477,6 +690,14 @@ pub fn compile(entity: &Entity) -> Value {
     let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
         channels: Vec::new(),
     });
+    let fallback_logical_id = entity
+        .sources
+        .first()
+        .map(|source| format!("records/{}", source.name));
+    let fallback_relation = fallback_logical_id
+        .as_deref()
+        .map(node_ref)
+        .unwrap_or_else(|| "pg_catalog.pg_class".into());
     for channel in &plan.channels {
         nodes.push(match_node(channel));
         nodes.push(node(
@@ -492,7 +713,7 @@ pub fn compile(entity: &Entity) -> Value {
             json!({"channel_id":"text","block_key":"jsonb","block_records":"bigint","max_block_records":"bigint"}),
         ));
     }
-    let blocks: Vec<String> = plan
+    let mut blocks: Vec<String> = plan
         .channels
         .iter()
         .map(|channel| format!("blocks/{}", channel.channel_id))
@@ -509,24 +730,36 @@ pub fn compile(entity: &Entity) -> Value {
         .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
         .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
         .collect();
+    if plan.channels.is_empty()
+        && let Some(fallback) = &fallback_logical_id
+    {
+        blocks.push(fallback.clone());
+    }
     nodes.push(node(
         format!("pairs/{}", entity.name),
         blocks,
-        candidate_pairs_sql(&plan.channels, &limits),
+        candidate_pairs_sql_with_relation(&plan.channels, &limits, &fallback_relation),
         json!({"left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea","discovery_channels":"text[]"}),
     ));
+    let mut pair_stats_dependencies = plan
+        .channels
+        .iter()
+        .map(|channel| format!("block-stats/{}", channel.channel_id))
+        .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
+        )
+        .collect::<Vec<_>>();
+    if plan.channels.is_empty()
+        && let Some(fallback) = &fallback_logical_id
+    {
+        pair_stats_dependencies.push(fallback.clone());
+    }
     nodes.push(node(
         format!("pair-stats/{}", entity.name),
-        plan.channels
-            .iter()
-            .map(|channel| format!("block-stats/{}", channel.channel_id))
-            .chain(
-                plan.channels
-                    .iter()
-                    .map(|channel| format!("block-overflow/{}", channel.channel_id)),
-            )
-            .collect(),
-        candidate_pair_stats_sql(&plan.channels, &limits),
+        pair_stats_dependencies,
+        candidate_pair_stats_sql_with_relation(&plan.channels, &limits, &fallback_relation),
         json!({"candidate_pairs":"bigint"}),
     ));
     nodes.push(node(
@@ -546,11 +779,18 @@ pub fn compile(entity: &Entity) -> Value {
                 .map(|field| format!("normalized/{}", field.name)),
         )
         .chain(std::iter::once(format!("pairs/{}", entity.name)))
+        .chain(
+            entity
+                .matches
+                .is_empty()
+                .then_some(fallback_logical_id.clone())
+                .flatten(),
+        )
         .collect::<Vec<_>>();
     nodes.push(node(
         format!("evidence/{}", entity.name),
         evidence_dependencies,
-        pair_evidence_sql(&entity.name, &entity.matches),
+        pair_evidence_sql_with_relation(&entity.name, &entity.matches, &fallback_relation),
         json!({
             "left_source_record_id":"uuid",
             "right_source_record_id":"uuid",
@@ -566,16 +806,33 @@ pub fn compile(entity: &Entity) -> Value {
             "right_value_digest":"bytea"
         }),
     ));
+    let golden_dependencies = nodes
+        .iter()
+        .filter_map(|node| node["logical_id"].as_str().map(String::from))
+        .collect::<Vec<_>>();
     nodes.push(node(
         format!("golden/{}", entity.name),
-        vec![format!("evidence/{}", entity.name)],
-        "SELECT * FROM golden_candidates".into(),
-        json!({"mdm_id":"uuid"}),
+        golden_dependencies.clone(),
+        golden_sql(entity, &fallback_relation, &golden_dependencies),
+        json!({
+            "source_record_id":"uuid",
+            "source_name":"text",
+            "field_name":"text",
+            "source_priority":"integer",
+            "row_changed_at":"timestamptz",
+            "authoritative":"boolean",
+            "source_sort_key":"bytea",
+            "raw_value":"text",
+            "state":"text",
+            "normalized":"text",
+            "canonical_bytes":"bytea"
+        }),
     ));
     json!({
         "format_version": ARTIFACT_FORMAT_VERSION,
         "compiler_version": COMPILER_VERSION,
-        "executable": false,
+        "executable": true,
+        "roots": [format!("golden/{}", entity.name)],
         "nodes": nodes
     })
 }
@@ -594,11 +851,12 @@ mod tests {
         }))
         .expect("test entity parses");
         let graph = compile(&entity);
-        assert_eq!(graph["executable"], false);
-        assert_eq!(graph["compiler_version"], 4);
+        assert_eq!(graph["executable"], true);
+        assert_eq!(graph["compiler_version"], 5);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
+        artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
     }
 
     #[test]
@@ -657,13 +915,13 @@ mod tests {
             norm_node["defining_sql"]
                 .as_str()
                 .unwrap()
-                .contains("mdm_internal.normalize_text")
+                .contains("mdm_graph.normalize_text")
         );
         assert!(
             norm_node["defining_sql"]
                 .as_str()
                 .unwrap()
-                .contains("FROM records_crm")
+                .contains("FROM @{records/crm}")
         );
     }
 }

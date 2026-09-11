@@ -457,12 +457,15 @@ pub(crate) fn prepare(value: Value) -> Result<PreparedDefinition, MdmError> {
         &entity.limits["warning_block_records"],
     )?;
     entity.preset = presets::expand(entity.preset.clone())?;
+    let mut sources = Vec::with_capacity(entity.sources.len());
+    for index in 0..entity.sources.len() {
+        let source = entity.sources[index].clone();
+        let validated = validate_source(&source, &entity)?;
+        entity.sources[index].relation = validated.relation_name.clone();
+        sources.push(validated);
+    }
     let expanded_definition =
         canonical_definition(serde_json::to_value(&entity).expect("definition is serializable"));
-    let mut sources = Vec::with_capacity(entity.sources.len());
-    for source in &entity.sources {
-        sources.push(validate_source(source, &entity)?);
-    }
     if let Some(sources_for_latest) = entity
         .golden_values
         .iter()

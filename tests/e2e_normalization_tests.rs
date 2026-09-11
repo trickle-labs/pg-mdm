@@ -72,9 +72,9 @@ fn test_e2e_generated_normalization_sql_shape() {
 
     let email_field = &entity.fields[0];
     let norm_email_sql = normalized_field_sql(email_field, &entity.sources);
-    assert!(norm_email_sql.contains("mdm_internal.normalize_text"));
+    assert!(norm_email_sql.contains("mdm_graph.normalize_text"));
     assert!(norm_email_sql.contains("'email'"));
-    assert!(norm_email_sql.contains("FROM records_crm"));
+    assert!(norm_email_sql.contains("FROM @{records/crm}"));
 
     let dob_field = &entity.fields[2];
     let norm_dob_sql = normalized_field_sql(dob_field, &entity.sources);
@@ -82,7 +82,7 @@ fn test_e2e_generated_normalization_sql_shape() {
     assert!(norm_dob_sql.contains("WHERE false"));
 
     let graph = compile(&entity);
-    assert_eq!(graph["compiler_version"], 4);
+    assert_eq!(graph["compiler_version"], 5);
     let nodes = graph["nodes"].as_array().expect("nodes array");
     assert!(nodes.iter().any(|n| n["logical_id"] == "records/crm"));
     assert!(nodes.iter().any(|n| n["logical_id"] == "normalized/email"));

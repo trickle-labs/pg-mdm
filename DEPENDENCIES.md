@@ -12,12 +12,12 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Runtime PostgreSQL | 18.4, Debian Bookworm |
 | Build/test `pg_config` | 18.6 (`18.6-1.pgdg12+2`) |
 | PostgreSQL image | `postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf` |
-| `pg_trickle` version | 0.104.0 |
-| `pg_trickle` commit | `c9eee742c2ac96eb12023bdfd3898aeedaf9b6b6` |
-| `pg_trickle` tag object | `bb2601cd85e1b5223facb9a5a3566d708dc17f45` |
-| `pg_trickle` artifact | `pg_trickle-0.104.0-pg18-linux-amd64.tar.gz` |
-| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.104.0/pg_trickle-0.104.0-pg18-linux-amd64.tar.gz` |
-| Artifact SHA-256 | `ee23aaa3c646ac6d4982a7bad78cb5628e4b6e07ba2ebbda259149198f427c3d` |
+| `pg_trickle` version | 0.105.1 |
+| `pg_trickle` commit | `5bfdea89bbcca2bf6d606ddbf034b62eddf3b2ae` |
+| `pg_trickle` tag object | `fa6fbb0c17cdd3ac64f87b8d7611c828edaf5614` |
+| `pg_trickle` artifact | `pg_trickle-0.105.1-pg18-linux-amd64.tar.gz` |
+| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.1/pg_trickle-0.105.1-pg18-linux-amd64.tar.gz` |
+| Artifact SHA-256 | `a6b1942ce5d2517dc8ad94a04ba3f2508fad4be21d6fc247df873502bcf2e69e` |
 | Capture mode | trigger |
 
 The baseline capability response contains `external_graph_refresh 1.0 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.

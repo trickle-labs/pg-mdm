@@ -11,9 +11,9 @@ DECLARE
 BEGIN
     SELECT count(*) INTO schema_count
     FROM pg_catalog.pg_namespace
-    WHERE nspname IN ('mdm', 'mdm_out', 'mdm_steward', 'mdm_admin', 'mdm_internal');
-    IF schema_count <> 5 THEN
-        RAISE EXCEPTION 'expected five MDM schemas, found %', schema_count;
+    WHERE nspname IN ('mdm', 'mdm_out', 'mdm_steward', 'mdm_admin', 'mdm_internal', 'mdm_graph');
+    IF schema_count <> 6 THEN
+        RAISE EXCEPTION 'expected six MDM schemas, found %', schema_count;
     END IF;
     IF pg_catalog.to_regclass('mdm_internal.operations') IS NULL THEN
         RAISE EXCEPTION 'operations table is missing';
@@ -26,9 +26,19 @@ BEGIN
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_extension
-        WHERE extname = 'pg_mdm' AND extversion = '0.7.0'
+        WHERE extname = 'pg_mdm' AND extversion = '0.8.0'
     ) THEN
-        RAISE EXCEPTION 'pg_mdm 0.7.0 is not installed';
+        RAISE EXCEPTION 'pg_mdm 0.8.0 is not installed';
+    END IF;
+END
+$$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.8.0')
+       OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL THEN
+        RAISE EXCEPTION '0.7.0 to 0.8.0 upgrade did not install graph catalog';
     END IF;
 END
 $$;
@@ -105,12 +115,14 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.4.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.5.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.6.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.7.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.8.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
-       OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.7.0 upgrade did not install v0.7 catalog';
+       OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL THEN
+        RAISE EXCEPTION 'direct 0.2.0 to 0.8.0 upgrade did not install v0.8 catalog';
     END IF;
 END
 $$;
@@ -243,7 +255,7 @@ CREATE TABLE public.mdm_graph_publication (
 GRANT USAGE ON SCHEMA pgtrickle TO mdm_administrator;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_administrator;
 GRANT CREATE ON SCHEMA public TO mdm_administrator;
-GRANT SELECT ON public.mdm_graph_source TO mdm_administrator;
+GRANT SELECT, MAINTAIN ON public.mdm_graph_source TO mdm_administrator;
 GRANT SELECT, INSERT ON public.mdm_graph_publication TO mdm_administrator;
 
 SET SESSION AUTHORIZATION mdm_test_login;
@@ -425,13 +437,14 @@ RESET search_path;
 RESET ROLE;
 
 \connect foundation postgres
+GRANT USAGE ON SCHEMA public TO mdm_administrator;
 CREATE TABLE public.crm_customer (
     id bigint PRIMARY KEY,
     display_name text NOT NULL,
     email_address text,
     updated_at timestamptz NOT NULL
 );
-GRANT SELECT ON public.crm_customer TO mdm_administrator;
+GRANT SELECT, MAINTAIN ON public.crm_customer TO mdm_administrator;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -831,7 +844,7 @@ DROP ROLE mdm_source_owner;
 CREATE TABLE public.typed_customer (
     id bigint PRIMARY KEY, label varchar(80), amount numeric(12, 2), changed timestamp(3)
 );
-GRANT SELECT ON public.typed_customer TO mdm_administrator;
+GRANT SELECT, MAINTAIN ON public.typed_customer TO mdm_administrator;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 BEGIN;
@@ -864,7 +877,7 @@ $$;
 
 \connect foundation postgres
 DROP TABLE public.typed_customer;
-REVOKE SELECT ON public.crm_customer FROM mdm_administrator;
+REVOKE SELECT, MAINTAIN ON public.crm_customer FROM mdm_administrator;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
@@ -878,7 +891,7 @@ BEGIN
 END
 $$;
 \connect foundation postgres
-GRANT SELECT ON public.crm_customer TO mdm_administrator;
+GRANT SELECT, MAINTAIN ON public.crm_customer TO mdm_administrator;
 
 -- Capability availability is operational state, outside the definition identity.
 BEGIN;

@@ -19,6 +19,7 @@ pub struct ValidatedSource {
 #[derive(Debug)]
 struct RelationInfo {
     oid: pg_sys::Oid,
+    relation_name: String,
     kind: String,
     persistence: String,
     row_security: bool,
@@ -53,7 +54,7 @@ fn relation_info(source: &Source) -> Result<RelationInfo, MdmError> {
     Spi::connect(|client| {
         let table = client
             .select(
-                "SELECT c.relkind::text, c.relpersistence::text, c.relrowsecurity, c.relforcerowsecurity, pg_catalog.pg_has_role(current_user, c.relowner, 'USAGE'), COALESCE((SELECT jsonb_agg(jsonb_build_object('name', p.polname::text, 'permissive', p.polpermissive, 'roles', p.polroles::text, 'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid), 'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid)) ORDER BY p.polname) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid), '[]'::jsonb) FROM pg_catalog.pg_class c WHERE c.oid = $1",
+                "SELECT pg_catalog.format('%I.%I', n.nspname, c.relname), c.relkind::text, c.relpersistence::text, c.relrowsecurity, c.relforcerowsecurity, pg_catalog.pg_has_role(current_user, c.relowner, 'USAGE'), COALESCE((SELECT jsonb_agg(jsonb_build_object('name', p.polname::text, 'permissive', p.polpermissive, 'roles', p.polroles::text, 'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid), 'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid)) ORDER BY p.polname) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid), '[]'::jsonb) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = $1",
                 Some(1),
                 &[oid.into()],
             )
@@ -67,28 +68,32 @@ fn relation_info(source: &Source) -> Result<RelationInfo, MdmError> {
         let row = table.first();
         Ok(RelationInfo {
             oid,
-            kind: row
+            relation_name: row
                 .get::<String>(1)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("relation name is NULL".into()))?,
+            kind: row
+                .get::<String>(2)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Spi("relation kind is NULL".into()))?,
             persistence: row
-                .get::<String>(2)
+                .get::<String>(3)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Spi("relation persistence is NULL".into()))?,
             row_security: row
-                .get::<bool>(3)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .unwrap_or(false),
-            force_row_security: row
                 .get::<bool>(4)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .unwrap_or(false),
-            owner_privileges: row
+            force_row_security: row
                 .get::<bool>(5)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .unwrap_or(false),
+            owner_privileges: row
+                .get::<bool>(6)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Spi("relation ownership check is NULL".into()))?,
             policies: row
-                .get::<JsonB>(6)
+                .get::<JsonB>(7)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .map(|value| value.0)
                 .unwrap_or_else(|| json!([])),
@@ -139,6 +144,19 @@ fn has_select(relation_oid: pg_sys::Oid, column: Option<&str>) -> Result<bool, M
     Spi::get_one_with_args::<bool>(sql, &args)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Spi("privilege check returned NULL".into()))
+}
+
+fn has_delegated_source_access(relation_oid: pg_sys::Oid) -> Result<bool, MdmError> {
+    Spi::get_one_with_args::<bool>(
+        "SELECT pg_catalog.has_schema_privilege(current_user, c.relnamespace, 'USAGE') \
+                AND pg_catalog.has_table_privilege(current_user, $1, 'SELECT') \
+                AND pg_catalog.has_table_privilege(current_user, $1, 'MAINTAIN') \
+           FROM pg_catalog.pg_class c \
+          WHERE c.oid = $1",
+        &[relation_oid.into()],
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?
+    .ok_or_else(|| MdmError::Spi("delegated source privilege check returned NULL".into()))
 }
 
 fn key_contract(
@@ -339,9 +357,9 @@ pub(crate) fn validate_source(
             source.name
         )));
     }
-    if !has_select(relation.oid, None)? {
+    if !relation.owner_privileges && !has_delegated_source_access(relation.oid)? {
         return Err(MdmError::SourceInvalid(format!(
-            "execution role cannot SELECT {}",
+            "execution role requires owner authority or schema USAGE plus SELECT and MAINTAIN on {}",
             source.relation
         )));
     }
@@ -351,7 +369,7 @@ pub(crate) fn validate_source(
             source.name
         )));
     }
-    let key_contract = key_contract(&relation, &source.relation, &source.source_id)?;
+    let key_contract = key_contract(&relation, &relation.relation_name, &source.source_id)?;
     validate_mapping(&relation, source, entity)?;
 
     if let Some(column) = &source.row_changed_at {
@@ -406,14 +424,14 @@ pub(crate) fn validate_source(
             "tracked sources cannot define soft_delete_when".into(),
         ));
     }
-    let relation_name = source.relation.clone();
+    let relation_name = relation.relation_name.clone();
     let identity_digest = crate::definition::canonical::digest(
         "pg_mdm/source-identity/v1",
         &[&crate::definition::canonical::json_bytes(&key_contract)],
     );
     let binding_fingerprint = json!({
         "relation_oid": relation.oid.to_u32(),
-        "relation_name": source.relation,
+        "relation_name": relation.relation_name,
         "relkind": relation.kind,
         "relpersistence": relation.persistence,
         "row_security": relation.row_security,

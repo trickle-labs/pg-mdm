@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- Require the released and checksummed `pg_trickle` 0.105.1 Graph V1 artifact.
+- Compile portable executable Graph V1 artifacts and install private members transactionally.
+- Record graph contracts, expose graph state in `mdm.describe()`, and add confirmed entity cleanup.
+- Add the 0.7.0 to 0.8.0 upgrade path.
+
 ## Unreleased
 
 - Pin and admit `pg_trickle` v0.104.0 with stable Graph V1 capability, contract, ownership, RLS, source-boundary, and transactional rollback coverage.

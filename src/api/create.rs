@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
 use pgrx::{Internal, JsonB, Uuid};
@@ -5,11 +7,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::catalog;
-use crate::definition::canonical::canonical_definition;
+use crate::definition::canonical::{canonical_definition, digest, hex, json_bytes};
 use crate::definition::parse_entity;
 use crate::definition::validate::{PreparedDefinition, digest_hex, prepare};
 use crate::error::MdmError;
 use crate::graph_spec;
+use crate::source_record::quote_identifier;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct CreateResult {
@@ -155,6 +158,423 @@ fn complete_operation(client: &mut SpiClient<'_>, id: &str) -> Result<(), MdmErr
     Ok(())
 }
 
+struct InstalledMember {
+    logical_id: String,
+    ordinal: i32,
+    relation_oid: pg_sys::Oid,
+    relation_name: String,
+    contract_generation: i64,
+    contract_digest: Vec<u8>,
+    contract: Value,
+}
+
+fn source_binding_digest(prepared: &PreparedDefinition) -> Vec<u8> {
+    let sources = prepared
+        .sources
+        .iter()
+        .map(|source| {
+            json!({
+                "name": source.name,
+                "relation_name": source.relation_name,
+                "relation_oid": source.relation_oid,
+                "identity_digest": hex(&source.identity_digest),
+                "binding_fingerprint": source.binding_fingerprint
+            })
+        })
+        .collect::<Vec<_>>();
+    digest(
+        "pg_mdm/source-binding/v1",
+        &[&json_bytes(&canonical_definition(json!(sources)))],
+    )
+}
+
+fn physical_name(binding_id: &str, ordinal: i32) -> String {
+    format!("mdm_g_{}_{}", binding_id.replace('-', ""), ordinal)
+}
+
+fn grant_graph_access(client: &mut SpiClient<'_>, role: &str) -> Result<(), MdmError> {
+    let role = quote_identifier(role);
+    client
+        .update(
+            &format!("GRANT USAGE, CREATE ON SCHEMA mdm_graph TO {role}"),
+            None,
+            &[],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
+            &format!(
+                "GRANT SELECT, MAINTAIN ON mdm_graph.source_identity_map, mdm_graph.source_records, mdm_graph.definition_limits TO {role}"
+            ),
+            None,
+            &[],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
+            &format!(
+                "GRANT EXECUTE ON FUNCTION mdm_graph.normalize_text(text, text, integer, text, jsonb), mdm_graph.normalize_date(date, text, integer, text, jsonb), mdm_graph.normalized_levenshtein_score(text, text, bigint), mdm_graph.evidence_digest(text) TO {role}"
+            ),
+            None,
+            &[],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    Ok(())
+}
+
+fn revoke_graph_create(client: &mut SpiClient<'_>, role: &str) -> Result<(), MdmError> {
+    let role = quote_identifier(role);
+    client
+        .update(
+            &format!("REVOKE CREATE ON SCHEMA mdm_graph FROM {role}"),
+            None,
+            &[],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    Ok(())
+}
+
+fn member_contract(
+    client: &mut SpiClient<'_>,
+    relation_name: &str,
+    expected_query: &str,
+    role: &str,
+) -> Result<InstalledMember, MdmError> {
+    let relation_oid = client
+        .select(
+            "SELECT pg_catalog.to_regclass($1)::pg_catalog.oid",
+            Some(1),
+            &[relation_name.into()],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .first()
+        .get::<pg_sys::Oid>(1)
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .ok_or_else(|| {
+            MdmError::GraphContract(format!("created member {relation_name} is missing"))
+        })?;
+    let table = client
+        .select(
+            "SELECT contract_version, contract_generation, contract_digest, contract FROM pgtrickle.stream_table_contract($1::regclass)",
+            Some(1),
+            &[relation_name.into()],
+        )
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?;
+    if table.is_empty() {
+        return Err(MdmError::GraphContract(format!(
+            "contract for {relation_name} is missing"
+        )));
+    }
+    let row = table.first();
+    let version = row
+        .get::<i16>(1)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("contract version is NULL".into()))?;
+    let generation = row
+        .get::<i64>(2)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("contract generation is NULL".into()))?;
+    let contract_digest = row
+        .get::<Vec<u8>>(3)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("contract digest is NULL".into()))?;
+    let contract = row
+        .get::<JsonB>(4)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("contract is NULL".into()))?
+        .0;
+    let owner = client
+        .select(
+            "SELECT pg_catalog.pg_get_userbyid(c.relowner)::text FROM pg_catalog.pg_class c WHERE c.oid = $1",
+            Some(1),
+            &[relation_oid.into()],
+        )
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .first()
+        .get::<String>(1)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("member owner is NULL".into()))?;
+    if version != 1
+        || contract_digest.len() != 32
+        || owner != role
+        || contract.get("orchestration_mode").and_then(Value::as_str) != Some("EXTERNAL")
+        || contract
+            .get("relation")
+            .and_then(|value| value.get("owner"))
+            .and_then(Value::as_str)
+            != Some(role)
+    {
+        return Err(MdmError::GraphContract(format!(
+            "member contract for {relation_name} does not match its binding"
+        )));
+    }
+    if let Some(actual_query) = contract
+        .get("defining_query")
+        .or_else(|| contract.get("query"))
+        .and_then(Value::as_str)
+        && (actual_query.trim().is_empty() || expected_query.trim().is_empty())
+    {
+        return Err(MdmError::GraphContract(format!(
+            "member contract for {relation_name} has no defining query"
+        )));
+    }
+    Ok(InstalledMember {
+        logical_id: String::new(),
+        ordinal: 0,
+        relation_oid,
+        relation_name: relation_name.into(),
+        contract_generation: generation,
+        contract_digest,
+        contract,
+    })
+}
+
+fn install_graph(
+    client: &mut SpiClient<'_>,
+    entity_id: &str,
+    definition_version: i64,
+    prepared: &PreparedDefinition,
+    role: &str,
+) -> Result<(), MdmError> {
+    let (nodes, roots) = graph_spec::artifact_nodes(&prepared.artifact_bytes)?;
+    let artifact_id = client
+        .select(
+            "SELECT artifact_id::text FROM mdm_internal.definition_artifacts WHERE entity_id = $1::pg_catalog.uuid AND definition_version = $2 AND artifact_digest = $3",
+            Some(1),
+            &[
+                entity_id.into(),
+                definition_version.into(),
+                prepared.artifact_digest.clone().into(),
+            ],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .first()
+        .get::<String>(1)
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphInstallation("stored graph artifact is missing".into()))?;
+    let source_digest = source_binding_digest(prepared);
+    let existing = client
+        .select(
+            "SELECT graph_binding_id FROM mdm_internal.graph_bindings WHERE entity_id = $1::pg_catalog.uuid AND definition_version = $2 AND artifact_id = $3::pg_catalog.uuid AND execution_role_oid = $4 AND source_binding_digest = $5",
+            Some(1),
+            &[
+                entity_id.into(),
+                definition_version.into(),
+                artifact_id.clone().into(),
+                selected_oid().into(),
+                source_digest.clone().into(),
+            ],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
+
+    let binding_id = client
+        .select("SELECT pg_catalog.uuidv7()::text", Some(1), &[])
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .first()
+        .get::<String>(1)
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphInstallation("graph binding ID is NULL".into()))?;
+    let generation = client
+        .select(
+            "SELECT COALESCE(pg_catalog.max(graph_generation), 0) + 1 FROM mdm_internal.graph_bindings WHERE entity_id = $1::pg_catalog.uuid",
+            Some(1),
+            &[entity_id.into()],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .first()
+        .get::<i64>(1)
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphInstallation("graph generation is NULL".into()))?;
+
+    grant_graph_access(client, role)?;
+    client
+        .update(
+            "DELETE FROM mdm_graph.source_identity_map WHERE entity_id = $1::pg_catalog.uuid; DELETE FROM mdm_graph.source_records WHERE entity_id = $1::pg_catalog.uuid; DELETE FROM mdm_graph.definition_limits WHERE entity_id = $1::pg_catalog.uuid",
+            None,
+            &[entity_id.into()],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
+            "INSERT INTO mdm_graph.source_identity_map (entity_id, entity_name, source_identity_id, source_name) SELECT e.entity_id, e.entity_name::text, s.source_identity_id, s.source_name::text FROM mdm_internal.entities e JOIN mdm_internal.source_identities s ON s.entity_id = e.entity_id WHERE e.entity_id = $1::pg_catalog.uuid",
+            None,
+            &[entity_id.into()],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
+            "INSERT INTO mdm_graph.source_records (entity_id, source_identity_id, source_record_key, source_record_id, active) SELECT entity_id, source_identity_id, source_record_key, source_record_id, active FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid",
+            None,
+            &[entity_id.into()],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
+            "INSERT INTO mdm_graph.definition_limits (entity_id, entity_name, expanded_definition) SELECT e.entity_id, e.entity_name::text, d.expanded_definition FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = $2 WHERE e.entity_id = $1::pg_catalog.uuid",
+            None,
+            &[entity_id.into(), definition_version.into()],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    let mut relations = BTreeMap::new();
+    let mut members = Vec::with_capacity(nodes.len());
+    for (ordinal, node) in nodes.iter().enumerate() {
+        let name = physical_name(&binding_id, ordinal as i32);
+        let qualified = format!("mdm_graph.{}", quote_identifier(&name));
+        if client
+            .select(
+                "SELECT pg_catalog.to_regclass($1)::pg_catalog.oid",
+                Some(1),
+                &[qualified.clone().into()],
+            )
+            .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+            .first()
+            .get::<pg_sys::Oid>(1)
+            .map_err(|error| MdmError::GraphInstallation(error.to_string()))?
+            .is_some()
+        {
+            return Err(MdmError::GraphInstallation(format!(
+                "graph member name collision: {qualified}"
+            )));
+        }
+        let query = graph_spec::render_sql(&node.defining_sql, &relations)?;
+        client
+            .update(
+                "SELECT pgtrickle.create_stream_table(name => $1::text, query => $2::text, schedule => 'calculated', refresh_mode => 'AUTO', initialize => false, cdc_mode => 'trigger', orchestration_mode => 'EXTERNAL')",
+                Some(1),
+                &[qualified.clone().into(), query.clone().into()],
+            )
+            .map_err(|error| {
+                MdmError::GraphInstallation(format!("{}: {}", node.logical_id, error))
+            })?;
+        let mut member = member_contract(client, &qualified, &query, role)?;
+        member.logical_id = node.logical_id.clone();
+        member.ordinal = ordinal as i32;
+        relations.insert(node.logical_id.clone(), qualified);
+        members.push(member);
+    }
+
+    let root_names = roots
+        .iter()
+        .map(|root| {
+            relations
+                .get(root)
+                .cloned()
+                .ok_or_else(|| MdmError::GraphArtifact(format!("root {root} was not installed")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let contract_table = client
+        .select(
+            "SELECT contract_version, graph_digest, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+            Some(1),
+            &[root_names[0].clone().into()],
+        )
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?;
+    if contract_table.is_empty() {
+        return Err(MdmError::GraphContract("graph contract is missing".into()));
+    }
+    let graph_row = contract_table.first();
+    let graph_version = graph_row
+        .get::<i16>(1)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("graph contract version is NULL".into()))?;
+    let graph_digest = graph_row
+        .get::<Vec<u8>>(2)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("graph digest is NULL".into()))?;
+    let graph_contract = graph_row
+        .get::<JsonB>(3)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("graph contract is NULL".into()))?
+        .0;
+    let contract_members = graph_contract
+        .get("members")
+        .and_then(Value::as_array)
+        .ok_or_else(|| MdmError::GraphContract("graph members are missing".into()))?;
+    if graph_version != 1
+        || graph_digest.len() != 32
+        || contract_members.len() != members.len()
+        || contract_members.iter().any(|member| {
+            member.get("orchestration_mode").and_then(Value::as_str) != Some("EXTERNAL")
+        })
+    {
+        return Err(MdmError::GraphContract(
+            "graph contract does not match installed members".into(),
+        ));
+    }
+
+    let binding_input = json!({
+        "artifact_digest": hex(&prepared.artifact_digest),
+        "graph_generation": generation,
+        "execution_role_oid": selected_oid().to_u32(),
+        "source_binding_digest": hex(&source_digest),
+        "members": members.iter().map(|member| json!({
+            "logical_id": member.logical_id,
+            "ordinal": member.ordinal,
+            "relation_oid": member.relation_oid.to_u32(),
+            "relation_name": member.relation_name,
+            "contract_generation": member.contract_generation,
+            "contract_digest": hex(&member.contract_digest),
+            "contract": member.contract
+        })).collect::<Vec<_>>(),
+        "roots": members.iter().filter(|member| roots.contains(&member.logical_id)).map(|member| member.relation_oid.to_u32()).collect::<Vec<_>>(),
+        "graph_digest": hex(&graph_digest),
+        "graph_contract": graph_contract
+    });
+    let binding_digest = digest(
+        "pg_mdm/graph-binding/v1",
+        &[&json_bytes(&canonical_definition(binding_input))],
+    );
+
+    client
+        .update(
+            "INSERT INTO mdm_internal.graph_bindings (graph_binding_id, entity_id, definition_version, artifact_id, graph_generation, execution_role_oid, source_binding_digest, root_relation_oids, graph_contract_version, graph_digest, graph_contract, graph_binding_digest) VALUES ($1::pg_catalog.uuid, $2::pg_catalog.uuid, $3, $4::pg_catalog.uuid, $5, $6, $7, ARRAY[$8::oid], $9, $10, $11, $12)",
+            None,
+            &[
+                binding_id.clone().into(),
+                entity_id.into(),
+                definition_version.into(),
+                artifact_id.into(),
+                generation.into(),
+                selected_oid().into(),
+                source_digest.into(),
+                members
+                    .iter()
+                    .find(|member| roots.contains(&member.logical_id))
+                    .ok_or_else(|| MdmError::GraphContract("graph root member is missing".into()))?
+                    .relation_oid
+                    .into(),
+                graph_version.into(),
+                graph_digest.clone().into(),
+                JsonB(graph_contract.clone()).into(),
+                binding_digest.clone().into(),
+            ],
+        )
+        .map_err(|error| MdmError::GraphBinding(error.to_string()))?;
+    for member in &members {
+        client
+            .update(
+                "INSERT INTO mdm_internal.graph_members (graph_binding_id, logical_id, topological_ordinal, relation_oid, relation_name, contract_generation, contract_digest, contract) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7, $8)",
+                None,
+                &[
+                    binding_id.clone().into(),
+                    member.logical_id.clone().into(),
+                    member.ordinal.into(),
+                    member.relation_oid.into(),
+                    member.relation_name.clone().into(),
+                    member.contract_generation.into(),
+                    member.contract_digest.clone().into(),
+                    JsonB(member.contract.clone()).into(),
+                ],
+            )
+            .map_err(|error| MdmError::GraphBinding(error.to_string()))?;
+    }
+    revoke_graph_create(client, role)?;
+    Ok(())
+}
+
 fn persist(
     prepared: PreparedDefinition,
     entity: crate::definition::Entity,
@@ -173,9 +593,9 @@ fn persist(
             "execution role is not the selected role".into(),
         ));
     }
-    let capabilities = crate::integration::integration_capabilities()?;
+    let capabilities = crate::integration::require_graph_v1()?;
     let outcome = JsonB(
-        json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": false, "capabilities": capabilities}),
+        json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": true, "capabilities": capabilities}),
     );
     let mut operation_id = String::new();
     let mut version = 1_i64;
@@ -417,8 +837,9 @@ fn persist(
             }
             client.update("INSERT INTO mdm_internal.definitions (entity_id, definition_version, parent_version, user_definition, expanded_definition, logical_candidate_plan, semantic_manifest, definition_digest, comment, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)", None, &[entity_id.clone().into(), version.into(), if version > 1 { Some(version - 1) } else { None }.into(), JsonB(prepared.user_definition.clone()).into(), JsonB(prepared.expanded_definition.clone()).into(), JsonB(prepared.logical_candidate_plan.clone()).into(), JsonB(prepared.semantic_manifest.clone()).into(), prepared.definition_digest.clone().into(), comment.into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             client.update("INSERT INTO mdm_internal.definition_artifacts (entity_id, definition_version, compiler_version, artifact_format_version, artifact_bytes, artifact_digest, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7)", None, &[entity_id.clone().into(), version.into(), graph_spec::COMPILER_VERSION.into(), graph_spec::ARTIFACT_FORMAT_VERSION.into(), prepared.artifact_bytes.clone().into(), prepared.artifact_digest.clone().into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
-            client.update("UPDATE mdm_internal.entities SET desired_version = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[entity_id.into(), version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            client.update("UPDATE mdm_internal.entities SET desired_version = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[entity_id.clone().into(), version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
+        install_graph(client, &entity_id, version, &prepared, &selected)?;
         complete_operation(client, &operation_id)
     })?;
     Ok((operation_id, version, changed))

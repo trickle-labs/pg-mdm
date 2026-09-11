@@ -2,8 +2,8 @@
 ARG POSTGRES_IMAGE=postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf
 
 FROM ${POSTGRES_IMAGE} AS pg_trickle
-ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.104.0/pg_trickle-0.104.0-pg18-linux-amd64.tar.gz
-ARG PG_TRICKLE_SHA256=ee23aaa3c646ac6d4982a7bad78cb5628e4b6e07ba2ebbda259149198f427c3d
+ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.1/pg_trickle-0.105.1-pg18-linux-amd64.tar.gz
+ARG PG_TRICKLE_SHA256=a6b1942ce5d2517dc8ad94a04ba3f2508fad4be21d6fc247df873502bcf2e69e
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \

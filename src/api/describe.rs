@@ -1,13 +1,135 @@
 use pgrx::prelude::*;
 use pgrx::{Internal, JsonB};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::catalog;
+use crate::definition::canonical::hex;
 use crate::error::MdmError;
 
 struct DescribeRequest {
     entity_name: String,
     format: String,
+}
+
+fn graph_summary(
+    entity_id: &str,
+    definition_version: i64,
+    selected: &catalog::Role,
+    capability_enabled: bool,
+) -> Result<Value, MdmError> {
+    let mut errors = Vec::new();
+    if !capability_enabled {
+        errors.push(json!({
+            "code": "MDM_PGT_CAPABILITY_DISABLED",
+            "message": "Graph V1 is disabled"
+        }));
+    }
+    let binding = Spi::connect(|client| {
+        let table = client
+            .select(
+                "SELECT b.graph_generation, encode(b.graph_binding_digest, 'hex'), b.graph_contract_version, encode(b.graph_digest, 'hex'), cardinality(b.root_relation_oids), b.root_relation_oids[1], (SELECT count(*) FROM mdm_internal.graph_members m WHERE m.graph_binding_id = b.graph_binding_id) FROM mdm_internal.graph_bindings b WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC LIMIT 1",
+                Some(1),
+                &[entity_id.into(), definition_version.into()],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if table.is_empty() {
+            return Ok::<_, MdmError>(None);
+        }
+        let row = table.first();
+        Ok(Some((
+            row.get::<i64>(1)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("graph generation is NULL".into()))?,
+            row.get::<String>(2)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("graph binding digest is NULL".into()))?,
+            row.get::<i16>(3)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("graph contract version is NULL".into()))?,
+            row.get::<String>(4)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("graph digest is NULL".into()))?,
+            row.get::<i32>(5)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .unwrap_or(0),
+            row.get::<pg_sys::Oid>(6)
+                .map_err(|error| MdmError::Spi(error.to_string()))?,
+            row.get::<i64>(7)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("graph member count is NULL".into()))?,
+        )))
+    })?;
+    let Some((
+        generation,
+        binding_digest,
+        contract_version,
+        graph_digest,
+        root_count,
+        root_oid,
+        member_count,
+    )) = binding
+    else {
+        errors.push(json!({
+            "code": "MDM_GRAPH_BINDING_MISSING",
+            "message": "No graph binding is installed for the desired definition"
+        }));
+        return Ok(json!({
+            "graph_state": "absent",
+            "graph_generation": Value::Null,
+            "graph_binding_digest": Value::Null,
+            "graph_contract_version": Value::Null,
+            "graph_digest": Value::Null,
+            "member_count": 0,
+            "root_count": 0,
+            "blocking_errors": errors
+        }));
+    };
+    if binding_digest.len() != 64 || graph_digest.len() != 64 || contract_version != 1 {
+        errors.push(json!({
+            "code": "MDM_GRAPH_BINDING_INVALID",
+            "message": "Stored graph binding metadata is invalid"
+        }));
+    }
+    let members_valid = Spi::get_one_with_args::<bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM mdm_internal.graph_members m LEFT JOIN pg_catalog.pg_class c ON c.oid = m.relation_oid WHERE m.graph_binding_id = (SELECT b.graph_binding_id FROM mdm_internal.graph_bindings b WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC LIMIT 1) AND (c.oid IS NULL OR c.relowner <> $3))",
+        &[entity_id.into(), definition_version.into(), selected.oid.into()],
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?
+    .unwrap_or(false);
+    if !members_valid {
+        errors.push(json!({
+            "code": "MDM_GRAPH_MEMBER_DRIFT",
+            "message": "A graph member is missing or has a different owner"
+        }));
+    }
+    if let Some(root_oid) = root_oid {
+        let current_digest = Spi::get_one_with_args::<Vec<u8>>(
+            "SELECT graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+            &[root_oid.into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if current_digest.as_deref().map(hex) != Some(graph_digest.clone()) {
+            errors.push(json!({
+                "code": "MDM_GRAPH_CONTRACT_DRIFT",
+                "message": "The public Graph V1 contract no longer matches the binding"
+            }));
+        }
+    } else {
+        errors.push(json!({
+            "code": "MDM_GRAPH_ROOT_MISSING",
+            "message": "The graph root is missing"
+        }));
+    }
+    Ok(json!({
+        "graph_state": if errors.is_empty() { "ready" } else { "blocked" },
+        "graph_generation": generation,
+        "graph_binding_digest": binding_digest,
+        "graph_contract_version": contract_version,
+        "graph_digest": graph_digest,
+        "member_count": member_count,
+        "root_count": root_count,
+        "blocking_errors": errors
+    }))
 }
 
 #[pg_extern(
@@ -100,6 +222,18 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             return Ok(JsonB(row.3));
         }
         let capabilities = crate::integration::integration_capabilities()?;
+        let entity_id = Spi::get_one_with_args::<String>(
+            "SELECT entity_id::text FROM mdm_internal.entities WHERE entity_name = $1::pg_catalog.name",
+            &[entity_name.clone().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("entity ID is NULL".into()))?;
+        let graph = graph_summary(
+            &entity_id,
+            row.1,
+            &selected,
+            capabilities.external_graph_refresh.enabled,
+        )?;
         let sources = Spi::get_one_with_args::<JsonB>(
             "SELECT COALESCE(jsonb_agg(jsonb_build_object('name', source_name::text, 'relation', relation_name, 'key_contract', key_contract, 'identity_digest', encode(identity_digest, 'hex')) ORDER BY source_name), '[]'::jsonb) FROM mdm_internal.source_identities s JOIN mdm_internal.entities e ON e.entity_id = s.entity_id WHERE e.entity_name = $1::pg_catalog.name",
             &[entity_name.clone().into()],
@@ -158,10 +292,18 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "resolver_limits": row.3.get("limits").cloned().unwrap_or_else(|| serde_json::json!({})),
             "decisions": decision_metadata,
             "publication": publication_metadata,
-            "graph": capabilities.external_graph_refresh,
-            "graph_executable": false,
+            "graph": graph.clone(),
+            "graph_state": graph["graph_state"].clone(),
+            "graph_generation": graph["graph_generation"].clone(),
+            "graph_binding_digest": graph["graph_binding_digest"].clone(),
+            "graph_contract_version": graph["graph_contract_version"].clone(),
+            "graph_digest": graph["graph_digest"].clone(),
+            "member_count": graph["member_count"].clone(),
+            "root_count": graph["root_count"].clone(),
+            "graph_blocking_errors": graph["blocking_errors"].clone(),
+            "graph_executable": true,
             "sources": sources,
-            "blocking_errors": if capabilities.external_graph_refresh.enabled { Vec::<Value>::new() } else { vec![serde_json::json!({"code":"MDM_PGT_CAPABILITY_DISABLED","message":"Graph V1 is disabled; definitions remain developmental"})] },
+            "blocking_errors": graph["blocking_errors"].clone(),
             "definition": row.3
         })))
     })();
