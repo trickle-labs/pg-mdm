@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-archive=${1:-sql/archive/pg_mdm--0.8.0.sql}
+archive=${1:-sql/archive/pg_mdm--0.9.0.sql}
 
 test -f "$archive"
 
@@ -23,7 +23,8 @@ assert set(helpers) == {
     'mdm_admin.verify_installation', 'mdm_internal.persist_entity', 'mdm_internal.describe_entity',
     'mdm_internal.prepare_rebind', 'mdm_internal.persist_rebind', 'mdm_internal.persist_decision',
     'mdm_internal.explain_entity', 'mdm_internal.persist_golden_override',
-    'mdm_internal.persist_drop_entity', 'mdm_graph.normalize_text',
+    'mdm_internal.persist_drop_entity', 'mdm_internal.persist_refresh',
+    'mdm_internal.preview_entity', 'mdm_graph.normalize_text',
     'mdm_graph.normalize_date', 'mdm_graph.normalized_levenshtein_score',
     'mdm_graph.evidence_digest'
 }, helpers
@@ -34,7 +35,7 @@ if rg -n 'Spi::(run|run_with_args)\(&|client\.(select|update)\(&' src; then
     exit 1
 fi
 
-if rg -n 'pgtrickle_changes|pgt_[a-z_]+|set_orchestration_mode|refresh_graph_strict' src sql; then
+if rg -n 'pgtrickle_changes|pgt_[a-z_]+|set_orchestration_mode' src sql; then
     echo 'private or gated pg_trickle API referenced' >&2
     exit 1
 fi

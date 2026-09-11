@@ -69,4 +69,4 @@ check-upgrades:
     python3 scripts/check_upgrade_paths.py
 
 check-archive: package
-    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.8.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.8.0.sql
+    generated=$(find "{{package_dir}}" -name 'pg_mdm--0.9.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.9.0.sql

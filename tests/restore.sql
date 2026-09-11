@@ -17,8 +17,8 @@ BEGIN
        OR (SELECT count(*) FROM mdm_internal.output_names) <> 3
        OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 3
        OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 3
-       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 0
-       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 9
+       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 1
+       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 12
        OR (SELECT count(*) FROM mdm_internal.source_records WHERE source_record_key = '\x01020304'::bytea) <> 1 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore';
     END IF;

@@ -267,7 +267,7 @@ pub fn normalized_field_sql(field: &Field, sources: &[Source]) -> String {
         let source_escaped = source.name.replace('\'', "''");
         let records_relation = node_ref(&format!("records/{}", source.name));
         let part_sql = format!(
-            "SELECT '{source_escaped}'::text AS source_name, s.source_record_key, sr.source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, s.raw_value, s.row_changed_at, (n).state, (n).normalized, (n).canonical_bytes\nFROM (SELECT source_record_key, {raw_value} AS raw_value, {row_changed_at} AS row_changed_at, {normalize_call} AS n FROM {records_relation}) s\nJOIN mdm_graph.source_records sr ON sr.source_record_key = s.source_record_key AND sr.active\nJOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
+            "SELECT '{source_escaped}'::text AS source_name, s.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, s.raw_value AS raw_value, s.row_changed_at AS row_changed_at, (s.n).state AS state, (s.n).normalized AS normalized, (s.n).canonical_bytes AS canonical_bytes\nFROM (SELECT source_record_key, {raw_value} AS raw_value, {row_changed_at} AS row_changed_at, {normalize_call} AS n FROM {records_relation}) s\nJOIN mdm_graph.source_records sr ON sr.source_record_key = s.source_record_key AND sr.active\nJOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
         );
         parts.push(part_sql);
     }
@@ -358,11 +358,11 @@ fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
     let usable = usable.join(" AND ");
     let exact_equal = exact_equal.join(" AND ");
     let left_text = format!(
-        "pg_catalog.concat_ws(pg_catalog.chr(0), {})",
+        "pg_catalog.concat_ws(pg_catalog.chr(31), {})",
         left_values.join(", ")
     );
     let right_text = format!(
-        "pg_catalog.concat_ws(pg_catalog.chr(0), {})",
+        "pg_catalog.concat_ws(pg_catalog.chr(31), {})",
         right_values.join(", ")
     );
     let score = if rule.comparison == "exact" {

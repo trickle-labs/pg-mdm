@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.8.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.9.0-e2e}
 container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
@@ -74,7 +74,13 @@ artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER B
 original_artifacts=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$artifact_query")
 docker exec "$container" pg_dump -Fc -U postgres foundation >"$dump_file"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
-    -c 'DROP OWNED BY mdm_administrator; DROP ROLE mdm_administrator;
+    -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
+        REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
+        SET ROLE mdm_helper_owner;
+        REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
+        RESET ROLE;
+        DROP OWNED BY mdm_administrator;
+        DROP ROLE mdm_administrator;
         CREATE ROLE mdm_administrator NOLOGIN NOSUPERUSER NOBYPASSRLS;
         GRANT mdm_administrator TO mdm_test_login WITH SET TRUE, INHERIT FALSE;
         GRANT USAGE ON SCHEMA mdm TO mdm_administrator' >/dev/null

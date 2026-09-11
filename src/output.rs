@@ -58,13 +58,17 @@ pub fn output_table_ddl(
         .iter()
         .map(|field| format!("    {} {}", quote_identifier(&field.name), field.type_name))
         .collect::<Vec<_>>();
+    let golden = if golden.is_empty() {
+        String::new()
+    } else {
+        format!("{},\n", golden.join(",\n"))
+    };
     let entity = quote_identifier(entity_name);
     let members = quote_identifier(&format!("{entity_name}_members"));
     let review = quote_identifier(&format!("{entity_name}_review"));
     Ok(vec![
         format!(
-            "CREATE TABLE mdm_out.{entity} (\n    mdm_id uuid PRIMARY KEY,\n{},\n    member_count bigint NOT NULL,\n    has_review boolean NOT NULL,\n    last_change_revision bigint NOT NULL\n);",
-            golden.join(",\n")
+            "CREATE TABLE mdm_out.{entity} (\n    mdm_id uuid PRIMARY KEY,\n{golden}    member_count bigint NOT NULL,\n    has_review boolean NOT NULL,\n    last_change_revision bigint NOT NULL\n);"
         ),
         format!(
             "CREATE TABLE mdm_out.{members} (\n    source_record_id uuid PRIMARY KEY,\n    source_name name NOT NULL,\n    source_id jsonb NOT NULL,\n    mdm_id uuid NOT NULL,\n    active boolean NOT NULL,\n    first_membership_revision bigint NOT NULL,\n    last_membership_revision bigint NOT NULL,\n    membership_reason text NOT NULL,\n    last_change_revision bigint NOT NULL\n);"

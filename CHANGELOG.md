@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0
+
+- Add strict Graph V1 refresh with proven source-boundary metadata.
+- Reconcile identities, golden values, reviews, and ordinary PostgreSQL outputs atomically.
+- Add validation, sampled, and scoped preview results plus administrative rebuild.
+- Add the 0.8.0 to 0.9.0 upgrade path.
+
 ## 0.8.0
 
 - Require the released and checksummed `pg_trickle` 0.105.1 Graph V1 artifact.

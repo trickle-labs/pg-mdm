@@ -3,7 +3,7 @@
 CREATE DATABASE foundation;
 \connect foundation postgres
 CREATE EXTENSION pg_trickle;
-CREATE EXTENSION pg_mdm;
+CREATE EXTENSION pg_mdm VERSION '0.8.0';
 
 DO $$
 DECLARE
@@ -32,13 +32,13 @@ BEGIN
     END IF;
 END
 $$;
-ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.8.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.9.0')
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL THEN
-        RAISE EXCEPTION '0.7.0 to 0.8.0 upgrade did not install graph catalog';
+        RAISE EXCEPTION '0.8.0 to 0.9.0 upgrade did not install refresh catalog';
     END IF;
 END
 $$;
@@ -104,6 +104,8 @@ BEGIN
     END IF;
 END
 $$;
+ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -116,13 +118,14 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.5.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.6.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.8.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.9.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.8.0 upgrade did not install v0.8 catalog';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.9.0 upgrade did not install v0.9 catalog';
     END IF;
 END
 $$;
@@ -633,6 +636,43 @@ BEGIN
 END
 $$;
 
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    first_refresh jsonb;
+    second_refresh jsonb;
+    rebuilt jsonb;
+BEGIN
+    first_refresh := mdm.refresh('customer', 'ALLOW');
+    IF first_refresh->>'changed' <> 'true'
+       OR (first_refresh->>'publication_revision')::bigint <> 1
+       OR (first_refresh->>'graph_refresh_id')::bigint <= 0
+       OR first_refresh->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR length(first_refresh->>'source_boundary_digest') <> 64 THEN
+        RAISE EXCEPTION 'initial v0.9 refresh is invalid: %', first_refresh;
+    END IF;
+    second_refresh := mdm.refresh('customer', 'ALLOW');
+    IF second_refresh->>'changed' <> 'false'
+       OR (second_refresh->>'publication_revision')::bigint <> 1 THEN
+        RAISE EXCEPTION 'refresh no-op is invalid: %', second_refresh;
+    END IF;
+    rebuilt := mdm_admin.rebuild('customer', 'ALLOW');
+    IF rebuilt->>'entity_name' <> 'customer'
+       OR (rebuilt->>'publication_revision')::bigint <> 1 THEN
+        RAISE EXCEPTION 'administrative rebuild is invalid: %', rebuilt;
+    END IF;
+    IF mdm.preview('customer', 'validation')->>'exact' <> 'false'
+       OR mdm.preview('customer', 'sampled')->>'mode' <> 'sampled'
+       OR mdm.preview('customer', 'scoped', '{"source_record_ids":[]}'::jsonb)->>'exact' <> 'true' THEN
+        RAISE EXCEPTION 'preview modes are invalid';
+    END IF;
+END
+$$;
+RESET ROLE;
+
+
+\connect foundation postgres
 GRANT USAGE ON SCHEMA mdm_steward TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_steward.decide(text, uuid, uuid, text, bigint, text) TO mdm_administrator;
 CREATE FUNCTION public.e2e_steward_ids()

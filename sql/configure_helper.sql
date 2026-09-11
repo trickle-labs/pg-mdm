@@ -26,11 +26,15 @@ WHERE rolname = :'helper_owner'
 \endif
 
 BEGIN;
-GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_graph, pgtrickle TO :"helper_owner";
+GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_graph TO :"helper_owner";
+GRANT USAGE, CREATE ON SCHEMA mdm_out TO :"helper_owner";
+GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
 GRANT EXECUTE ON FUNCTION pgtrickle.integration_capabilities() TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.create_stream_table(text, text, text, text, boolean, text, text, text, boolean, boolean, text, integer, double precision, text, boolean, text, integer, text, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.stream_table_contract(regclass) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.graph_contract(regclass[]) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.refresh_graph_strict(regclass[], bytea, text) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) TO :"helper_owner" WITH GRANT OPTION;
 GRANT EXECUTE ON FUNCTION pgtrickle.drop_stream_table(text, boolean) TO :"helper_owner";
 ALTER TABLE mdm_internal.operations OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.entities OWNER TO :"helper_owner";
@@ -61,9 +65,12 @@ ALTER FUNCTION mdm_internal.describe_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.explain_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.prepare_rebind(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_rebind(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_internal.persist_refresh(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_internal.preview_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_decision(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_golden_override(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_admin.drop_entity(text, text) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_admin.rebuild(text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_drop_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.evidence_digest(text) OWNER TO :"helper_owner";

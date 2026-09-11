@@ -196,6 +196,13 @@ fn grant_graph_access(client: &mut SpiClient<'_>, role: &str) -> Result<(), MdmE
     let role = quote_identifier(role);
     client
         .update(
+            &format!("GRANT USAGE ON SCHEMA pgtrickle TO {role}"),
+            None,
+            &[],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
             &format!("GRANT USAGE, CREATE ON SCHEMA mdm_graph TO {role}"),
             None,
             &[],
@@ -733,21 +740,6 @@ fn persist(
         }
         if changed {
             for output in &prepared.output_names {
-                let objects = client
-                    .select(
-                        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mdm_out' AND c.relname = $1)",
-                        Some(1),
-                        &[output.name.clone().into()],
-                    )
-                    .map_err(|error| MdmError::Spi(error.to_string()))?;
-                let exists = objects
-                    .first()
-                    .get::<bool>(1)
-                    .map_err(|error| MdmError::Spi(error.to_string()))?
-                    .unwrap_or(false);
-                if exists {
-                    return Err(MdmError::OutputNameConflict(output.name.clone()));
-                }
                 let reserved = client
                     .select(
                         "SELECT entity_id::text FROM mdm_internal.output_names WHERE lower(output_name::text) = lower($1)",
@@ -764,6 +756,21 @@ fn persist(
                         return Err(MdmError::OutputNameConflict(output.name.clone()));
                     }
                 } else {
+                    let objects = client
+                        .select(
+                            "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mdm_out' AND c.relname = $1)",
+                            Some(1),
+                            &[output.name.clone().into()],
+                        )
+                        .map_err(|error| MdmError::Spi(error.to_string()))?;
+                    let exists = objects
+                        .first()
+                        .get::<bool>(1)
+                        .map_err(|error| MdmError::Spi(error.to_string()))?
+                        .unwrap_or(false);
+                    if exists {
+                        return Err(MdmError::OutputNameConflict(output.name.clone()));
+                    }
                     client
                         .update("INSERT INTO mdm_internal.output_names (output_name, entity_id, output_kind) VALUES ($1, $2::pg_catalog.uuid, $3)", None, &[output.name.clone().into(), entity_id.clone().into(), output.kind.clone().into()])
                         .map_err(|error| MdmError::Spi(error.to_string()))?;

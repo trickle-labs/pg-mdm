@@ -20,6 +20,10 @@ pub enum MdmError {
     GraphBinding(String),
     #[error("graph lifecycle failed: {0}")]
     GraphLifecycle(String),
+    #[error("source boundary is invalid: {0}")]
+    RefreshBoundary(String),
+    #[error("refresh failed: {0}")]
+    RefreshFailed(String),
     #[error("helper ownership is unsafe: {0}")]
     HelperOwnerUnsafe(String),
     #[error("caller is not authorized: {0}")]
@@ -121,6 +125,8 @@ impl MdmError {
             Self::GraphContract(_) => "MDM_GRAPH_CONTRACT",
             Self::GraphBinding(_) => "MDM_GRAPH_BINDING",
             Self::GraphLifecycle(_) => "MDM_GRAPH_LIFECYCLE",
+            Self::RefreshBoundary(_) => "MDM_REFRESH_BOUNDARY",
+            Self::RefreshFailed(_) => "MDM_REFRESH_FAILED",
             Self::HelperOwnerUnsafe(_) => "MDM_HELPER_OWNER_UNSAFE",
             Self::Unauthorized(_) => "MDM_UNAUTHORIZED",
             Self::OperationState(_) => "MDM_OPERATION_STATE",
