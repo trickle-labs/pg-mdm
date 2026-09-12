@@ -5,20 +5,10 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::identity::IdAllocator;
+
 pub const ISSUE_KEY_FORMAT_VERSION: u8 = 1;
 pub const SPLIT_NOTICE_REASON: &str = "SPLIT_NOTICE";
-pub trait IdAllocator {
-    fn next_id(&mut self) -> Uuid;
-}
-
-impl<F> IdAllocator for F
-where
-    F: FnMut() -> Uuid,
-{
-    fn next_id(&mut self) -> Uuid {
-        self()
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subject {

@@ -1,9 +1,10 @@
 #[path = "../src/review.rs"]
 mod review;
 
+use pg_mdm::identity::{self, IdAllocator};
 use pgrx::Uuid;
 use review::{
-    IdAllocator, ReviewCandidate, ReviewStatus, SplitNotice, Subject, issue_key, reconcile,
+    ReviewCandidate, ReviewStatus, SplitNotice, Subject, issue_key, reconcile,
     reconcile_with_splits,
 };
 use serde_json::json;

@@ -1,4 +1,4 @@
-use super::{ComparisonClass, ComparisonResult, SCORE_MAX};
+use super::{ComparisonClass, ComparisonResult};
 
 pub fn compare(left: Option<&[u8]>, right: Option<&[u8]>) -> ComparisonResult {
     match (left, right) {
@@ -14,13 +14,5 @@ pub fn compare(left: Option<&[u8]>, right: Option<&[u8]>) -> ComparisonResult {
             class: ComparisonClass::NoEvidence,
             score: None,
         },
-    }
-}
-
-pub fn score(left: Option<&[u8]>, right: Option<&[u8]>) -> Option<u16> {
-    match compare(left, right).class {
-        ComparisonClass::Agree => Some(SCORE_MAX),
-        ComparisonClass::Disagree => Some(0),
-        ComparisonClass::NoEvidence => None,
     }
 }

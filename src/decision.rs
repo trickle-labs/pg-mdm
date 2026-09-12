@@ -3,24 +3,6 @@ use pgrx::Uuid;
 use crate::constraint::{DecisionEdge, DecisionKind};
 use crate::error::MdmError;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DecisionWrite {
-    pub entity_id: Uuid,
-    pub left_source_record_id: Uuid,
-    pub right_source_record_id: Uuid,
-    pub decision: DecisionKind,
-    pub expected_version: i64,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DecisionResult {
-    pub operation_id: Uuid,
-    pub decision_id: Uuid,
-    pub decision_version: i64,
-    pub decision_epoch: i64,
-}
-
 pub fn validate_reason(reason: &str) -> Result<(), MdmError> {
     if reason.trim().is_empty() {
         return Err(MdmError::DecisionInvalid(
