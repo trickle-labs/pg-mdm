@@ -39,7 +39,8 @@ INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.te
 CREATE FUNCTION public.delay_release_output()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    PERFORM pg_catalog.pg_sleep(0.5);
+    -- Keep the publication pause longer than a Docker/psql polling round trip.
+    PERFORM pg_catalog.pg_sleep(5);
     RETURN NEW;
 END
 $$;
