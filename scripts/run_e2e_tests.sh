@@ -89,7 +89,9 @@ DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
-          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 2
+          AND source_record_id IN (
+              SELECT source_record_id FROM public.e2e_source_records(ARRAY[3]::bigint[]))) <> 1
+       OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'Before boundary') <> 1
        OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 0 THEN
         RAISE EXCEPTION 'source write after the returned boundary was published early';
     END IF;
@@ -116,7 +118,8 @@ DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
-          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 3
+          AND source_record_id IN (
+              SELECT source_record_id FROM public.e2e_source_records(ARRAY[4]::bigint[]))) <> 1
        OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 1 THEN
         RAISE EXCEPTION 'retry did not publish the later source write: members %, outputs %',
             (SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb)
