@@ -9,20 +9,7 @@ pub(crate) enum CleanResult {
 }
 
 pub(crate) fn collapse_whitespace(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_whitespace = false;
-    for c in s.chars() {
-        if c.is_whitespace() {
-            if !in_whitespace {
-                result.push(' ');
-                in_whitespace = true;
-            }
-        } else {
-            result.push(c);
-            in_whitespace = false;
-        }
-    }
-    result
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(crate) fn clean_text(input: &str, max_len: usize) -> CleanResult {

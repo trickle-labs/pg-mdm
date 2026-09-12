@@ -20,7 +20,7 @@ use crate::output::{self, OutputField};
 use crate::pair::decide_pair_for_rules;
 use crate::resolver::{ResolverInput, ResolverLimits, ResolverRecord};
 use crate::review::{Review, ReviewCandidate, ReviewStatus, Subject};
-use crate::source_record::quote_identifier as quote_sql_identifier;
+use crate::source_record::quote_identifier;
 
 struct RefreshRequest {
     entity_name: String,
@@ -100,7 +100,7 @@ struct GoldenRow {
     canonical_bytes: Option<Vec<u8>>,
 }
 
-type PairEvidence = (CandidatePair, Vec<(EvidenceItem, String)>);
+type PairEvidence = (CandidatePair, Vec<EvidenceItem>);
 
 #[derive(Clone, Debug, Serialize)]
 struct RefreshResult {
@@ -130,10 +130,6 @@ fn normalized_state(value: &str) -> Result<NormalizedState, MdmError> {
             "unknown normalized state {other}"
         ))),
     }
-}
-
-fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn sql_literal(value: &Value, type_name: &str) -> String {
@@ -375,7 +371,7 @@ fn grant_refresh_access(entity_name: &str) -> Result<Vec<SourceSnapshot>, MdmErr
                 .update(
                     &format!(
                         "GRANT SELECT ON {relation_name} TO {}",
-                        quote_sql_identifier(&helper_owner.name)
+                        quote_identifier(&helper_owner.name)
                     ),
                     None,
                     &[],
@@ -808,20 +804,13 @@ fn load_pair_decisions(
                     MdmError::EvidenceInvalid("right value digest is not 32 bytes".into())
                 })?,
         };
-        let strength = context
-            .entity
-            .matches
-            .iter()
-            .find(|rule| rule.name == item.rule)
-            .map(|rule| rule.strength.clone())
-            .unwrap_or_else(|| "supporting".into());
         let key = if left <= right {
             (left, right)
         } else {
             (right, left)
         };
         let entry = grouped.entry(key).or_insert((pair, Vec::new()));
-        entry.1.push((item, strength));
+        entry.1.push(item);
     }
     Ok(grouped
         .into_values()
@@ -840,7 +829,7 @@ fn load_pair_decisions(
                 });
             decide_pair_for_rules(
                 pair,
-                evidence.into_iter().map(|(item, _)| item).collect(),
+                evidence,
                 &context.entity.matches,
                 authority_conflict,
                 None,

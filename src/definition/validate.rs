@@ -68,15 +68,6 @@ fn unique(names: impl IntoIterator<Item = String>, label: &str) -> Result<(), Md
     Ok(())
 }
 
-fn map_as_object(value: &Value, label: &str) -> Result<(), MdmError> {
-    if !value.is_object() {
-        return Err(MdmError::DefinitionInvalid(format!(
-            "{label} must be an object"
-        )));
-    }
-    Ok(())
-}
-
 pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
     identifier(&entity.name, "entity name")?;
     if entity.name.eq_ignore_ascii_case("mdm_id") {
@@ -115,10 +106,6 @@ pub(crate) fn validate_entity_local(entity: &Entity) -> Result<(), MdmError> {
             )));
         }
         unique(source.source_id.clone(), "source key column")?;
-        map_as_object(
-            &Value::Object(source.fields.clone().into_iter().collect()),
-            "source fields",
-        )?;
         if !source.authority.values().all(Value::is_string) {
             return Err(MdmError::DefinitionInvalid(format!(
                 "source {} authority values must be strings",

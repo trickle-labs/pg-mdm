@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use pgrx::Uuid;
 use sha2::{Digest, Sha256};
 
@@ -220,14 +218,4 @@ pub fn independent_agreeing_groups(evidence: &[EvidenceItem]) -> Vec<String> {
         .collect::<Vec<_>>();
     groups.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     groups
-}
-
-pub fn evidence_summary(evidence: &[EvidenceItem]) -> BTreeMap<String, usize> {
-    let mut result = BTreeMap::new();
-    for item in evidence {
-        if item.class == EvidenceClass::Agree {
-            *result.entry(item.evidence_group.clone()).or_insert(0) += 1;
-        }
-    }
-    result
 }

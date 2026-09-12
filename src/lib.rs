@@ -19,7 +19,6 @@ pub mod normalization;
 pub mod output;
 pub mod pair;
 pub mod presets;
-pub mod publication;
 pub mod resolver;
 pub mod review;
 pub mod schema;

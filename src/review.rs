@@ -7,9 +7,6 @@ use sha2::{Digest, Sha256};
 
 pub const ISSUE_KEY_FORMAT_VERSION: u8 = 1;
 pub const SPLIT_NOTICE_REASON: &str = "SPLIT_NOTICE";
-#[allow(dead_code)]
-pub type ReviewFact = ReviewCandidate;
-
 pub trait IdAllocator {
     fn next_id(&mut self) -> Uuid;
 }

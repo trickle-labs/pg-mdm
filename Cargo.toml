@@ -26,10 +26,6 @@ unicode-normalization = "=0.1.25"
 [dev-dependencies]
 proptest = "1"
 pgrx-tests = "=0.18.0"
-sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "json"] }
-testcontainers = "0.27"
-testcontainers-modules = { version = "0.15", features = ["postgres"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [profile.dev]
 panic = "unwind"

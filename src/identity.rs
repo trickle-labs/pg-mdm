@@ -78,32 +78,11 @@ pub struct IdentityState {
     pub splits: Vec<IdentitySplit>,
 }
 
-pub type PublishedIdentityState = IdentityState;
-pub type IdentityResolution = IdentityState;
-
 fn serialize_uuid<S>(value: &Uuid, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     serializer.serialize_bytes(value.as_bytes())
-}
-
-#[derive(Default)]
-pub struct TestAllocator {
-    pub ids: Vec<Uuid>,
-    pub next: usize,
-}
-
-impl IdAllocator for TestAllocator {
-    fn next_id(&mut self) -> Uuid {
-        let id = self
-            .ids
-            .get(self.next)
-            .copied()
-            .unwrap_or_else(|| Uuid::from_bytes([self.next as u8; 16]));
-        self.next += 1;
-        id
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

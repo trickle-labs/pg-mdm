@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use crate::definition::canonical::canonical_definition;
 use crate::definition::validate::validate_entity_local;
 use crate::error::MdmError;
+use crate::source_record::quote_identifier;
 
 fn text(value: &str, label: &str) -> Result<String, MdmError> {
     if value.is_empty() || value.bytes().any(|byte| byte == 0) {
@@ -22,10 +23,6 @@ fn object(value: JsonB, label: &str) -> Result<Value, MdmError> {
         )));
     }
     Ok(value.0)
-}
-
-fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 #[allow(clippy::too_many_arguments)]

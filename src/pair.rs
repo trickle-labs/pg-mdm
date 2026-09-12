@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use crate::candidate::CandidatePair;
 use crate::definition::MatchRule;
 use crate::error::MdmError;
@@ -86,53 +84,6 @@ fn automatic_sort_key(
         key.extend_from_slice(sort_key);
     }
     key
-}
-
-pub fn decide_pair(
-    pair: CandidatePair,
-    mut evidence: Vec<EvidenceItem>,
-    authority_conflict: bool,
-    manual_decision: Option<&str>,
-) -> PairDecision {
-    evidence.sort_by(|left, right| left.rule.as_bytes().cmp(right.rule.as_bytes()));
-    let groups = independent_agreeing_groups(&evidence);
-    let result = result_for_manual(manual_decision).unwrap_or_else(|| {
-        if authority_conflict {
-            PairResult::AuthoritativeConflict
-        } else if evidence.iter().any(|item| {
-            item.class == EvidenceClass::Agree
-                && item.evidence_group.as_str() != ""
-                && item.rule.as_str() != ""
-        }) && evidence.iter().any(|item| {
-            item.class == EvidenceClass::Agree
-                && item.rule.as_str() != ""
-                && item.evidence_group.as_str() != ""
-        }) {
-            // The strength is supplied by the rule name in the evidence metadata in
-            // SQL; pure callers use the explicit helper below when strength matters.
-            PairResult::AutomaticStrong
-        } else {
-            PairResult::NoEdge
-        }
-    });
-    let reason_codes = match result {
-        PairResult::Prohibited => vec!["NOT_MATCH".into()],
-        PairResult::ManualMatch => vec!["MATCH".into()],
-        PairResult::AuthoritativeConflict => vec!["AUTHORITATIVE_CONFLICT".into()],
-        PairResult::Review => vec!["SUPPORTING_ONLY".into()],
-        PairResult::AutomaticIdentity => vec!["IDENTITY_AGREE".into()],
-        PairResult::AutomaticStrong => vec!["STRONG_AGREE".into()],
-        PairResult::NoEdge => vec!["NO_AGREEMENT".into()],
-    };
-    let sort_key = automatic_sort_key(&pair, result, &groups, &evidence);
-    PairDecision {
-        pair,
-        result,
-        evidence,
-        independent_agreeing_groups: groups,
-        sort_key,
-        reason_codes,
-    }
 }
 
 pub fn decide_pair_with_strength(
@@ -243,12 +194,4 @@ pub fn sort_automatic_edges(decisions: &mut [PairDecision]) -> Result<(), MdmErr
         })
     });
     Ok(())
-}
-
-pub fn sort_key_version() -> u8 {
-    1
-}
-
-pub fn compare_sort_keys(left: &[u8], right: &[u8]) -> Ordering {
-    left.cmp(right)
 }

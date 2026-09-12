@@ -1,6 +1,3 @@
-use pgrx::Uuid;
-use pgrx::prelude::*;
-
 use crate::definition::source::ValidatedSource;
 use crate::error::MdmError;
 
@@ -36,43 +33,4 @@ pub fn source_key_sql(source: &ValidatedSource) -> Result<String, MdmError> {
     );
 
     Ok(sql)
-}
-
-pub fn get_or_create_source_record(
-    entity_id: Uuid,
-    source_identity_id: Uuid,
-    source_record_key: &[u8],
-) -> Result<Uuid, MdmError> {
-    Spi::connect_mut(|client| {
-        let rows = client
-            .update(
-                "INSERT INTO mdm_internal.source_records \
-                    (entity_id, source_identity_id, source_record_key, active, first_seen_at, last_seen_at) \
-                 VALUES ($1, $2, $3, false, pg_catalog.statement_timestamp(), pg_catalog.statement_timestamp()) \
-                 ON CONFLICT (entity_id, source_identity_id, source_record_key) \
-                 DO UPDATE SET last_seen_at = pg_catalog.statement_timestamp() \
-                 RETURNING source_record_id",
-                Some(1),
-                &[
-                    entity_id.into(),
-                    source_identity_id.into(),
-                    source_record_key.into(),
-                ],
-            )
-            .map_err(|e| MdmError::Spi(e.to_string()))?;
-
-        if rows.is_empty() {
-            return Err(MdmError::OperationState(
-                "get_or_create_source_record returned no row".into(),
-            ));
-        }
-
-        let id = rows
-            .first()
-            .get::<Uuid>(1)
-            .map_err(|e| MdmError::Spi(e.to_string()))?
-            .ok_or_else(|| MdmError::OperationState("source_record_id is NULL".into()))?;
-
-        Ok(id)
-    })
 }

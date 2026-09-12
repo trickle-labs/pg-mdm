@@ -1,8 +1,5 @@
-use std::collections::BTreeMap;
-
-use serde_json::{Map, Value};
-
 use crate::error::MdmError;
+use crate::source_record::quote_identifier;
 
 const SYSTEM_COLUMNS: [&str; 10] = [
     "mdm_id",
@@ -22,10 +19,6 @@ pub struct OutputField {
     pub name: String,
     pub ordinal: u16,
     pub type_name: String,
-}
-
-pub fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('\"', "\"\""))
 }
 
 pub fn output_table_ddl(
@@ -129,53 +122,9 @@ pub fn validate_append_only(
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct RowDiff {
-    pub inserts: Vec<(Vec<u8>, Value)>,
-    pub updates: Vec<(Vec<u8>, Value)>,
-    pub deletes: Vec<Vec<u8>>,
-}
-
-pub fn diff_rows(old: &BTreeMap<Vec<u8>, Value>, new: &BTreeMap<Vec<u8>, Value>) -> RowDiff {
-    let mut diff = RowDiff {
-        inserts: Vec::new(),
-        updates: Vec::new(),
-        deletes: Vec::new(),
-    };
-    for (key, value) in new {
-        match old.get(key) {
-            None => diff.inserts.push((key.clone(), value.clone())),
-            Some(previous) if previous != value => diff.updates.push((key.clone(), value.clone())),
-            Some(_) => {}
-        }
-    }
-    for key in old.keys().filter(|key| !new.contains_key(*key)) {
-        diff.deletes.push(key.clone());
-    }
-    diff
-}
-
-pub fn canonical_json(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
-        Value::Object(values) => {
-            let mut sorted = Map::new();
-            let mut entries = values.iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(right.0));
-            for (key, value) in entries {
-                sorted.insert(key.clone(), canonical_json(value));
-            }
-            Value::Object(sorted)
-        }
-        _ => value.clone(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
     fn field(name: &str, ordinal: u16, type_name: &str) -> OutputField {
         OutputField {
             name: name.into(),
@@ -200,23 +149,5 @@ mod tests {
         assert!(ddl[0].contains("\"full name\" text"));
         assert!(ddl[1].contains("customer_members"));
         assert!(ddl[2].contains("customer_review"));
-    }
-
-    #[test]
-    fn row_diff_skips_unchanged_payloads() {
-        let old = BTreeMap::from([(vec![1], json!({"v": 1})), (vec![2], json!({"v": 2}))]);
-        let new = BTreeMap::from([(vec![1], json!({"v": 1})), (vec![3], json!({"v": 3}))]);
-        let diff = diff_rows(&old, &new);
-        assert_eq!(diff.inserts.len(), 1);
-        assert_eq!(diff.updates.len(), 0);
-        assert_eq!(diff.deletes, vec![vec![2]]);
-    }
-
-    #[test]
-    fn canonical_json_sorts_object_keys() {
-        assert_eq!(
-            canonical_json(&json!({"b": 1, "a": 2})).to_string(),
-            r#"{"a":2,"b":1}"#
-        );
     }
 }

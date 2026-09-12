@@ -1,21 +1,7 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-fn sorted(value: Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .map(|(key, value)| (key, sorted(value)))
-                .collect::<Map<_, _>>(),
-        ),
-        Value::Array(values) => Value::Array(values.into_iter().map(sorted).collect()),
-        other => other,
-    }
-}
-
-pub(crate) fn canonical_definition(value: Value) -> Value {
-    let mut value = sorted(value);
+pub(crate) fn canonical_definition(mut value: Value) -> Value {
     if let Value::Object(object) = &mut value {
         for key in ["sources", "fields", "matches", "golden_values"] {
             if let Some(Value::Array(values)) = object.get_mut(key) {
