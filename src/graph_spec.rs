@@ -9,15 +9,26 @@ use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 6;
+pub const COMPILER_VERSION: i32 = 7;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
+    node_with_refresh_mode(id, dependencies, sql, schema, "AUTO")
+}
+
+fn node_with_refresh_mode(
+    id: String,
+    dependencies: Vec<String>,
+    sql: String,
+    schema: Value,
+    refresh_mode: &str,
+) -> Value {
     json!({
         "logical_id": id,
         "dependencies": dependencies,
         "output_schema": schema,
         "defining_sql": sql,
+        "refresh_mode": refresh_mode,
         "initialize": false,
         "orchestration_mode": "EXTERNAL",
         "executable": true
@@ -34,6 +45,7 @@ pub struct GraphNode {
     pub dependencies: Vec<String>,
     pub output_schema: Value,
     pub defining_sql: String,
+    pub refresh_mode: String,
     pub initialize: bool,
     pub orchestration_mode: String,
     pub executable: bool,
@@ -62,7 +74,11 @@ pub fn artifact_nodes(artifact: &[u8]) -> Result<(Vec<GraphNode>, Vec<String>), 
 
     let mut by_id = BTreeMap::new();
     for node in &nodes {
-        if !node.executable || node.initialize || node.orchestration_mode != "EXTERNAL" {
+        if !node.executable
+            || node.initialize
+            || node.orchestration_mode != "EXTERNAL"
+            || !matches!(node.refresh_mode.as_str(), "AUTO" | "FULL")
+        {
             return Err(MdmError::GraphArtifact(format!(
                 "node {} is not an executable external node",
                 node.logical_id
@@ -540,8 +556,13 @@ fn candidate_pairs_sql_with_relation(
         .map(|channel| {
             let relation = block_relation(channel);
             let stats = stats_relation(channel);
+            let dedupe = if channel.kind == ChannelKind::Token {
+                "\nGROUP BY l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key"
+            } else {
+                ""
+            };
             format!(
-                "SELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {relation} l\nJOIN {stats} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN {relation} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= {limit}\nGROUP BY l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key",
+                "SELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {relation} l\nJOIN {stats} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN {relation} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= {limit}{dedupe}",
                 limit = limits.max_block_records,
             )
         })
@@ -670,6 +691,16 @@ pub fn compile(entity: &Entity) -> Value {
     let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
         channels: Vec::new(),
     });
+    // ponytail: grouped token pairs use FULL refresh because pg_trickle 0.105.1 emits invalid deltas; restore AUTO when it supports unique-pair deltas.
+    let pair_refresh_mode = if plan
+        .channels
+        .iter()
+        .any(|channel| channel.kind == ChannelKind::Token)
+    {
+        "FULL"
+    } else {
+        "AUTO"
+    };
     let fallback_logical_id = entity
         .sources
         .first()
@@ -715,11 +746,12 @@ pub fn compile(entity: &Entity) -> Value {
     {
         blocks.push(fallback.clone());
     }
-    nodes.push(node(
+    nodes.push(node_with_refresh_mode(
         format!("pairs/{}", entity.name),
         blocks,
         candidate_pairs_sql_with_relation(&plan.channels, &limits, &fallback_relation),
         json!({"left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea"}),
+        pair_refresh_mode,
     ));
     let mut pair_stats_dependencies = plan
         .channels
@@ -741,11 +773,12 @@ pub fn compile(entity: &Entity) -> Value {
     {
         pair_stats_dependencies.push(fallback.clone());
     }
-    nodes.push(node(
+    nodes.push(node_with_refresh_mode(
         format!("pair-stats/{}", entity.name),
         pair_stats_dependencies,
         candidate_pair_stats_sql_with_relation(&plan.channels, &limits, &fallback_relation),
         json!({"candidate_pairs":"bigint"}),
+        pair_refresh_mode,
     ));
     nodes.push(node(
         format!("pair-overflow/{}", entity.name),
@@ -837,7 +870,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], true);
-        assert_eq!(graph["compiler_version"], 6);
+        assert_eq!(graph["compiler_version"], 7);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));

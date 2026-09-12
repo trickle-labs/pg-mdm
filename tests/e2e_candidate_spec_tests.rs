@@ -34,9 +34,21 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         .iter()
         .find(|node| node["logical_id"] == "pairs/organization")
         .unwrap();
+    assert_eq!(pair["refresh_mode"], "FULL");
     let pair_sql = pair["defining_sql"].as_str().unwrap();
     assert!(pair_sql.contains("@{block-stats/same_email}"));
     assert!(pair_sql.contains("source_sort_key < r.source_sort_key"));
+    let channel_pairs = pair_sql.split("\nUNION\n").collect::<Vec<_>>();
+    assert!(
+        channel_pairs
+            .iter()
+            .any(|sql| { sql.contains("@{blocks/same_email}") && !sql.contains("GROUP BY") })
+    );
+    assert!(
+        channel_pairs
+            .iter()
+            .any(|sql| sql.contains("@{blocks/same_name}") && sql.contains("GROUP BY"))
+    );
     let exact_block = nodes
         .iter()
         .find(|node| node["logical_id"] == "blocks/same_email")
@@ -59,6 +71,11 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
             .unwrap()
             .contains("convert_to(token, 'UTF8') AS block_key")
     );
+    let pair_stats = nodes
+        .iter()
+        .find(|node| node["logical_id"] == "pair-stats/organization")
+        .unwrap();
+    assert_eq!(pair_stats["refresh_mode"], "FULL");
     assert!(
         candidate_block_overflow_sql(
             &pg_mdm::candidate::CandidatePlan::from_entity(&entity)

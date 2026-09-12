@@ -449,9 +449,13 @@ fn install_graph(
         let query = graph_spec::render_sql(&node.defining_sql, &relations)?;
         client
             .update(
-                "SELECT pgtrickle.create_stream_table(name => $1::text, query => $2::text, schedule => 'calculated', refresh_mode => 'AUTO', initialize => false, cdc_mode => 'trigger', orchestration_mode => 'EXTERNAL')",
+                "SELECT pgtrickle.create_stream_table(name => $1::text, query => $2::text, schedule => 'calculated', refresh_mode => $3::text, initialize => false, cdc_mode => 'trigger', orchestration_mode => 'EXTERNAL')",
                 Some(1),
-                &[qualified.clone().into(), query.clone().into()],
+                &[
+                    qualified.clone().into(),
+                    query.clone().into(),
+                    node.refresh_mode.clone().into(),
+                ],
             )
             .map_err(|error| {
                 MdmError::GraphInstallation(format!("{}: {}", node.logical_id, error))
