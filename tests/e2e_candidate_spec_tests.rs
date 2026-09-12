@@ -74,7 +74,7 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
             .channels,
         &candidate_limits(),
     );
-    assert!(pair_sql.contains("SELECT DISTINCT l.source_record_id"));
+    assert!(pair_sql.contains("GROUP BY l.source_record_id, r.source_record_id"));
     assert!(pair_sql.contains("\nUNION\n"));
 }
 

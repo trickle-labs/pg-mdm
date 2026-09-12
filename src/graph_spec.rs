@@ -541,7 +541,7 @@ fn candidate_pairs_sql_with_relation(
             let relation = block_relation(channel);
             let stats = stats_relation(channel);
             format!(
-                "SELECT DISTINCT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {relation} l\nJOIN {stats} s USING (channel_id, block_key)\nJOIN {relation} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= {limit}",
+                "SELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {relation} l\nJOIN {stats} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN {relation} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= {limit}\nGROUP BY l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key",
                 limit = limits.max_block_records,
             )
         })
