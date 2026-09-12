@@ -179,6 +179,7 @@ DECLARE
     failed boolean := false;
     create_result record;
     result jsonb;
+    revision_before bigint;
 BEGIN
     SELECT * INTO STRICT create_result
     FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
@@ -194,6 +195,8 @@ BEGIN
     IF NOT failed THEN
         RAISE EXCEPTION 'resolver limit did not fail closed';
     END IF;
+    SELECT publication_revision INTO STRICT revision_before
+    FROM mdm_internal.entities WHERE entity_name = 'customer';
 
     SELECT * INTO STRICT create_result
     FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
@@ -203,7 +206,7 @@ BEGIN
     END IF;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'false'
-       OR (result->>'publication_revision')::bigint <> 1 THEN
+       OR (result->>'publication_revision')::bigint <> revision_before THEN
         RAISE EXCEPTION 'resolver-limit retry changed the publication: %', result;
     END IF;
 END
