@@ -33,21 +33,6 @@ fn raise(error: error::MdmError) -> ! {
 }
 
 #[cfg(feature = "pg_test")]
-#[pgrx::pg_schema]
-mod tests {
-    use pgrx::prelude::*;
-
-    #[pg_test]
-    fn graph_v1_capabilities_are_enabled() {
-        let rows = Spi::get_one::<i64>(
-            "SELECT count(*) FROM mdm_internal.integration_capabilities() WHERE major_version = 1 AND minor_version = 0 AND enabled",
-        )
-        .expect("capability query must run");
-        assert_eq!(rows, Some(2));
-    }
-}
-
-#[cfg(feature = "pg_test")]
 #[allow(dead_code)]
 pub mod pg_test {
     pub fn setup(_options: Vec<&str>) {}

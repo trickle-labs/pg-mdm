@@ -145,6 +145,14 @@ CREATE DATABASE capability_errors;
 \connect capability_errors postgres
 CREATE EXTENSION pg_trickle;
 CREATE EXTENSION pg_mdm;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_internal.integration_capabilities()
+        WHERE major_version = 1 AND minor_version = 0 AND enabled) <> 2 THEN
+        RAISE EXCEPTION 'Graph V1 integration capabilities are not enabled';
+    END IF;
+END
+$$;
 
 CREATE FUNCTION public.assert_adapter_error(expected_code text)
 RETURNS void
