@@ -693,16 +693,8 @@ pub fn compile(entity: &Entity) -> Value {
     let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
         channels: Vec::new(),
     });
-    // ponytail: grouped token pairs use FULL refresh because pg_trickle 0.105.1 emits invalid deltas; restore AUTO when it supports unique-pair deltas.
-    let pair_refresh_mode = if plan
-        .channels
-        .iter()
-        .any(|channel| channel.kind == ChannelKind::Token)
-    {
-        "FULL"
-    } else {
-        "AUTO"
-    };
+    // ponytail: candidate-pair joins refresh fully because pg_trickle 0.105.1 can drop multi-row pair inserts; restore AUTO when it preserves them.
+    let pair_refresh_mode = "FULL";
     let fallback_logical_id = entity
         .sources
         .first()
