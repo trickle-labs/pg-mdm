@@ -270,6 +270,14 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_administrator;
 GRANT CREATE ON SCHEMA public TO mdm_administrator;
 GRANT SELECT, MAINTAIN ON public.mdm_graph_source TO mdm_administrator;
 GRANT SELECT, INSERT ON public.mdm_graph_publication TO mdm_administrator;
+CREATE TABLE public.mdm_graph_diff_source (
+    id integer PRIMARY KEY,
+    owner_name text NOT NULL,
+    value text NOT NULL
+);
+INSERT INTO public.mdm_graph_diff_source VALUES
+    (1, 'mdm_administrator', 'visible');
+GRANT SELECT, INSERT, UPDATE, DELETE, MAINTAIN ON public.mdm_graph_diff_source TO mdm_administrator;
 
 SET SESSION AUTHORIZATION mdm_test_login;
 SET ROLE mdm_administrator;
@@ -284,6 +292,22 @@ SELECT pgtrickle.create_stream_table(
 SELECT pgtrickle.create_stream_table(
     name => 'public.mdm_graph_probe_reference',
     query => 'SELECT id, owner_name, value FROM public.mdm_graph_source',
+    schedule => '1h',
+    refresh_mode => 'FULL',
+    initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_graph_diff_probe',
+    query => 'SELECT id, owner_name, value FROM public.mdm_graph_diff_source',
+    schedule => '1h',
+    refresh_mode => 'AUTO',
+    initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_graph_diff_probe_reference',
+    query => 'SELECT id, owner_name, value FROM public.mdm_graph_diff_source',
     schedule => '1h',
     refresh_mode => 'FULL',
     initialize => false,
@@ -391,15 +415,15 @@ DO $$
 DECLARE
     refreshed jsonb;
 BEGIN
-    INSERT INTO public.mdm_graph_source
+    INSERT INTO public.mdm_graph_diff_source
     SELECT id, 'mdm_administrator', 'baseline'
     FROM generate_series(3, 102) AS ids(id);
     refreshed := public.refresh_mdm_graph(ARRAY[
-        'public.mdm_graph_probe'::regclass,
-        'public.mdm_graph_probe_reference'::regclass]);
-    IF (SELECT count(*) FROM public.mdm_graph_probe) <> 101
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+        'public.mdm_graph_diff_probe'::regclass,
+        'public.mdm_graph_diff_probe_reference'::regclass]);
+    IF (SELECT count(*) FROM public.mdm_graph_diff_probe) <> 101
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL baseline results disagree: %', refreshed;
     END IF;
 END
@@ -408,48 +432,48 @@ DO $$
 DECLARE
     refreshed jsonb;
 BEGIN
-    INSERT INTO public.mdm_graph_source VALUES (103, 'mdm_administrator', 'inserted');
+    INSERT INTO public.mdm_graph_diff_source VALUES (103, 'mdm_administrator', 'inserted');
     refreshed := public.refresh_mdm_graph(ARRAY[
-        'public.mdm_graph_probe'::regclass,
-        'public.mdm_graph_probe_reference'::regclass]);
+        'public.mdm_graph_diff_probe'::regclass,
+        'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
        OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
        OR position('full' IN lower((refreshed->'node_results')::text)) = 0
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree after insert: %', refreshed;
     END IF;
 
-    UPDATE public.mdm_graph_source SET value = 'updated' WHERE id = 103;
+    UPDATE public.mdm_graph_diff_source SET value = 'updated' WHERE id = 103;
     refreshed := public.refresh_mdm_graph(ARRAY[
-        'public.mdm_graph_probe'::regclass,
-        'public.mdm_graph_probe_reference'::regclass]);
+        'public.mdm_graph_diff_probe'::regclass,
+        'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
        OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
        OR position('full' IN lower((refreshed->'node_results')::text)) = 0
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree after update: %', refreshed;
     END IF;
 
-    DELETE FROM public.mdm_graph_source WHERE id = 103;
+    DELETE FROM public.mdm_graph_diff_source WHERE id = 103;
     refreshed := public.refresh_mdm_graph(ARRAY[
-        'public.mdm_graph_probe'::regclass,
-        'public.mdm_graph_probe_reference'::regclass]);
+        'public.mdm_graph_diff_probe'::regclass,
+        'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
        OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
        OR position('full' IN lower((refreshed->'node_results')::text)) = 0
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree after delete: %', refreshed;
     END IF;
 
     refreshed := public.refresh_mdm_graph(ARRAY[
-        'public.mdm_graph_probe'::regclass,
-        'public.mdm_graph_probe_reference'::regclass]);
+        'public.mdm_graph_diff_probe'::regclass,
+        'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
-       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree on no-op refresh: %', refreshed;
     END IF;
 END
