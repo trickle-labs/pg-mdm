@@ -118,7 +118,11 @@ BEGIN
         WHERE source_name = 'crm' AND active
           AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 3
        OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 1 THEN
-        RAISE EXCEPTION 'retry did not publish the later source write';
+        RAISE EXCEPTION 'retry did not publish the later source write: members %, outputs %',
+            (SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb)
+             FROM mdm_out.customer_members m WHERE m.source_name = 'crm' AND m.active),
+            (SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.mdm_id), '[]'::jsonb)
+             FROM mdm_out.customer c);
     END IF;
 END
 $$;
