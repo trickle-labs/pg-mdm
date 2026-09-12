@@ -328,6 +328,16 @@ BEGIN
     RETURN pg_catalog.to_jsonb(refreshed);
 END
 $$;
+CREATE FUNCTION public.mdm_graph_action(results jsonb, node_identity text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+STRICT
+AS $$
+    SELECT value->>'action'
+    FROM pg_catalog.jsonb_each(results)
+    WHERE value->>'identity' = node_identity
+$$;
 DO $$
 DECLARE stream_contract record;
 DECLARE graph_contract record;
@@ -437,8 +447,9 @@ BEGIN
         'public.mdm_graph_diff_probe'::regclass,
         'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
-       OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
-       OR position('full' IN lower((refreshed->'node_results')::text)) = 0
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') IS NULL
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') = 'FULL'
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree after insert: %', refreshed;
@@ -449,8 +460,9 @@ BEGIN
         'public.mdm_graph_diff_probe'::regclass,
         'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
-       OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
-       OR position('full' IN lower((refreshed->'node_results')::text)) = 0
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') IS NULL
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') = 'FULL'
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree after update: %', refreshed;
@@ -461,8 +473,9 @@ BEGIN
         'public.mdm_graph_diff_probe'::regclass,
         'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
-       OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
-       OR position('full' IN lower((refreshed->'node_results')::text)) = 0
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') IS NULL
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') = 'FULL'
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'AUTO and FULL disagree after delete: %', refreshed;
@@ -478,6 +491,7 @@ BEGIN
     END IF;
 END
 $$;
+DROP FUNCTION public.mdm_graph_action(jsonb, text);
 DROP FUNCTION public.refresh_mdm_graph(regclass[]);
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
