@@ -13,6 +13,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_07_08 = root.join("sql").join("pg_mdm--0.7.0--0.8.0.sql");
     let upgrade_08_09 = root.join("sql").join("pg_mdm--0.8.0--0.9.0.sql");
     let upgrade_09_10 = root.join("sql").join("pg_mdm--0.9.0--0.10.0.sql");
+    let upgrade_10_11 = root.join("sql").join("pg_mdm--0.10.0--0.11.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -50,6 +51,10 @@ fn test_upgrade_scripts_exist() {
         upgrade_09_10.is_file(),
         "0.9.0 -> 0.10.0 upgrade script must exist"
     );
+    assert!(
+        upgrade_10_11.is_file(),
+        "0.10.0 -> 0.11.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -78,4 +83,6 @@ fn test_upgrade_scripts_exist() {
     let sql_09_10 = fs::read_to_string(&upgrade_09_10).expect("read 0.9.0 to 0.10.0");
     assert!(sql_09_10.contains("graph_bindings_entity_definition_generation"));
     assert!(sql_09_10.contains("operations_entity_started"));
+    let sql_10_11 = fs::read_to_string(&upgrade_10_11).expect("read 0.10.0 to 0.11.0");
+    assert!(sql_10_11.contains("v0.11 release qualification"));
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.10.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.11.0-e2e}
 container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
@@ -33,6 +33,96 @@ fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql
+
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
+INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
+CREATE FUNCTION public.delay_release_output()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_catalog.pg_sleep(0.5);
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER delay_release_output
+BEFORE INSERT OR UPDATE ON mdm_out.customer
+FOR EACH ROW EXECUTE FUNCTION public.delay_release_output();
+SQL
+docker exec -e PGAPPNAME=mdm_boundary_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'true'
+       OR (result->>'publication_revision')::bigint <> 6
+       OR result->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR length(result->>'source_boundary_digest') <> 64 THEN
+        RAISE EXCEPTION 'concurrent refresh returned an invalid boundary: %', result;
+    END IF;
+END
+$$;
+SQL
+boundary_refresh=$!
+boundary_captured=false
+for _ in $(seq 1 100); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_stat_activity WHERE application_name = 'mdm_boundary_refresh' AND wait_event = 'PgSleep')") == t ]]; then
+        boundary_captured=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $boundary_captured != true ]]; then
+    kill "$boundary_refresh" 2>/dev/null || true
+    wait "$boundary_refresh" || true
+    cat "$work_dir/boundary_refresh.log"
+    echo 'FAIL: refresh did not reach publication after graph maintenance' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "INSERT INTO public.crm_customer VALUES (4, 'After boundary', 'after@example.test', statement_timestamp())" >/dev/null
+if ! wait "$boundary_refresh"; then cat "$work_dir/boundary_refresh.log"; exit 1; fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_out.customer_members
+        WHERE source_name = 'crm' AND active
+          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 2
+       OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 0 THEN
+        RAISE EXCEPTION 'source write after the returned boundary was published early';
+    END IF;
+END
+$$;
+SQL
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL'
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'true'
+       OR (result->>'publication_revision')::bigint <> 7
+       OR result->'source_boundary'->>'completeness' <> 'PROVEN' THEN
+        RAISE EXCEPTION 'next refresh did not consume the later source write: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+SQL
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_out.customer_members
+        WHERE source_name = 'crm' AND active
+          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 3
+       OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 1 THEN
+        RAISE EXCEPTION 'retry did not publish the later source write';
+    END IF;
+END
+$$;
+DROP TRIGGER delay_release_output ON mdm_out.customer;
+DROP FUNCTION public.delay_release_output();
+SQL
 
 docker exec -e PGAPPNAME=mdm_writer_one "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; BEGIN;
@@ -180,9 +270,11 @@ clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
-test "$clone_sources" = 4
-test "$restored_sources" = 3
+test "$clone_sources" = 7
+test "$restored_sources" = 6
 
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'
+echo 'PASS: AUTO/FULL equivalence and MDM insert/update/delete, rollback, retry, and no-op qualification'
+echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'SKIPPED: Delta V1 positive conformance, output_delta_consumer is not used by V1'

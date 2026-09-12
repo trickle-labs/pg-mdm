@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- Qualify AUTO graph maintenance against a FULL reference through insert, update, delete, and no-op histories.
+- Verify MDM publication rollback and retry after an injected output failure.
+- Add the 0.10.0 to 0.11.0 upgrade path and release-package archive.
+- Document the v0.11 installation, refresh, and recovery workflow.
+
 ## 0.10.0
 
 - Bound source-record loading by the configured resolver limit before resolution.

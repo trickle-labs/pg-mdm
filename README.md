@@ -3,17 +3,17 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.10 adds operational hardening, bounded refresh loading, and cumulative recovery and restore coverage through pg-trickle 0.105.1.
+> v0.11 qualifies differential graph maintenance and transactional MDM recovery against the pinned `pg_trickle` 0.105.1 package.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.10
+## Install v0.11
 
-v0.10 supports PostgreSQL 18 and requires `pg_trickle` 0.105.1. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the release artifact and image digests.
+v0.11 supports PostgreSQL 18 and requires the pinned `pg_trickle` 0.105.1 package. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum.
 
-The v0.10 actions store and validate definitions, compile executable graph stages, install private stream members transactionally, refresh complete Graph V1 evidence with bounded resource loading, and publish ordinary PostgreSQL output tables atomically.
+The extension stores definitions, installs private Graph V1 members transactionally, refreshes complete evidence, and publishes ordinary PostgreSQL output tables in the same transaction. The v0.11 CI suite compares AUTO and FULL graph results and tests rollback and retry against PostgreSQL 18.
 
 Build and copy the package:
 
@@ -38,7 +38,7 @@ Assign the protected objects to the helper owner before you grant action access:
 psql --set=helper_owner=mdm_helper_owner --file=sql/configure_helper.sql my_database
 ```
 
-Create application roles outside the extension. v0.1 has one administrator action that verifies the installation and records the result:
+Create application roles outside the extension. Give the administrator role only the actions it needs:
 
 ```sql
 CREATE ROLE app_mdm_admin NOLOGIN NOSUPERUSER NOBYPASSRLS;
@@ -48,7 +48,6 @@ GRANT app_mdm_admin TO app_login WITH SET TRUE, INHERIT FALSE;
 GRANT USAGE ON SCHEMA mdm_admin TO app_mdm_admin;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO app_mdm_admin;
 
--- v0.2 definition actions
 GRANT USAGE ON SCHEMA mdm TO app_mdm_admin;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mdm TO app_mdm_admin;
 ```
@@ -64,7 +63,7 @@ The function rejects superusers, `BYPASSRLS` roles, login-capable helper owners,
 
 Run `sql/configure_helper.sql` again after an extension upgrade or a clean logical restore, then reapply action grants. After a logical restore, [rebind the restored entities](#rebind-restored-entities) before using definition actions. PostgreSQL includes `mdm_internal.operations` data in logical dumps. The helper writes only committed success records; a transaction rollback removes its operation row.
 
-The v0.1 stable result codes are:
+`mdm_admin.verify_installation()` returns `MDM_OK` when the helper owner, application role, and required `pg_trickle` capabilities pass validation. Other stable result codes are:
 
 | Code | Meaning |
 |---|---|
@@ -77,6 +76,47 @@ The v0.1 stable result codes are:
 | `MDM_UNAUTHORIZED` | The authenticated or selected role is unsafe. |
 | `MDM_OPERATION_STATE` | A running operation could not commit as succeeded. |
 | `MDM_INTERNAL` | PostgreSQL SPI returned an unexpected error. |
+
+## Define and refresh an entity
+
+The selected execution role needs schema `USAGE` and table `SELECT, MAINTAIN` on each source. The source owner grants these privileges. `pg-mdm` does not grant access to source tables.
+
+Grant Graph V1 access to the execution role, then create the definition as that role:
+
+```sql
+GRANT USAGE ON SCHEMA pgtrickle TO app_mdm_admin;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO app_mdm_admin;
+GRANT USAGE ON SCHEMA public TO app_mdm_admin;
+GRANT SELECT, MAINTAIN ON public.crm_customer TO app_mdm_admin;
+
+SET ROLE app_mdm_admin;
+SELECT * FROM mdm.create(mdm.entity(
+    name => 'customer',
+    sources => ARRAY[mdm.source(
+        name => 'crm',
+        relation => 'public.crm_customer'::regclass,
+        source_id => ARRAY['id'],
+        mode => 'tracked',
+        fields => '{"name":"display_name","email":"email_address"}'::jsonb,
+        row_changed_at => 'updated_at')],
+    fields => ARRAY[
+        mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
+        mdm.field(name => 'email', type => 'text', cleaner => 'email')],
+    matches => ARRAY[mdm.match(
+        name => 'same_email',
+        fields => ARRAY['email'],
+        comparison => 'exact',
+        strength => 'identity',
+        evidence_group => 'email')],
+    golden_values => ARRAY[mdm.golden_value(
+        field => 'name', policy => 'prefer_source', sources => ARRAY['crm'])]));
+SELECT mdm.refresh('customer', 'ALLOW');
+RESET ROLE;
+```
+
+Grant consumers access to the three output tables after the first refresh creates them: `mdm_out.customer`, `mdm_out.customer_members`, and `mdm_out.customer_review`. Use `mdm.describe('customer', 'summary')` to inspect the definition and graph state. Use `mdm.preview()` to validate a proposed change before activating it.
+
+`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. The resolver still reads the full terminal evidence relations on every refresh. `mdm_admin.rebuild()` repeats the resolution from current graph evidence without replacing the identity ledger.
 
 ## Rebind restored entities
 
@@ -120,7 +160,7 @@ Public PostgreSQL tables
   mdm_out.<entity>_review
 ```
 
-The first release keeps the public model small. Its five nouns are `source`, `field`, `match`, `entity`, and `golden_value`. Its five normal actions are `create`, `describe`, `preview`, `refresh`, and `explain`. Every mastered entity produces three ordinary PostgreSQL tables: one row per resolved entity, a durable mapping from source records to entities, and a review queue for ambiguity or conflict. Consumers can query those tables with SQL and observe their transactionally complete changes through standard PostgreSQL triggers or logical decoding.
+The V1 public model uses `source`, `field`, `match`, `entity`, and `golden_value`. Its primary actions are `create`, `describe`, `preview`, `refresh`, and `explain`. Every mastered entity produces three ordinary PostgreSQL tables: one row per resolved entity, a durable mapping from source records to entities, and a review queue for ambiguity or conflict. Consumers can query those tables with SQL and observe their transactionally complete changes through standard PostgreSQL triggers or logical decoding.
 
 ## What makes the design different
 
@@ -132,7 +172,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The implemented v0.10 release stores definitions and durable MDM state, installs private Graph V1 members through pg-trickle, refreshes complete evidence, publishes stable identities and golden values, and includes operational tests for limits, retry, upgrade, backup, restore, and clone isolation.
+The v0.11 release adds qualification for AUTO versus FULL graph maintenance, MDM source insert, update, and delete histories, no-op refreshes, and rollback with retry. Earlier releases supply the resolver, stewardship, publication, resource-limit, upgrade, backup, restore, and clone behavior exercised by the cumulative CI suite.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

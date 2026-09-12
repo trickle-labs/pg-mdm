@@ -1,5 +1,5 @@
 comment = 'Deterministic entity resolution and golden records for PostgreSQL'
-default_version = '0.10.0'
+default_version = '0.11.0'
 module_pathname = 'pg_mdm'
 requires = 'pg_trickle'
 relocatable = false

@@ -1,0 +1,1 @@
+-- v0.11 release qualification adds no runtime schema changes.

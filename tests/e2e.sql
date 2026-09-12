@@ -34,15 +34,16 @@ END
 $$;
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.10.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.11.0')
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings_entity_definition_generation') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members_binding_ordinal') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION '0.8.0 to 0.10.0 upgrade did not install operational hardening';
+        RAISE EXCEPTION '0.8.0 to 0.11.0 upgrade did not complete';
     END IF;
 END
 $$;
@@ -111,6 +112,7 @@ $$;
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -125,14 +127,15 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.10.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.11.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.10.0 upgrade did not install v0.10 catalog';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.11.0 upgrade did not complete';
     END IF;
 END
 $$;
@@ -278,6 +281,29 @@ SELECT pgtrickle.create_stream_table(
     initialize => false,
     orchestration_mode => 'EXTERNAL'
 );
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_graph_probe_reference',
+    query => 'SELECT id, owner_name, value FROM public.mdm_graph_source',
+    schedule => '1h',
+    refresh_mode => 'FULL',
+    initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+CREATE FUNCTION public.refresh_mdm_graph(roots regclass[])
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    expected_digest bytea;
+    refreshed record;
+BEGIN
+    SELECT graph_digest INTO STRICT expected_digest
+    FROM pgtrickle.graph_contract(roots);
+    SELECT * INTO STRICT refreshed
+    FROM pgtrickle.refresh_graph_strict(roots, expected_digest, 'ALLOW');
+    RETURN pg_catalog.to_jsonb(refreshed);
+END
+$$;
 DO $$
 DECLARE stream_contract record;
 DECLARE graph_contract record;
@@ -296,6 +322,11 @@ BEGIN
        OR octet_length(graph_contract.graph_digest) <> 32
        OR NOT graph_contract.contract->'members' @> '[{"orchestration_mode":"EXTERNAL"}]'::jsonb THEN
         RAISE EXCEPTION 'unexpected graph contract: %', graph_contract.contract;
+    END IF;
+    SELECT * INTO STRICT stream_contract
+      FROM pgtrickle.stream_table_contract('public.mdm_graph_probe_reference'::regclass);
+    IF stream_contract.contract->>'refresh_mode' <> 'FULL' THEN
+        RAISE EXCEPTION 'full reference graph is not pinned to FULL: %', stream_contract.contract;
     END IF;
 END
 $$;
@@ -335,9 +366,13 @@ DECLARE expected_digest bytea;
 DECLARE refreshed record;
 BEGIN
     SELECT graph_digest INTO STRICT expected_digest
-      FROM pgtrickle.graph_contract(ARRAY['public.mdm_graph_probe'::regclass]);
+      FROM pgtrickle.graph_contract(ARRAY[
+          'public.mdm_graph_probe'::regclass,
+          'public.mdm_graph_probe_reference'::regclass]);
     SELECT * INTO STRICT refreshed FROM pgtrickle.refresh_graph_strict(
-        ARRAY['public.mdm_graph_probe'::regclass], expected_digest, 'ALLOW');
+        ARRAY[
+            'public.mdm_graph_probe'::regclass,
+            'public.mdm_graph_probe_reference'::regclass], expected_digest, 'ALLOW');
     INSERT INTO public.mdm_graph_publication
     VALUES (refreshed.graph_refresh_id, refreshed.source_boundary_digest);
 END
@@ -352,6 +387,74 @@ BEGIN
     END IF;
 END
 $$;
+DO $$
+DECLARE
+    refreshed jsonb;
+BEGIN
+    INSERT INTO public.mdm_graph_source
+    SELECT id, 'mdm_administrator', 'baseline'
+    FROM generate_series(3, 102) AS ids(id);
+    refreshed := public.refresh_mdm_graph(ARRAY[
+        'public.mdm_graph_probe'::regclass,
+        'public.mdm_graph_probe_reference'::regclass]);
+    IF (SELECT count(*) FROM public.mdm_graph_probe) <> 101
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+        RAISE EXCEPTION 'AUTO and FULL baseline results disagree: %', refreshed;
+    END IF;
+END
+$$;
+DO $$
+DECLARE
+    refreshed jsonb;
+BEGIN
+    INSERT INTO public.mdm_graph_source VALUES (103, 'mdm_administrator', 'inserted');
+    refreshed := public.refresh_mdm_graph(ARRAY[
+        'public.mdm_graph_probe'::regclass,
+        'public.mdm_graph_probe_reference'::regclass]);
+    IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
+       OR position('full' IN lower((refreshed->'node_results')::text)) = 0
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+        RAISE EXCEPTION 'AUTO and FULL disagree after insert: %', refreshed;
+    END IF;
+
+    UPDATE public.mdm_graph_source SET value = 'updated' WHERE id = 103;
+    refreshed := public.refresh_mdm_graph(ARRAY[
+        'public.mdm_graph_probe'::regclass,
+        'public.mdm_graph_probe_reference'::regclass]);
+    IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
+       OR position('full' IN lower((refreshed->'node_results')::text)) = 0
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+        RAISE EXCEPTION 'AUTO and FULL disagree after update: %', refreshed;
+    END IF;
+
+    DELETE FROM public.mdm_graph_source WHERE id = 103;
+    refreshed := public.refresh_mdm_graph(ARRAY[
+        'public.mdm_graph_probe'::regclass,
+        'public.mdm_graph_probe_reference'::regclass]);
+    IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR position('differential' IN lower((refreshed->'node_results')::text)) = 0
+       OR position('full' IN lower((refreshed->'node_results')::text)) = 0
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+        RAISE EXCEPTION 'AUTO and FULL disagree after delete: %', refreshed;
+    END IF;
+
+    refreshed := public.refresh_mdm_graph(ARRAY[
+        'public.mdm_graph_probe'::regclass,
+        'public.mdm_graph_probe_reference'::regclass]);
+    IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe EXCEPT SELECT * FROM public.mdm_graph_probe_reference)
+       OR EXISTS (SELECT * FROM public.mdm_graph_probe_reference EXCEPT SELECT * FROM public.mdm_graph_probe) THEN
+        RAISE EXCEPTION 'AUTO and FULL disagree on no-op refresh: %', refreshed;
+    END IF;
+END
+$$;
+DROP FUNCTION public.refresh_mdm_graph(regclass[]);
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 
@@ -754,6 +857,168 @@ $$;
 RESET ROLE;
 
 \connect foundation postgres
+INSERT INTO public.crm_customer VALUES
+    (1, 'Acme One', 'same@example.test', statement_timestamp()),
+    (2, 'Acme Two', 'same@example.test', statement_timestamp());
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'true'
+       OR (result->>'publication_revision')::bigint <> 2
+       OR result->'source_boundary'->>'completeness' <> 'PROVEN' THEN
+        RAISE EXCEPTION 'insert refresh did not publish a proven boundary: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_out.customer_members
+        WHERE source_name = 'crm' AND active
+          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 2
+       OR (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
+        WHERE source_name = 'crm' AND active
+          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 1 THEN
+        RAISE EXCEPTION 'insert reference result did not merge the duplicate email';
+    END IF;
+END
+$$;
+
+UPDATE public.crm_customer
+SET email_address = 'two@example.test', updated_at = statement_timestamp()
+WHERE id = 2;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'true'
+       OR (result->>'publication_revision')::bigint <> 3 THEN
+        RAISE EXCEPTION 'update refresh did not publish the split: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
+DO $$
+BEGIN
+    IF (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
+        WHERE source_name = 'crm' AND active
+          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 2 THEN
+        RAISE EXCEPTION 'update reference result did not split the records';
+    END IF;
+END
+$$;
+
+CREATE TABLE public.release_output_checkpoint AS
+SELECT e.publication_revision,
+       (SELECT count(*) FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id) AS publication_count,
+       (SELECT COALESCE(jsonb_agg(to_jsonb(o) ORDER BY o.mdm_id), '[]'::jsonb) FROM mdm_out.customer o) AS entities,
+       (SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb) FROM mdm_out.customer_members m) AS members,
+       (SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.review_id), '[]'::jsonb) FROM mdm_out.customer_review r) AS reviews
+FROM mdm_internal.entities e WHERE e.entity_name = 'customer';
+CREATE FUNCTION public.fail_release_output()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'injected publication failure';
+END
+$$;
+CREATE TRIGGER fail_release_output
+BEFORE INSERT OR UPDATE ON mdm_out.customer
+FOR EACH ROW EXECUTE FUNCTION public.fail_release_output();
+UPDATE public.crm_customer
+SET display_name = 'Acme Updated', updated_at = statement_timestamp()
+WHERE id = 2;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm.refresh('customer', 'ALLOW');
+        RAISE EXCEPTION 'refresh unexpectedly passed the injected publication failure';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'injected publication failure') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
+DO $$
+DECLARE checkpoint record;
+BEGIN
+    SELECT * INTO STRICT checkpoint FROM public.release_output_checkpoint;
+    IF (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> checkpoint.publication_revision
+       OR (SELECT count(*) FROM mdm_internal.publications p JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer') <> checkpoint.publication_count
+       OR (SELECT COALESCE(jsonb_agg(to_jsonb(o) ORDER BY o.mdm_id), '[]'::jsonb) FROM mdm_out.customer o) IS DISTINCT FROM checkpoint.entities
+       OR (SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb) FROM mdm_out.customer_members m) IS DISTINCT FROM checkpoint.members
+       OR (SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.review_id), '[]'::jsonb) FROM mdm_out.customer_review r) IS DISTINCT FROM checkpoint.reviews THEN
+        RAISE EXCEPTION 'failed refresh changed publication state';
+    END IF;
+END
+$$;
+DROP TRIGGER fail_release_output ON mdm_out.customer;
+DROP FUNCTION public.fail_release_output();
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'true'
+       OR (result->>'publication_revision')::bigint <> 4
+       OR result->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR length(result->>'source_boundary_digest') <> 64 THEN
+        RAISE EXCEPTION 'retry skipped a source update after rollback: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_out.customer WHERE name = 'Acme Updated') <> 1 THEN
+        RAISE EXCEPTION 'retry did not publish the updated golden value';
+    END IF;
+END
+$$;
+DROP TABLE public.release_output_checkpoint;
+
+DELETE FROM public.crm_customer WHERE id = 1;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'true'
+       OR (result->>'publication_revision')::bigint <> 5 THEN
+        RAISE EXCEPTION 'delete refresh did not publish: %', result;
+    END IF;
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'false'
+       OR (result->>'publication_revision')::bigint <> 5 THEN
+        RAISE EXCEPTION 'no-op refresh changed the publication: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_out.customer_members
+        WHERE source_name = 'crm' AND active
+          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 1
+       OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'Acme Updated') <> 1 THEN
+        RAISE EXCEPTION 'delete reference result is incomplete';
+    END IF;
+END
+$$;
+
 DROP FUNCTION public.e2e_steward_ids();
 
 \connect foundation mdm_test_login

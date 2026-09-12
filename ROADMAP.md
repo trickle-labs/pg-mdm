@@ -134,7 +134,7 @@ Run the shared `pg_trickle` conformance suite and the generated differential-ver
 
 ## Release evidence traceability
 
-Each release records the exact test name, command, commit, artifact and fixture digests, result, and reviewed evidence link for its rows below. All evidence is currently pending because the repository contains no implementation. A blank or skipped blocking test does not satisfy its invariant. The release owner signs off the evidence before the next milestone starts.
+Record the exact test name, command, commit, artifact and fixture digests, result, and reviewed evidence link for each release row below. A blank or skipped blocking test does not satisfy its invariant. The release owner signs off the evidence before the next milestone starts.
 
 | V1 invariant | Owning release | Required executable evidence |
 |---|---|---|
@@ -175,4 +175,4 @@ The provisional pilot envelope starts in v0.4 and grows with each release. Measu
 
 V1.0 freezes the public compatibility contract only after every V1 acceptance criterion passes. The supported `pg_trickle` release must advertise `external_graph_refresh` major 1 as enabled, and the shared suite must prove canonical graph contracts, durable external orchestration, strict transactional refresh, complete source boundaries, rollback, concurrency, clone isolation, recovery, and supported upgrades. V1 does not use `output_delta_consumer` and supports only trigger capture.
 
-Versions v0.1 through v0.8 are complete. Continue with separate reviewed changes through v0.11; every compiler revision retains its graph-specific admission and differential-equivalence gates.
+The repository contains the v0.1 through v0.11 implementations. V1.0 remains gated on the complete acceptance evidence above. Every compiler revision retains its graph-specific admission and differential-equivalence checks.
