@@ -37,6 +37,28 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
     let pair_sql = pair["defining_sql"].as_str().unwrap();
     assert!(pair_sql.contains("@{block-stats/same_email}"));
     assert!(pair_sql.contains("source_sort_key < r.source_sort_key"));
+    let exact_block = nodes
+        .iter()
+        .find(|node| node["logical_id"] == "blocks/same_email")
+        .unwrap();
+    assert_eq!(exact_block["output_schema"]["block_key"], "bytea");
+    assert!(
+        exact_block["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("canonical_bytes AS block_key")
+    );
+    let token_block = nodes
+        .iter()
+        .find(|node| node["logical_id"] == "blocks/same_name")
+        .unwrap();
+    assert_eq!(token_block["output_schema"]["block_key"], "bytea");
+    assert!(
+        token_block["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("convert_to(token, 'UTF8') AS block_key")
+    );
     assert!(
         candidate_block_overflow_sql(
             &pg_mdm::candidate::CandidatePlan::from_entity(&entity)
@@ -55,4 +77,31 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         )
         .contains("array_agg(DISTINCT channel_id")
     );
+}
+
+#[test]
+fn composite_candidate_keys_are_length_delimited_bytea() {
+    let entity = parse_entity(json!({
+        "name": "person",
+        "sources": [],
+        "fields": [
+            {"name": "first", "type": "text", "cleaner": "text", "cleaner_options": {}, "display": "full"},
+            {"name": "last", "type": "text", "cleaner": "text", "cleaner_options": {}, "display": "full"}
+        ],
+        "matches": [
+            {"name": "same_person", "fields": ["first", "last"], "comparison": "exact", "strength": "identity", "evidence_group": "person", "threshold": null, "candidate": {"kind": "composite_exact"}}
+        ],
+        "golden_values": [], "preset": null, "limits": {}, "execution_role": null
+    })).unwrap();
+    let graph = compile(&entity);
+    let block = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["logical_id"] == "blocks/same_person")
+        .unwrap();
+    assert_eq!(block["output_schema"]["block_key"], "bytea");
+    let sql = block["defining_sql"].as_str().unwrap();
+    assert!(sql.contains("pg_catalog.int4send(pg_catalog.octet_length(n0.canonical_bytes))"));
+    assert!(sql.contains("n0.canonical_bytes || pg_catalog.int4send"));
 }

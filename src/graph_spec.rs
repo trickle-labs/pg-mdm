@@ -9,7 +9,7 @@ use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 5;
+pub const COMPILER_VERSION: i32 = 6;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
@@ -443,7 +443,7 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
     let where_value = format!("field_name = '{field}' AND state = 'value'");
     match channel.kind {
         ChannelKind::Exact => format!(
-            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_object('field', '{field}', 'value', pg_catalog.encode(canonical_bytes, 'hex')) AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND canonical_bytes IS NOT NULL",
+            "SELECT '{channel_id}'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND canonical_bytes IS NOT NULL",
             channel_id = channel.channel_id.replace('\'', "''")
         ),
         ChannelKind::CompositeExact => {
@@ -480,11 +480,15 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
                 .join(" AND ");
             let block_values = aliases
                 .iter()
-                .map(|(_, alias, _)| format!("pg_catalog.encode({alias}.canonical_bytes, 'hex')"))
+                .map(|(_, alias, _)| {
+                    format!(
+                        "pg_catalog.int4send(pg_catalog.octet_length({alias}.canonical_bytes)) || {alias}.canonical_bytes"
+                    )
+                })
                 .collect::<Vec<_>>()
-                .join(", ");
+                .join(" || ");
             format!(
-                "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_array({block_values}) AS block_key, n0.source_record_id, n0.source_sort_key\n{from}\nWHERE {value_filters}",
+                "SELECT '{channel_id}'::text AS channel_id, {block_values} AS block_key, n0.source_record_id, n0.source_sort_key\n{from}\nWHERE {value_filters}",
                 channel_id = channel.channel_id.replace('\'', "''"),
                 block_values = block_values,
                 from = from,
@@ -492,12 +496,12 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
             )
         }
         ChannelKind::Prefix => format!(
-            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_object('field', '{field}', 'prefix', pg_catalog.left(normalized, {length})) AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND normalized IS NOT NULL",
+            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.convert_to(pg_catalog.left(normalized, {length}), 'UTF8') AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND normalized IS NOT NULL",
             channel_id = channel.channel_id.replace('\'', "''"),
             length = channel.prefix_length.expect("validated prefix length")
         ),
         ChannelKind::Token => format!(
-            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.jsonb_build_object('field', '{field}', 'token', token) AS block_key, source_record_id, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY token, source_record_id, source_sort_key",
+            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.convert_to(token, 'UTF8') AS block_key, source_record_id, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY token, source_record_id, source_sort_key",
             channel_id = channel.channel_id.replace('\'', "''"),
             min_length = channel.token_min_length.expect("validated token length")
         ),
@@ -616,7 +620,7 @@ fn match_node(channel: &CandidateChannel) -> Value {
             .map(|name| format!("normalized/{name}"))
             .collect(),
         candidate_block_sql(channel),
-        json!({"channel_id":"text","block_key":"jsonb","source_record_id":"uuid","source_sort_key":"bytea"}),
+        json!({"channel_id":"text","block_key":"bytea","source_record_id":"uuid","source_sort_key":"bytea"}),
     )
 }
 
@@ -702,13 +706,13 @@ pub fn compile(entity: &Entity) -> Value {
             format!("block-stats/{}", channel.channel_id),
             vec![format!("blocks/{}", channel.channel_id)],
             candidate_block_stats_sql(channel),
-            json!({"channel_id":"text","block_key":"jsonb","block_records":"bigint"}),
+            json!({"channel_id":"text","block_key":"bytea","block_records":"bigint"}),
         ));
         nodes.push(node(
             format!("block-overflow/{}", channel.channel_id),
             vec![format!("block-stats/{}", channel.channel_id)],
             candidate_block_overflow_sql(channel, &limits),
-            json!({"channel_id":"text","block_key":"jsonb","block_records":"bigint","max_block_records":"bigint"}),
+            json!({"channel_id":"text","block_key":"bytea","block_records":"bigint","max_block_records":"bigint"}),
         ));
     }
     let mut blocks: Vec<String> = plan
@@ -850,7 +854,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], true);
-        assert_eq!(graph["compiler_version"], 5);
+        assert_eq!(graph["compiler_version"], 6);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
