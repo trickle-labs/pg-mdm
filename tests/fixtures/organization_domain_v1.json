@@ -1,11 +1,89 @@
 {
   "format_version": 1,
   "domain": "organization",
-  "purpose": "small de-identified candidate-envelope fixture",
-  "records": [
-    {"label": "org_a", "source": "crm", "name": "Northwind Trading", "domain": "northwind.example"},
-    {"label": "org_a", "source": "erp", "name": "Northwind Trading Ltd", "domain": "northwind.example"},
-    {"label": "org_b", "source": "crm", "name": "Contoso Supplies", "domain": "contoso.example"},
-    {"label": "org_c", "source": "registry", "name": "Example Holdings", "domain": "holdings.example"}
+  "metadata": {
+    "label_origin": "synthetic records with manually assigned entity labels",
+    "permitted_use": "test-only semantic regression; not a production accuracy claim",
+    "unresolved_labels": ["held_contact_1", "held_contact_2"],
+    "thresholds": {
+      "approval_status": "pending release-owner sign-off",
+      "candidate_recall_min": null,
+      "false_merges_max": null
+    }
+  },
+  "candidate_plan": {
+    "format_version": 1,
+    "channels": [
+      {"channel_id":"email", "kind":"exact", "fields":["email"], "parameters":{}, "owners":["same_email"]},
+      {"channel_id":"domain", "kind":"exact", "fields":["domain"], "parameters":{}, "owners":["same_domain"]},
+      {"channel_id":"registration", "kind":"exact", "fields":["registration"], "parameters":{}, "owners":["same_registration_context"]},
+      {"channel_id":"phone", "kind":"exact", "fields":["phone"], "parameters":{}, "owners":["same_phone"]},
+      {"channel_id":"name_token", "kind":"token", "fields":["name"], "parameters":{"min_length":5}, "owners":["same_name"]}
+    ]
+  },
+  "field_cleaners": {
+    "name": "company_name",
+    "email": "email",
+    "domain": "text",
+    "registration": "tax_id",
+    "jurisdiction": "text",
+    "phone": "phone"
+  },
+  "match_rules": [
+    {"name":"same_email", "fields":["email"], "comparison":"exact", "strength":"supporting", "evidence_group":"contact", "threshold":null, "candidate":{"kind":"exact","field":"email"}},
+    {"name":"same_domain", "fields":["domain"], "comparison":"exact", "strength":"identity", "evidence_group":"domain", "threshold":null, "candidate":{"kind":"exact","field":"domain"}},
+    {"name":"same_registration_context", "fields":["registration","jurisdiction"], "comparison":"exact", "strength":"identity", "evidence_group":"registration_context", "threshold":null, "candidate":{"kind":"exact","field":"registration"}},
+    {"name":"same_phone", "fields":["phone"], "comparison":"exact", "strength":"supporting", "evidence_group":"contact", "threshold":null, "candidate":{"kind":"exact","field":"phone"}},
+    {"name":"same_name", "fields":["name"], "comparison":"normalized_levenshtein", "strength":"strong", "evidence_group":"business_name", "threshold":7600, "candidate":{"kind":"token","field":"name","min_length":5}}
+  ],
+  "partitions": {
+    "tuning": [
+      {"id":"10000000-0000-4000-8000-000000000001","source":"crm","label":"northwind","fields":{"name":"northwind trading","domain":"northwind.example","email":"ops@northwind.example","registration":"gb-1001","jurisdiction":"gb"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000002","source":"erp","label":"northwind","fields":{"name":"northwind trading ltd","domain":"northwind.example","email":"ops@northwind.example","registration":"gb-1001","jurisdiction":"gb"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000003","source":"crm","label":"contoso","fields":{"name":"contoso supplies","domain":"contoso.example","email":"purchasing@shared.example","registration":"gb-2002","jurisdiction":"gb"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000004","source":"erp","label":"contoso","fields":{"name":"contoso supplies limited","domain":"contoso.example","email":"purchasing@shared.example","registration":"gb-2002","jurisdiction":"gb"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000005","source":"crm","label":"acme","fields":{"name":"acme logistics","domain":"acme.example","email":"purchasing@shared.example"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000006","source":"registry","label":"meridian","fields":{"name":"meridian global north","domain":"meridian-north.example"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000007","source":"crm","label":"meridian","fields":{"name":"meridian global south","domain":"meridian-south.example"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000008","source":"erp","label":"south_freight","fields":{"name":"global south freight","domain":"south-freight.example"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-000000000009","source":"registry","label":"branch_north","fields":{"name":"north harbor services","registration":"42","jurisdiction":"north"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-00000000000a","source":"registry","label":"branch_south","fields":{"name":"southern peninsula freight","registration":"42","jurisdiction":"south"},"authority":{}},
+      {"id":"10000000-0000-4000-8000-00000000000b","source":"crm","label":"conflict_north","fields":{"name":"polar freight north","phone":"+15550001","email":"dispatch@polar.example"},"authority":{"tax_id":"tax-north"}},
+      {"id":"10000000-0000-4000-8000-00000000000c","source":"erp","label":"conflict_south","fields":{"name":"polar freight south","phone":"+15550001","email":"dispatch@polar.example"},"authority":{"tax_id":"tax-south"}}
+    ],
+    "held_out": [
+      {"id":"20000000-0000-4000-8000-000000000001","source":"crm","label":"glacier","fields":{"name":"glacier transport","domain":"glacier.example","registration":"no-3003","jurisdiction":"no"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000002","source":"erp","label":"glacier","fields":{"name":"glacier transport group","domain":"glacier.example","registration":"no-3003","jurisdiction":"no"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000003","source":"crm","label":"held_contact_1","fields":{"name":"copperline retail","email":"office@shared.example"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000004","source":"erp","label":"held_contact_2","fields":{"name":"stonebridge foods","email":"office@shared.example"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000005","source":"registry","label":"aurora","fields":{"name":"aurora industrial north","domain":"aurora.example","registration":"se-4004","jurisdiction":"se"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000006","source":"crm","label":"aurora","fields":{"name":"aurora industrial","domain":"aurora.example","registration":"se-4004","jurisdiction":"se"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000007","source":"registry","label":"weak_chain","fields":{"name":"silverline transit east","domain":"silverline-east.example"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000008","source":"crm","label":"weak_chain","fields":{"name":"silverline transit west","domain":"silverline-west.example"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-000000000009","source":"erp","label":"weak_chain_neighbor","fields":{"name":"transit west services","domain":"west-services.example"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-00000000000a","source":"registry","label":"context_west","fields":{"name":"fjord trading west","registration":"77","jurisdiction":"west"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-00000000000b","source":"registry","label":"context_east","fields":{"name":"highland ocean freight","registration":"77","jurisdiction":"east"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-00000000000c","source":"crm","label":"authority_a","fields":{"name":"redwood freight","phone":"+15550002","email":"routing@redwood.example"},"authority":{"tax_id":"tax-a"}},
+      {"id":"20000000-0000-4000-8000-00000000000d","source":"erp","label":"authority_b","fields":{"name":"redwood supply","phone":"+15550002","email":"routing@redwood.example"},"authority":{"tax_id":"tax-b"}},
+      {"id":"20000000-0000-4000-8000-00000000000e","source":"review_hold_1","label":null,"fields":{"name":"review hold north","email":"manual-hold@shared.example"},"authority":{}},
+      {"id":"20000000-0000-4000-8000-00000000000f","source":"review_hold_2","label":null,"fields":{"name":"review hold south","email":"manual-hold@shared.example"},"authority":{}}
+    ]
+  },
+  "cannot_link_pairs": [
+    ["20000000-0000-4000-8000-00000000000e","20000000-0000-4000-8000-00000000000f"]
+  ],
+  "safety_cases": [
+    {"partition":"tuning","case_id":"shared_contact","kind":"shared_contact","must_not_merge":[["10000000-0000-4000-8000-000000000003","10000000-0000-4000-8000-000000000005"]]},
+    {"partition":"tuning","case_id":"weak_chain","kind":"weak_chain","bridge_pairs":[["10000000-0000-4000-8000-000000000006","10000000-0000-4000-8000-000000000007"],["10000000-0000-4000-8000-000000000007","10000000-0000-4000-8000-000000000008"]],"must_not_merge":[["10000000-0000-4000-8000-000000000006","10000000-0000-4000-8000-000000000008"]]},
+    {"partition":"tuning","case_id":"authoritative_conflict","kind":"authoritative_conflict","must_not_merge":[["10000000-0000-4000-8000-00000000000b","10000000-0000-4000-8000-00000000000c"]]},
+    {"partition":"tuning","case_id":"business_context","kind":"business_context","must_not_merge":[["10000000-0000-4000-8000-000000000009","10000000-0000-4000-8000-00000000000a"]]},
+    {"partition":"held_out","case_id":"shared_contact","kind":"shared_contact","must_not_merge":[["20000000-0000-4000-8000-000000000003","20000000-0000-4000-8000-000000000004"]]},
+    {"partition":"held_out","case_id":"weak_chain","kind":"weak_chain","bridge_pairs":[["20000000-0000-4000-8000-000000000007","20000000-0000-4000-8000-000000000008"],["20000000-0000-4000-8000-000000000008","20000000-0000-4000-8000-000000000009"]],"must_not_merge":[["20000000-0000-4000-8000-000000000007","20000000-0000-4000-8000-000000000009"]]},
+    {"partition":"held_out","case_id":"authoritative_conflict","kind":"authoritative_conflict","must_not_merge":[["20000000-0000-4000-8000-00000000000c","20000000-0000-4000-8000-00000000000d"]]},
+    {"partition":"held_out","case_id":"business_context","kind":"business_context","must_not_merge":[["20000000-0000-4000-8000-00000000000a","20000000-0000-4000-8000-00000000000b"]]},
+    {"partition":"held_out","case_id":"explicit_cannot_link","kind":"cannot_link","must_not_merge":[["20000000-0000-4000-8000-00000000000e","20000000-0000-4000-8000-00000000000f"]]}
+  ],
+  "lifecycle_checks": [
+    {"partition":"tuning","case_id":"northwind_delete_reactivate","deleted_record_id":"10000000-0000-4000-8000-000000000002","expected_reactivated_label":"northwind"}
   ]
 }

@@ -2,7 +2,7 @@
 
 CREATE DATABASE foundation;
 \connect foundation postgres
-CREATE EXTENSION pg_trickle;
+CREATE EXTENSION pg_trickle VERSION '0.105.1';
 CREATE EXTENSION pg_mdm VERSION '0.8.0';
 
 DO $$
@@ -35,15 +35,16 @@ $$;
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.11.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.12.0')
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings_entity_definition_generation') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members_binding_ordinal') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION '0.8.0 to 0.11.0 upgrade did not complete';
+        RAISE EXCEPTION '0.8.0 to 0.12.0 upgrade did not complete';
     END IF;
 END
 $$;
@@ -112,7 +113,7 @@ $$;
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
-ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -127,15 +128,15 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.7.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
-ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.11.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.12.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.11.0 upgrade did not complete';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.12.0 upgrade did not complete';
     END IF;
 END
 $$;
@@ -286,6 +287,15 @@ CREATE TABLE public.mdm_graph_diff_source (
 INSERT INTO public.mdm_graph_diff_source VALUES
     (1, 'mdm_administrator', 'visible');
 GRANT SELECT, INSERT, UPDATE, DELETE, MAINTAIN ON public.mdm_graph_diff_source TO mdm_administrator;
+CREATE TABLE public.mdm_candidate_source (
+    source_record_id uuid NOT NULL,
+    field_name text NOT NULL,
+    state text NOT NULL,
+    canonical_bytes bytea,
+    source_sort_key bytea NOT NULL,
+    PRIMARY KEY (source_record_id, field_name)
+);
+GRANT SELECT, INSERT, UPDATE, DELETE, MAINTAIN ON public.mdm_candidate_source TO mdm_administrator;
 
 SET SESSION AUTHORIZATION mdm_test_login;
 SET ROLE mdm_administrator;
@@ -321,6 +331,66 @@ SELECT pgtrickle.create_stream_table(
     initialize => false,
     orchestration_mode => 'EXTERNAL'
 );
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_candidate_blocks_auto',
+    query => $query$SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+        FROM public.mdm_candidate_source
+        WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL$query$,
+    schedule => '1h', refresh_mode => 'AUTO', initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_candidate_blocks_full',
+    query => $query$SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+        FROM public.mdm_candidate_source
+        WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL$query$,
+    schedule => '1h', refresh_mode => 'FULL', initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_candidate_pairs_auto',
+    query => $query$WITH blocks AS (
+            SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+            FROM public.mdm_candidate_source
+            WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
+        ), stats AS (
+            SELECT channel_id, block_key, count(*)::bigint AS block_records
+            FROM blocks GROUP BY channel_id, block_key
+        )
+        SELECT l.source_record_id AS left_source_record_id,
+               r.source_record_id AS right_source_record_id,
+               l.source_sort_key AS left_sort_key,
+               r.source_sort_key AS right_sort_key
+        FROM blocks l
+        JOIN stats s ON s.channel_id = l.channel_id AND s.block_key = l.block_key
+        JOIN blocks r ON r.channel_id = l.channel_id AND r.block_key = l.block_key
+            AND l.source_sort_key < r.source_sort_key
+        WHERE s.block_records <= 100$query$,
+    schedule => '1h', refresh_mode => 'AUTO', initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
+SELECT pgtrickle.create_stream_table(
+    name => 'public.mdm_candidate_pairs_full',
+    query => $query$WITH blocks AS (
+            SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+            FROM public.mdm_candidate_source
+            WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
+        ), stats AS (
+            SELECT channel_id, block_key, count(*)::bigint AS block_records
+            FROM blocks GROUP BY channel_id, block_key
+        )
+        SELECT l.source_record_id AS left_source_record_id,
+               r.source_record_id AS right_source_record_id,
+               l.source_sort_key AS left_sort_key,
+               r.source_sort_key AS right_sort_key
+        FROM blocks l
+        JOIN stats s ON s.channel_id = l.channel_id AND s.block_key = l.block_key
+        JOIN blocks r ON r.channel_id = l.channel_id AND r.block_key = l.block_key
+            AND l.source_sort_key < r.source_sort_key
+        WHERE s.block_records <= 100$query$,
+    schedule => '1h', refresh_mode => 'FULL', initialize => false,
+    orchestration_mode => 'EXTERNAL'
+);
 CREATE FUNCTION public.refresh_mdm_graph(roots regclass[])
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -334,6 +404,38 @@ BEGIN
     SELECT * INTO STRICT refreshed
     FROM pgtrickle.refresh_graph_strict(roots, expected_digest, 'ALLOW');
     RETURN pg_catalog.to_jsonb(refreshed);
+END
+$$;
+CREATE FUNCTION public.check_mdm_candidate_probes(stage text)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    roots regclass[] := ARRAY[
+        'public.mdm_candidate_blocks_auto'::regclass,
+        'public.mdm_candidate_blocks_full'::regclass,
+        'public.mdm_candidate_pairs_auto'::regclass,
+        'public.mdm_candidate_pairs_full'::regclass];
+    refreshed jsonb;
+BEGIN
+    refreshed := public.refresh_mdm_graph(roots);
+    IF EXISTS (SELECT * FROM public.mdm_candidate_blocks_auto EXCEPT ALL SELECT * FROM public.mdm_candidate_blocks_full)
+       OR EXISTS (SELECT * FROM public.mdm_candidate_blocks_full EXCEPT ALL SELECT * FROM public.mdm_candidate_blocks_auto)
+       OR EXISTS (SELECT * FROM public.mdm_candidate_pairs_auto EXCEPT ALL SELECT * FROM public.mdm_candidate_pairs_full)
+       OR EXISTS (SELECT * FROM public.mdm_candidate_pairs_full EXCEPT ALL SELECT * FROM public.mdm_candidate_pairs_auto)
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto') IS NULL
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_full') IS DISTINCT FROM 'FULL'
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_auto') IS NULL
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full') IS DISTINCT FROM 'FULL' THEN
+        RAISE EXCEPTION 'candidate probes disagree or omitted strategy at %: %', stage, refreshed;
+    END IF;
+    RAISE NOTICE 'candidate probe strategies at %: blocks AUTO=%, FULL=%; pairs AUTO=%, FULL=%',
+        stage,
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto'),
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_full'),
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_auto'),
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full');
+    RETURN refreshed;
 END
 $$;
 CREATE FUNCTION public.mdm_graph_action(results jsonb, node_identity text)
@@ -499,7 +601,83 @@ BEGIN
     END IF;
 END
 $$;
+DO $$
+DECLARE
+    refreshed jsonb;
+BEGIN
+    INSERT INTO public.mdm_candidate_source VALUES
+        ('00000000-0000-0000-0000-000000000001', 'email', 'value', '\x01'::bytea, '\x01'::bytea),
+        ('00000000-0000-0000-0000-000000000002', 'email', 'value', '\x01'::bytea, '\x02'::bytea),
+        ('00000000-0000-0000-0000-000000000003', 'email', 'value', '\x01'::bytea, '\x03'::bytea),
+        ('00000000-0000-0000-0000-000000000004', 'email', 'value', '\x01'::bytea, '\x04'::bytea),
+        ('00000000-0000-0000-0000-000000000005', 'phone', 'value', '\x01'::bytea, '\x05'::bytea),
+        ('00000000-0000-0000-0000-000000000006', 'email', 'missing', '\x01'::bytea, '\x06'::bytea);
+    refreshed := public.check_mdm_candidate_probes('multi-row insert');
+    IF (SELECT count(*) FROM public.mdm_candidate_blocks_auto) <> 4
+       OR (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 6 THEN
+        RAISE EXCEPTION 'candidate multi-row inserts did not produce all rows: %', refreshed;
+    END IF;
+END
+$$;
+
+DO $$
+DECLARE refreshed jsonb;
+BEGIN
+    UPDATE public.mdm_candidate_source SET canonical_bytes = '\x02'::bytea
+    WHERE source_record_id = '00000000-0000-0000-0000-000000000004' AND field_name = 'email';
+    refreshed := public.check_mdm_candidate_probes('update');
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 3 THEN
+        RAISE EXCEPTION 'candidate update produced an unexpected pair set: %', refreshed;
+    END IF;
+END
+$$;
+
+DO $$
+DECLARE refreshed jsonb;
+BEGIN
+    DELETE FROM public.mdm_candidate_source
+    WHERE source_record_id = '00000000-0000-0000-0000-000000000003';
+    refreshed := public.check_mdm_candidate_probes('delete');
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 1 THEN
+        RAISE EXCEPTION 'candidate delete produced an unexpected pair set: %', refreshed;
+    END IF;
+END
+$$;
+
+BEGIN;
+UPDATE public.mdm_candidate_source SET canonical_bytes = '\x01'::bytea
+WHERE source_record_id = '00000000-0000-0000-0000-000000000004' AND field_name = 'email';
+DO $$
+DECLARE refreshed jsonb;
+BEGIN
+    refreshed := public.check_mdm_candidate_probes('rolled-back mutation');
+END
+$$;
+ROLLBACK;
+
+DO $$
+DECLARE refreshed jsonb;
+BEGIN
+    refreshed := public.check_mdm_candidate_probes('rollback recovery');
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 1 THEN
+        RAISE EXCEPTION 'candidate rollback changed rows: %', refreshed;
+    END IF;
+END
+$$;
+
+DO $$
+DECLARE refreshed jsonb;
+BEGIN
+    UPDATE public.mdm_candidate_source SET canonical_bytes = '\x01'::bytea
+    WHERE source_record_id = '00000000-0000-0000-0000-000000000004' AND field_name = 'email';
+    refreshed := public.check_mdm_candidate_probes('retry');
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 3 THEN
+        RAISE EXCEPTION 'candidate retry did not publish all pairs: %', refreshed;
+    END IF;
+END
+$$;
 DROP FUNCTION public.mdm_graph_action(jsonb, text);
+DROP FUNCTION public.check_mdm_candidate_probes(text);
 DROP FUNCTION public.refresh_mdm_graph(regclass[]);
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
@@ -816,10 +994,82 @@ BEGIN
        OR (rebuilt->>'publication_revision')::bigint <> 1 THEN
         RAISE EXCEPTION 'administrative rebuild is invalid: %', rebuilt;
     END IF;
-    IF mdm.preview('customer', 'validation')->>'exact' <> 'false'
-       OR mdm.preview('customer', 'sampled')->>'mode' <> 'sampled'
-       OR mdm.preview('customer', 'scoped', '{"source_record_ids":[]}'::jsonb)->>'exact' <> 'true' THEN
-        RAISE EXCEPTION 'preview modes are invalid';
+END
+$$;
+RESET ROLE;
+
+
+\connect foundation postgres
+CREATE TABLE public.e2e_pg_trickle_upgrade_snapshot AS
+SELECT e.publication_revision,
+       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.graph_generation)
+        FROM mdm_internal.graph_bindings b WHERE b.entity_id = e.entity_id) AS bindings,
+       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.logical_id)
+        FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+        WHERE b.entity_id = e.entity_id) AS graph_members,
+       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.publication_revision)
+        FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id) AS publications,
+       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(i) ORDER BY i.mdm_id)
+        FROM mdm_internal.identity_registry i WHERE i.entity_id = e.entity_id) AS identities,
+       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.mdm_id)
+        FROM mdm_out.customer c) AS outputs,
+       pg_catalog.has_table_privilege('mdm_output_reader', 'mdm_out.customer', 'SELECT') AS output_reader_grant,
+       pg_catalog.to_regclass('mdm_out.customer')::text AS consumer_relation
+FROM mdm_internal.entities e
+WHERE e.entity_name = 'customer';
+DO $$
+BEGIN
+    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.105.1' THEN
+        RAISE EXCEPTION 'populated upgrade fixture did not start on pg_trickle 0.105.1';
+    END IF;
+END
+$$;
+ALTER EXTENSION pg_trickle UPDATE TO '0.105.2';
+DO $$
+DECLARE
+    snapshot record;
+    current_state record;
+BEGIN
+    SELECT * INTO STRICT snapshot FROM public.e2e_pg_trickle_upgrade_snapshot;
+    SELECT e.publication_revision,
+           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.graph_generation)
+            FROM mdm_internal.graph_bindings b WHERE b.entity_id = e.entity_id) AS bindings,
+           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.logical_id)
+            FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+            WHERE b.entity_id = e.entity_id) AS graph_members,
+           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.publication_revision)
+            FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id) AS publications,
+           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(i) ORDER BY i.mdm_id)
+            FROM mdm_internal.identity_registry i WHERE i.entity_id = e.entity_id) AS identities,
+           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.mdm_id)
+            FROM mdm_out.customer c) AS outputs,
+           pg_catalog.has_table_privilege('mdm_output_reader', 'mdm_out.customer', 'SELECT') AS output_reader_grant,
+           pg_catalog.to_regclass('mdm_out.customer')::text AS consumer_relation
+    INTO STRICT current_state
+    FROM mdm_internal.entities e
+    WHERE e.entity_name = 'customer';
+    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.105.2'
+       OR snapshot.publication_revision IS DISTINCT FROM current_state.publication_revision
+       OR snapshot.bindings IS DISTINCT FROM current_state.bindings
+       OR snapshot.graph_members IS DISTINCT FROM current_state.graph_members
+       OR snapshot.publications IS DISTINCT FROM current_state.publications
+       OR snapshot.identities IS DISTINCT FROM current_state.identities
+       OR snapshot.outputs IS DISTINCT FROM current_state.outputs
+       OR snapshot.output_reader_grant IS DISTINCT FROM current_state.output_reader_grant
+       OR snapshot.consumer_relation IS DISTINCT FROM current_state.consumer_relation THEN
+        RAISE EXCEPTION 'pg_trickle upgrade changed populated MDM state: before %, after %', snapshot, current_state;
+    END IF;
+END
+$$;
+DROP TABLE public.e2e_pg_trickle_upgrade_snapshot;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('customer', 'ALLOW');
+    IF result->>'changed' <> 'false' OR (result->>'publication_revision')::bigint <> 1 THEN
+        RAISE EXCEPTION 'post-upgrade populated graph refresh is invalid: %', result;
     END IF;
 END
 $$;
@@ -847,6 +1097,84 @@ AS $$
 $$;
 REVOKE ALL ON FUNCTION public.e2e_source_records(bigint[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.e2e_source_records(bigint[]) TO mdm_administrator;
+CREATE FUNCTION public.e2e_active_mdm_ids(ids bigint[])
+RETURNS uuid[]
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, mdm_internal, public
+AS $$
+    SELECT COALESCE(pg_catalog.array_agg(DISTINCT m.mdm_id ORDER BY m.mdm_id), ARRAY[]::uuid[])
+    FROM mdm_internal.memberships m
+    JOIN public.e2e_source_records(ids) r USING (source_record_id)
+    WHERE m.active
+$$;
+REVOKE ALL ON FUNCTION public.e2e_active_mdm_ids(bigint[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_active_mdm_ids(bigint[]) TO mdm_administrator;
+CREATE FUNCTION public.e2e_preview_state()
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, mdm_internal, mdm_out
+AS $$
+    SELECT pg_catalog.jsonb_build_object(
+        'publication_revision', e.publication_revision,
+        'publication_count', (SELECT count(*) FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id),
+        'observation_count', (SELECT count(*) FROM mdm_internal.publication_observations o WHERE o.entity_id = e.entity_id),
+        'operation_count', (SELECT count(*) FROM mdm_internal.operations o WHERE o.entity_name = e.entity_name),
+        'source_record_count', (SELECT count(*) FROM mdm_internal.source_records r WHERE r.entity_id = e.entity_id),
+        'identity_count', (SELECT count(*) FROM mdm_internal.identity_registry i WHERE i.entity_id = e.entity_id),
+        'output_count', (SELECT count(*) FROM mdm_out.customer)
+    )
+    FROM mdm_internal.entities e
+    WHERE e.entity_name = 'customer'
+$$;
+REVOKE ALL ON FUNCTION public.e2e_preview_state() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_preview_state() TO mdm_administrator;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    before_state jsonb;
+    after_state jsonb;
+    validation jsonb;
+    sampled jsonb;
+    scoped jsonb;
+    source_ids jsonb;
+    duplicate_id text;
+BEGIN
+    before_state := public.e2e_preview_state();
+    validation := mdm.preview('customer', 'validation');
+    sampled := mdm.preview('customer', 'sampled', '{"sample_size":2}'::jsonb);
+    SELECT pg_catalog.jsonb_agg(source_record_id::text ORDER BY source_record_id), min(source_record_id::text)
+    INTO source_ids, duplicate_id
+    FROM public.e2e_source_records(ARRAY[9001, 9002]::bigint[]);
+    scoped := mdm.preview('customer', 'scoped', pg_catalog.jsonb_build_object('source_record_ids', source_ids));
+    after_state := public.e2e_preview_state();
+    IF validation->>'evidence_level' <> 'validation' OR validation->>'exact' <> 'false'
+       OR validation->>'data_read' <> 'false'
+       OR sampled->>'evidence_level' <> 'sampled' OR sampled->>'exact' <> 'false'
+       OR sampled->>'sample_size' <> '2' OR sampled->>'record_count' <> '2'
+       OR scoped->>'evidence_level' <> 'exact_subjects' OR scoped->>'exact' <> 'true'
+       OR scoped->>'limitation' NOT LIKE '%Omitted records can change the full-entity result%'
+       OR before_state IS DISTINCT FROM after_state THEN
+        RAISE EXCEPTION 'preview contract or read-only behavior failed: %, %, %, state %, %', validation, sampled, scoped, before_state, after_state;
+    END IF;
+    BEGIN
+        PERFORM mdm.preview('customer', 'scoped', pg_catalog.jsonb_build_object('source_record_ids', pg_catalog.jsonb_build_array(duplicate_id, duplicate_id)));
+        RAISE EXCEPTION 'duplicate preview subjects were accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'MDM_DEFINITION_INVALID') = 0 THEN RAISE; END IF;
+    END;
+    BEGIN
+        PERFORM mdm.preview('customer', 'scoped', pg_catalog.jsonb_build_object('source_record_ids', source_ids, 'unknown', true));
+        RAISE EXCEPTION 'unknown preview option was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'MDM_DEFINITION_INVALID') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
 CREATE TABLE public.e2e_customer_state_snapshot (
     snapshot_id boolean PRIMARY KEY DEFAULT true CHECK (snapshot_id),
     state jsonb NOT NULL
@@ -899,6 +1227,9 @@ DECLARE
     right_id uuid;
     third_id uuid;
     result record;
+    before_preview jsonb;
+    after_preview jsonb;
+    scoped_preview jsonb;
 BEGIN
     SELECT source_record_id INTO STRICT left_id FROM public.e2e_source_records(ARRAY[9001]::bigint[]);
     SELECT source_record_id INTO STRICT right_id FROM public.e2e_source_records(ARRAY[9002]::bigint[]);
@@ -912,6 +1243,16 @@ BEGIN
     FROM mdm_steward.decide('customer', right_id, third_id, 'NOT_MATCH', 0, 'contradictory source identity');
     IF result.decision_version <> 1 OR result.decision_epoch <> 2 THEN
         RAISE EXCEPTION 'second steward decision is invalid: %', result;
+    END IF;
+    before_preview := public.e2e_preview_state();
+    scoped_preview := mdm.preview(
+        'customer', 'scoped',
+        pg_catalog.jsonb_build_object('source_record_ids', pg_catalog.jsonb_build_array(left_id::text)));
+    after_preview := public.e2e_preview_state();
+    IF pg_catalog.jsonb_array_length(scoped_preview->'materialized_source_record_ids') <> 3
+       OR before_preview IS DISTINCT FROM after_preview THEN
+        RAISE EXCEPTION 'scoped preview did not expand manual-decision neighbors read-only: %, %, %',
+            scoped_preview, before_preview, after_preview;
     END IF;
     BEGIN
         PERFORM mdm_steward.decide('customer', left_id, third_id, 'MATCH', 0, 'must remain prohibited');
@@ -957,6 +1298,29 @@ BEGIN
        OR (result->>'publication_revision')::bigint <> 2
        OR result->'source_boundary'->>'completeness' <> 'PROVEN' THEN
         RAISE EXCEPTION 'insert refresh did not publish a proven boundary: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    mdm_ids uuid[];
+    before_state jsonb;
+    after_state jsonb;
+    scoped jsonb;
+BEGIN
+    mdm_ids := public.e2e_active_mdm_ids(ARRAY[1, 2]::bigint[]);
+    before_state := public.e2e_preview_state();
+    scoped := mdm.preview('customer', 'scoped', pg_catalog.jsonb_build_object('mdm_ids', pg_catalog.to_jsonb(mdm_ids)));
+    after_state := public.e2e_preview_state();
+    IF cardinality(mdm_ids) <> 1
+       OR scoped->>'evidence_level' <> 'exact_subjects'
+       OR scoped->>'record_count' <> '2'
+       OR pg_catalog.jsonb_array_length(scoped->'materialized_source_record_ids') <> 2
+       OR before_state IS DISTINCT FROM after_state THEN
+        RAISE EXCEPTION 'mdm_id preview did not expand active members read-only: %, %, %', scoped, before_state, after_state;
     END IF;
 END
 $$;

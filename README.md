@@ -3,17 +3,17 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.11 qualifies differential graph maintenance and transactional MDM recovery against the pinned `pg_trickle` 0.105.1 package.
+> v0.12 admits `pg_trickle` 0.105.2 and closes scoped and sampled preview behavior against the production resolver.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.11
+## Install v0.12
 
-v0.11 supports PostgreSQL 18 and requires the pinned `pg_trickle` 0.105.1 package. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum.
+v0.12 supports PostgreSQL 18 and requires the pinned `pg_trickle` 0.105.2 package. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum.
 
-The extension stores definitions, installs private Graph V1 members transactionally, refreshes complete evidence, and publishes ordinary PostgreSQL output tables in the same transaction. The v0.11 CI suite compares AUTO and FULL graph results and tests rollback and retry against PostgreSQL 18.
+The extension stores definitions, installs private Graph V1 members transactionally, refreshes complete evidence, and publishes ordinary PostgreSQL output tables in the same transaction. The v0.12 CI suite compares AUTO and FULL graph results, tests rollback and retry, and exercises sampled and scoped preview on PostgreSQL 18.
 
 Build and copy the package:
 
@@ -172,7 +172,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The v0.11 release adds qualification for AUTO versus FULL graph maintenance, MDM source insert, update, and delete histories, no-op refreshes, and rollback with retry. Earlier releases supply the resolver, stewardship, publication, resource-limit, upgrade, backup, restore, and clone behavior exercised by the cumulative CI suite.
+The v0.12 release admits the checksummed `pg_trickle` 0.105.2 artifact, qualifies preview modes through the production resolver, and extends the cumulative release and V1 acceptance evidence. Earlier releases supply the resolver, stewardship, publication, resource-limit, upgrade, backup, restore, and clone behavior exercised by CI.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

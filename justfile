@@ -49,6 +49,12 @@ test-publication-properties:
     cargo test --lib --features pg18 publication --offline
     cargo test --lib --features pg18 output --offline
 
+test-organization-quality:
+    cargo test --test organization_quality_tests --features pg18 -- --nocapture
+
+test-stewardship-contract:
+    cargo test --test stewardship_contract_tests --features pg18
+
 test-publication-e2e:
     scripts/run_e2e_tests.sh
 
@@ -69,4 +75,4 @@ check-upgrades:
     python3 scripts/check_upgrade_paths.py
 
 check-archive: package
-	generated=$(find "{{package_dir}}" -name 'pg_mdm--0.11.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.11.0.sql
+	generated=$(find "{{package_dir}}" -name 'pg_mdm--0.12.0.sql' -type f -print -quit); test -n "$generated"; cmp "$generated" sql/archive/pg_mdm--0.12.0.sql

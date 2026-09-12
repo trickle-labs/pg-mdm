@@ -7,17 +7,17 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Rust edition | 2024 |
 | Rust toolchain | 1.98.0 |
 | Build target | `x86_64-unknown-linux-gnu` |
-| `Cargo.lock` SHA-256 | `3c2d7dc9c9ddb5c8e882d4b0fd106f83f57b6f3c8eb0c10b92bb7988ab7126eb` |
+| `Cargo.lock` SHA-256 | `f96a398612cfe55176933349dbb84d7156691d5e1714d124909ce0b143638a01` |
 | `cargo-pgrx` and `pgrx` | 0.18.0 |
 | Runtime PostgreSQL | 18.4, Debian Bookworm |
 | Build/test `pg_config` | 18.6 (`18.6-1.pgdg12+2`) |
 | PostgreSQL image | `postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf` |
-| `pg_trickle` version | 0.105.1 |
-| `pg_trickle` commit | `5bfdea89bbcca2bf6d606ddbf034b62eddf3b2ae` |
-| `pg_trickle` tag object | `fa6fbb0c17cdd3ac64f87b8d7611c828edaf5614` |
-| `pg_trickle` artifact | `pg_trickle-0.105.1-pg18-linux-amd64.tar.gz` |
-| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.1/pg_trickle-0.105.1-pg18-linux-amd64.tar.gz` |
-| Artifact SHA-256 | `a6b1942ce5d2517dc8ad94a04ba3f2508fad4be21d6fc247df873502bcf2e69e` |
+| `pg_trickle` version | 0.105.2 |
+| `pg_trickle` commit | `33df4cc91fda4fbadba79470347a714c8509703a` |
+| `pg_trickle` tag object | not recorded |
+| `pg_trickle` artifact | `pg_trickle-0.105.2-pg18-linux-amd64.tar.gz` |
+| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.2/pg_trickle-0.105.2-pg18-linux-amd64.tar.gz` |
+| Artifact SHA-256 | `bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416` |
 | Capture mode | trigger |
 
 The baseline capability response contains `external_graph_refresh 1.0 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.

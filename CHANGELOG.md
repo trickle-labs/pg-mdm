@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0
+
+- Admit the checksummed `pg_trickle` 0.105.2 PostgreSQL 18 package.
+- Replace the false exactness claim in scoped preview and implement bounded sampled and scoped previews through the production resolver.
+- Add candidate maintenance regressions, V1 acceptance traceability, and organization quality fixtures.
+- Add the 0.11.0 to 0.12.0 upgrade path and release-package archive.
+- Record the proposed `MDM-STEWARDSHIP/1` contract and shared fixtures for M0 review.
+
 ## 0.11.0
 
 - Qualify AUTO graph maintenance against a FULL reference through insert, update, delete, and no-op histories.

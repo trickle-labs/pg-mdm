@@ -10,6 +10,7 @@ pub mod constraint;
 pub mod decision;
 pub mod definition;
 pub mod error;
+pub mod evaluation;
 pub mod evidence;
 pub mod golden;
 pub mod graph_spec;

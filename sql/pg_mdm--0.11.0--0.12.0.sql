@@ -1,0 +1,1 @@
+-- v0.12 admits pg_trickle 0.105.2 and changes no MDM runtime schema.

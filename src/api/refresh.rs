@@ -12,14 +12,15 @@ use crate::constraint::{DecisionEdge, DecisionKind};
 use crate::definition::canonical::{digest, hex, json_bytes};
 use crate::definition::{Entity, parse_entity};
 use crate::error::MdmError;
+use crate::evaluation::{self, EvaluationRecord, GoldenRow};
 use crate::evidence::{EvidenceClass, EvidenceItem};
-use crate::golden::{GoldenCandidate, GoldenOverride, GoldenSelection};
+use crate::golden::{GoldenOverride, GoldenSelection};
 use crate::identity::{self, IdentityState};
 use crate::normalization::NormalizedState;
 use crate::output::{self, OutputField};
 use crate::pair::decide_pair_for_rules;
-use crate::resolver::{ResolverInput, ResolverLimits, ResolverRecord};
-use crate::review::{Review, ReviewCandidate, ReviewStatus, Subject};
+use crate::resolver::ResolverLimits;
+use crate::review::{Review, ReviewStatus};
 use crate::source_record::quote_identifier;
 
 struct RefreshRequest {
@@ -88,18 +89,6 @@ struct SourceRow {
     sort_key: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
-struct GoldenRow {
-    source_record_id: Uuid,
-    source_name: String,
-    field: String,
-    raw_value: Option<Value>,
-    row_changed_at: Option<i64>,
-    state: NormalizedState,
-    normalized: Option<String>,
-    canonical_bytes: Option<Vec<u8>>,
-}
-
 type PairEvidence = (CandidatePair, Vec<EvidenceItem>);
 
 #[derive(Clone, Debug, Serialize)]
@@ -143,29 +132,6 @@ fn sql_literal(value: &Value, type_name: &str) -> String {
         }
     };
     format!("{value}::{type_name}")
-}
-
-fn source_priority(entity: &Entity, source_name: &str) -> u32 {
-    entity
-        .sources
-        .iter()
-        .position(|source| source.name == source_name)
-        .unwrap_or(entity.sources.len()) as u32
-}
-
-fn source_authority(entity: &Entity, source_name: &str) -> BTreeMap<String, String> {
-    entity
-        .sources
-        .iter()
-        .find(|source| source.name == source_name)
-        .map(|source| {
-            source
-                .authority
-                .iter()
-                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.into())))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn load_context(
@@ -619,7 +585,23 @@ fn load_sources(
     context: &Context,
     max_active_records: usize,
 ) -> Result<Vec<SourceRow>, MdmError> {
-    let limit = i64::try_from(max_active_records.saturating_add(1)).map_err(|_| {
+    let rows = load_sources_ordered(client, context, max_active_records.saturating_add(1))?;
+    if rows.len() > max_active_records {
+        return Err(MdmError::ResolverLimit {
+            resource: "max_active_records",
+            observed: rows.len(),
+            limit: max_active_records,
+        });
+    }
+    Ok(rows)
+}
+
+fn load_sources_ordered(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    limit: usize,
+) -> Result<Vec<SourceRow>, MdmError> {
+    let limit = i64::try_from(limit).map_err(|_| {
         MdmError::ResolverInvalid("max_active_records cannot be represented as bigint".into())
     })?;
     let rows = client
@@ -629,13 +611,6 @@ fn load_sources(
             &[context.entity_id.clone().into(), limit.into()],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
-    if rows.len() > max_active_records {
-        return Err(MdmError::ResolverLimit {
-            resource: "max_active_records",
-            observed: rows.len(),
-            limit: max_active_records,
-        });
-    }
     rows.into_iter()
         .map(|row| {
             Ok(SourceRow {
@@ -819,8 +794,8 @@ fn load_pair_decisions(
                 .get(&pair.left_source_record_id)
                 .zip(source_names.get(&pair.right_source_record_id))
                 .is_some_and(|(left, right)| {
-                    let left = source_authority(&context.entity, left);
-                    let right = source_authority(&context.entity, right);
+                    let left = evaluation::source_authority(&context.entity, left);
+                    let right = evaluation::source_authority(&context.entity, right);
                     left.iter().any(|(field, left_value)| {
                         right
                             .get(field)
@@ -1011,119 +986,6 @@ fn load_limits(context: &Context) -> ResolverLimits {
     }
 }
 
-fn issue_candidates(
-    context: &Context,
-    rejected: &[crate::resolver::UnionFact],
-    golden: &BTreeMap<(Uuid, String), GoldenSelection>,
-) -> Vec<ReviewCandidate> {
-    let mut result = rejected
-        .iter()
-        .map(|fact| {
-            let subjects = vec![Subject::uuid("source_record", fact.edge.left_source_record_id), Subject::uuid("source_record", fact.edge.right_source_record_id)];
-            ReviewCandidate::new(context.definition_version, "warning", fact.reason_code.clone(), &subjects, json!({"left_source_record_id": fact.edge.left_source_record_id.to_string(), "right_source_record_id": fact.edge.right_source_record_id.to_string()}), json!({"reason_code": fact.reason_code, "evidence_groups": fact.evidence_groups}))
-        })
-        .collect::<Vec<_>>();
-    for ((mdm_id, field), selection) in golden {
-        for issue in &selection.issues {
-            let subject = Subject::new(
-                "golden",
-                [mdm_id.as_bytes().as_slice(), field.as_bytes()].concat(),
-            );
-            result.push(ReviewCandidate::new(
-                context.definition_version,
-                "warning",
-                issue.as_str(),
-                &[subject],
-                json!({"mdm_id": mdm_id.to_string(), "field": field}),
-                json!({"issue": issue.as_str()}),
-            ));
-        }
-    }
-    result
-}
-
-fn load_golden(
-    client: &mut SpiClient<'_>,
-    context: &Context,
-    memberships: &identity::IdentityState,
-) -> Result<BTreeMap<(Uuid, String), GoldenSelection>, MdmError> {
-    let rows = load_golden_rows(client, context)?;
-    let overrides = load_overrides(client, context)?;
-    let by_record = memberships
-        .memberships
-        .iter()
-        .filter(|membership| membership.active)
-        .map(|membership| (membership.source_record_id, membership.mdm_id))
-        .collect::<BTreeMap<_, _>>();
-    let mut candidates: BTreeMap<(Uuid, String), Vec<GoldenCandidate>> = BTreeMap::new();
-    for row in rows {
-        let Some(&mdm_id) = by_record.get(&row.source_record_id) else {
-            continue;
-        };
-        let Some(definition) = context
-            .entity
-            .golden_values
-            .iter()
-            .find(|definition| definition.field == row.field)
-        else {
-            continue;
-        };
-        if definition
-            .sources
-            .as_ref()
-            .is_some_and(|sources| !sources.iter().any(|source| source == &row.source_name))
-        {
-            continue;
-        }
-        candidates
-            .entry((mdm_id, row.field.clone()))
-            .or_default()
-            .push(GoldenCandidate {
-                source_record_id: row.source_record_id,
-                source_name: row.source_name.clone(),
-                source_priority: source_priority(&context.entity, &row.source_name),
-                row_changed_at: row.row_changed_at,
-                authoritative: context
-                    .entity
-                    .sources
-                    .iter()
-                    .find(|source| source.name == row.source_name)
-                    .and_then(|source| source.authority.get(&row.field))
-                    .is_some(),
-                source_sort_key: memberships
-                    .memberships
-                    .iter()
-                    .find(|membership| membership.source_record_id == row.source_record_id)
-                    .map(|membership| membership.source_sort_key.clone())
-                    .unwrap_or_default(),
-                raw_value: row.raw_value,
-                state: row.state,
-                normalized: row.normalized,
-                canonical_bytes: row.canonical_bytes,
-            });
-    }
-    let mut result = BTreeMap::new();
-    for definition in &context.entity.golden_values {
-        for identity in memberships
-            .registry
-            .iter()
-            .filter(|identity| identity.status == identity::IdentityStatus::Active)
-        {
-            let key = (identity.mdm_id, definition.field.clone());
-            let selection = crate::golden::select_golden(
-                &definition.policy,
-                candidates.get(&key).map(Vec::as_slice).unwrap_or(&[]),
-                overrides
-                    .get(&definition.field)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-            )?;
-            result.insert(key, selection);
-        }
-    }
-    Ok(result)
-}
-
 fn allocate_ids(client: &mut SpiClient<'_>, count: usize) -> Result<Vec<Uuid>, MdmError> {
     (0..count)
         .map(|_| {
@@ -1135,84 +997,6 @@ fn allocate_ids(client: &mut SpiClient<'_>, count: usize) -> Result<Vec<Uuid>, M
                 .ok_or_else(|| MdmError::OperationState("uuidv7 returned NULL".into()))
         })
         .collect()
-}
-
-fn semantic_identity(state: &IdentityState) -> Value {
-    let mut registry = state.registry.iter().collect::<Vec<_>>();
-    registry.sort_by_key(|row| row.mdm_id);
-    let mut memberships = state.memberships.iter().collect::<Vec<_>>();
-    memberships.sort_by(|left, right| {
-        left.source_sort_key
-            .cmp(&right.source_sort_key)
-            .then_with(|| left.source_record_id.cmp(&right.source_record_id))
-    });
-    let mut aliases = state.aliases.iter().collect::<Vec<_>>();
-    aliases.sort_by_key(|row| {
-        (
-            row.alias_mdm_id,
-            row.publication_revision,
-            row.canonical_mdm_id,
-        )
-    });
-    let mut splits = state.splits.iter().collect::<Vec<_>>();
-    splits.sort_by_key(|row| {
-        (
-            row.parent_mdm_id,
-            row.publication_revision,
-            row.child_mdm_id,
-        )
-    });
-    json!({
-        "registry": registry.iter().map(|row| json!([row.mdm_id.to_string(), row.status])).collect::<Vec<_>>(),
-        "memberships": memberships.iter().map(|row| json!([row.source_record_id.to_string(), row.source_sort_key, row.mdm_id.to_string(), row.active, row.first_membership_revision, row.last_membership_revision, row.membership_reason])).collect::<Vec<_>>(),
-        "aliases": aliases.iter().map(|row| json!([row.alias_mdm_id.to_string(), row.canonical_mdm_id.to_string()])).collect::<Vec<_>>(),
-        "splits": splits.iter().map(|row| json!([row.parent_mdm_id.to_string(), row.child_mdm_id.to_string()])).collect::<Vec<_>>()
-    })
-}
-
-fn semantic_reviews(reviews: &[Review]) -> Value {
-    let mut ordered = reviews.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|row| (row.issue_key, row.occurrence));
-    json!(
-        ordered
-            .into_iter()
-            .map(|row| json!([
-                row.issue_key,
-                row.occurrence,
-                match row.status {
-                    ReviewStatus::Open => "open",
-                    ReviewStatus::Resolved => "resolved",
-                },
-                row.severity,
-                row.reason_code,
-                row.subjects,
-                row.masked_summary
-            ]))
-            .collect::<Vec<_>>()
-    )
-}
-
-fn semantic_golden(golden: &BTreeMap<(Uuid, String), GoldenSelection>) -> Value {
-    json!(
-        golden
-            .iter()
-            .map(|((mdm_id, field), row)| json!([
-                mdm_id.to_string(),
-                field,
-                row.value,
-                row.normalized,
-                row.status.as_str(),
-                row.winning_source_record_id.map(|id| id.to_string()),
-                row.policy,
-                row.policy_version,
-                row.tie_break,
-                row.contributors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>(),
-            ]))
-            .collect::<Vec<_>>()
-    )
 }
 
 fn load_current_golden(client: &SpiClient<'_>, context: &Context) -> Result<Value, MdmError> {
@@ -1579,10 +1363,10 @@ fn persist_refresh_inner(
         let active = sources.iter().map(|row| row.id).collect::<BTreeSet<_>>();
         let records = sources
             .iter()
-            .map(|row| ResolverRecord {
+            .map(|row| EvaluationRecord {
                 source_record_id: row.id,
+                source_name: row.source_name.clone(),
                 source_sort_key: row.sort_key.clone(),
-                authority: source_authority(&context.entity, &row.source_name),
             })
             .collect::<Vec<_>>();
         let (manual_matches, cannot_links) = load_decisions(client, &context, &active)?;
@@ -1591,15 +1375,11 @@ fn persist_refresh_inner(
             .map(|source| (source.id, source.source_name.clone()))
             .collect::<BTreeMap<_, _>>();
         let pair_decisions = load_pair_decisions(client, &context, &active, &source_names)?;
-        let resolution = crate::resolver::resolve(ResolverInput {
-            records,
-            manual_matches,
-            cannot_links,
-            pair_decisions,
-            limits,
-        })?;
         let old_identity = load_old_identity(client, &context)?;
         let old_reviews = load_reviews(client, &context)?;
+        let old_golden = load_current_golden(client, &context)?;
+        let golden_rows = load_golden_rows(client, &context)?;
+        let overrides = load_overrides(client, &context)?;
         let revision = context
             .publication_revision
             .checked_add(1)
@@ -1612,16 +1392,27 @@ fn persist_refresh_inner(
                 .saturating_add(1),
         )?;
         let mut allocator = || ids.pop().unwrap_or_else(|| Uuid::from_bytes([0; 16]));
-        let next_identity =
-            identity::reconcile(&old_identity, &resolution, revision, &mut allocator)?;
-        let next_golden = load_golden(client, &context, &next_identity)?;
-        let candidates = issue_candidates(&context, &resolution.rejected, &next_golden);
-        let next_reviews =
-            crate::review::reconcile(&old_reviews, &candidates, revision, &mut allocator);
-        let changed = context.publication_revision == 0
-            || semantic_identity(&old_identity) != semantic_identity(&next_identity)
-            || semantic_reviews(&old_reviews) != semantic_reviews(&next_reviews)
-            || semantic_golden(&next_golden) != load_current_golden(client, &context)?;
+        let evaluation = evaluation::resolve_and_compare(evaluation::EvaluationInput {
+            entity: &context.entity,
+            definition_version: context.definition_version,
+            publication_revision: revision,
+            records: &records,
+            manual_matches,
+            cannot_links,
+            pair_decisions,
+            limits,
+            old_identity: &old_identity,
+            old_reviews: &old_reviews,
+            old_golden: &old_golden,
+            golden_rows: &golden_rows,
+            overrides: &overrides,
+            allocator: &mut allocator,
+        })?;
+        let resolution = &evaluation.resolution;
+        let next_identity = &evaluation.identity;
+        let next_golden = &evaluation.golden;
+        let next_reviews = &evaluation.reviews;
+        let changed = evaluation.changed;
         let fields = ensure_output(client, &context)?;
         let publication_revision = if changed {
             revision
@@ -1632,7 +1423,7 @@ fn persist_refresh_inner(
             let result_digest = digest(
                 "pg_mdm/publication/v1",
                 &[&json_bytes(
-                    &json!({"identity": semantic_identity(&next_identity), "golden": semantic_golden(&next_golden), "reviews": semantic_reviews(&next_reviews)}),
+                    &json!({"identity": evaluation::semantic_identity(next_identity), "golden": evaluation::semantic_golden(next_golden), "reviews": evaluation::semantic_reviews(next_reviews)}),
                 )],
             );
             client.update("INSERT INTO mdm_internal.publications (entity_id, publication_revision, definition_version, decision_epoch, operation_id, result_digest) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5::pg_catalog.uuid, $6)", None, &[context.entity_id.clone().into(), revision.into(), context.definition_version.into(), context.decision_epoch.into(), operation_id.clone().into(), result_digest.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
@@ -1648,7 +1439,7 @@ fn persist_refresh_inner(
             for row in &next_identity.splits {
                 client.update("INSERT INTO mdm_internal.identity_splits (entity_id, parent_mdm_id, child_mdm_id, publication_revision) VALUES ($1::pg_catalog.uuid, $2, $3, $4) ON CONFLICT DO NOTHING", None, &[context.entity_id.clone().into(), row.parent_mdm_id.into(), row.child_mdm_id.into(), row.publication_revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
-            for ((mdm_id, field), selection) in &next_golden {
+            for ((mdm_id, field), selection) in next_golden {
                 client.update("INSERT INTO mdm_internal.golden_provenance (entity_id, publication_revision, mdm_id, field_name, value, normalized_value, status, winning_source_record_id, policy, policy_version, tie_break, contributors, definition_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)", None, &[context.entity_id.clone().into(), revision.into(), (*mdm_id).into(), field.clone().into(), selection.value.clone().map(JsonB).into(), selection.normalized.clone().into(), selection.status.as_str().into(), selection.winning_source_record_id.into(), selection.policy.clone().into(), (selection.policy_version as i16).into(), selection.tie_break.clone().into(), JsonB(json!(selection.contributors.iter().map(ToString::to_string).collect::<Vec<_>>())).into(), context.definition_version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
             for (number, fact) in resolution
@@ -1659,16 +1450,16 @@ fn persist_refresh_inner(
             {
                 client.update("INSERT INTO mdm_internal.resolution_facts (entity_id, publication_revision, fact_number, subject_kind, subject_key, fact_kind, fact) VALUES ($1::pg_catalog.uuid, $2, $3, 'pair', pg_catalog.convert_to($4::text, 'UTF8'), $5, $6)", None, &[context.entity_id.clone().into(), revision.into(), (number as i64 + 1).into(), format!("{}:{}", fact.edge.left_source_record_id, fact.edge.right_source_record_id).into(), (match fact.outcome { crate::resolver::UnionOutcome::Accepted => "accepted", crate::resolver::UnionOutcome::Rejected => "rejected" }).into(), JsonB(json!({"reason_code": fact.reason_code, "evidence_groups": fact.evidence_groups})).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
-            for row in &next_reviews {
+            for row in next_reviews {
                 client.update("INSERT INTO mdm_internal.reviews (review_id, entity_id, issue_key, occurrence, status, severity, reason_code, subjects, masked_summary, opened_revision, resolved_revision, last_change_revision, concurrency_version) VALUES ($1, $2::pg_catalog.uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (review_id) DO UPDATE SET status = EXCLUDED.status, severity = EXCLUDED.severity, reason_code = EXCLUDED.reason_code, subjects = EXCLUDED.subjects, masked_summary = EXCLUDED.masked_summary, resolved_revision = EXCLUDED.resolved_revision, last_change_revision = EXCLUDED.last_change_revision, concurrency_version = EXCLUDED.concurrency_version", None, &[row.review_id.into(), context.entity_id.clone().into(), row.issue_key.to_vec().into(), row.occurrence.into(), (match row.status { ReviewStatus::Open => "open", ReviewStatus::Resolved => "resolved" }).into(), row.severity.clone().into(), row.reason_code.clone().into(), JsonB(row.subjects.clone()).into(), JsonB(row.masked_summary.clone()).into(), row.opened_revision.into(), row.resolved_revision.into(), row.last_change_revision.into(), row.concurrency_version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
             persist_outputs(
                 client,
                 &context,
                 &fields,
-                &next_identity,
-                &next_golden,
-                &next_reviews,
+                next_identity,
+                next_golden,
+                next_reviews,
                 revision,
             )?;
             client.update("UPDATE mdm_internal.entities SET active_version = desired_version, publication_revision = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into(), revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
@@ -1773,6 +1564,682 @@ pub(crate) fn preview(
     .unwrap_or_else(|error| crate::raise(error))
 }
 
+enum PreviewOptions {
+    Validation,
+    Sampled(usize),
+    Scoped {
+        source_record_ids: Vec<Uuid>,
+        mdm_ids: Vec<Uuid>,
+    },
+}
+
+fn parse_preview_uuid(text: &str) -> Result<Uuid, MdmError> {
+    let raw = text.as_bytes();
+    if raw.len() != 36
+        || [8, 13, 18, 23].iter().any(|index| raw[*index] != b'-')
+        || raw.iter().enumerate().any(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                false
+            } else {
+                !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase()
+            }
+        })
+    {
+        return Err(MdmError::DefinitionInvalid(
+            "preview subject must be a canonical UUID".into(),
+        ));
+    }
+    let hex = text.replace('-', "");
+    let mut bytes = [0u8; 16];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| {
+            MdmError::DefinitionInvalid("preview subject must be a canonical UUID".into())
+        })?;
+    }
+    Ok(Uuid::from_bytes(bytes))
+}
+
+fn parse_preview_ids(options: &Value, key: &str) -> Result<Vec<Uuid>, MdmError> {
+    let Some(value) = options.get(key) else {
+        return Ok(Vec::new());
+    };
+    let values = value.as_array().ok_or_else(|| {
+        MdmError::DefinitionInvalid(format!("preview option {key} must be an array of UUIDs"))
+    })?;
+    if values.len() > 1000 {
+        return Err(MdmError::DefinitionInvalid(format!(
+            "preview option {key} exceeds 1000 subjects"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    values
+        .iter()
+        .map(|value| {
+            let text = value.as_str().ok_or_else(|| {
+                MdmError::DefinitionInvalid(format!(
+                    "preview option {key} must contain UUID strings"
+                ))
+            })?;
+            let id = parse_preview_uuid(text).map_err(|_| {
+                MdmError::DefinitionInvalid(format!("invalid UUID in preview option {key}"))
+            })?;
+            if !seen.insert(id) {
+                return Err(MdmError::DefinitionInvalid(format!(
+                    "preview option {key} contains a duplicate subject"
+                )));
+            }
+            Ok(id)
+        })
+        .collect()
+}
+
+fn parse_preview_options(mode: &str, options: &Value) -> Result<PreviewOptions, MdmError> {
+    let object = options.as_object().ok_or_else(|| {
+        MdmError::DefinitionInvalid("preview options must be a JSON object".into())
+    })?;
+    match mode {
+        "validation" => {
+            if !object.is_empty() {
+                return Err(MdmError::DefinitionInvalid(
+                    "validation preview does not accept options".into(),
+                ));
+            }
+            Ok(PreviewOptions::Validation)
+        }
+        "sampled" => {
+            if object.keys().any(|key| key != "sample_size") {
+                return Err(MdmError::DefinitionInvalid(
+                    "sampled preview accepts only sample_size".into(),
+                ));
+            }
+            let sample_size = object
+                .get("sample_size")
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|value| (1..=1000).contains(value))
+                        .ok_or_else(|| {
+                            MdmError::DefinitionInvalid(
+                                "sample_size must be between 1 and 1000".into(),
+                            )
+                        })
+                })
+                .transpose()?
+                .unwrap_or(25);
+            Ok(PreviewOptions::Sampled(sample_size))
+        }
+        "scoped" => {
+            if object
+                .keys()
+                .any(|key| key != "source_record_ids" && key != "mdm_ids")
+            {
+                return Err(MdmError::DefinitionInvalid(
+                    "scoped preview accepts only source_record_ids and mdm_ids".into(),
+                ));
+            }
+            let source_record_ids = parse_preview_ids(options, "source_record_ids")?;
+            let mdm_ids = parse_preview_ids(options, "mdm_ids")?;
+            if source_record_ids.is_empty() && mdm_ids.is_empty() {
+                return Err(MdmError::DefinitionInvalid(
+                    "scoped preview requires source_record_ids or mdm_ids".into(),
+                ));
+            }
+            Ok(PreviewOptions::Scoped {
+                source_record_ids,
+                mdm_ids,
+            })
+        }
+        _ => Err(MdmError::DefinitionInvalid(
+            "preview mode must be validation, sampled, or scoped".into(),
+        )),
+    }
+}
+
+fn validate_preview_contract(
+    client: &SpiClient<'_>,
+    context: &Context,
+    selected: &catalog::Role,
+) -> Result<(), MdmError> {
+    let contract = client
+        .select(
+            "SELECT contract_version, graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+            Some(1),
+            &[context.graph_root.clone().into()],
+        )
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?;
+    if contract.is_empty() {
+        return Err(MdmError::GraphContract("graph contract is missing".into()));
+    }
+    let contract = contract.first();
+    let version = contract
+        .get::<i16>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let digest = contract
+        .get::<Vec<u8>>(2)
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if version != Some(1) || digest.as_deref() != Some(context.graph_digest.as_slice()) {
+        return Err(MdmError::GraphContract(
+            "graph contract changed since installation".into(),
+        ));
+    }
+
+    let sources = client
+        .select(
+            "SELECT s.source_name::text, s.relation_name, b.relation_oid, b.binding_fingerprint, c.oid, pg_catalog.jsonb_build_object('relation_oid', c.oid::bigint, 'relation_name', pg_catalog.format('%I.%I', n.nspname, c.relname), 'relkind', c.relkind::text, 'relpersistence', c.relpersistence::text, 'row_security', c.relrowsecurity, 'force_row_security', c.relforcerowsecurity, 'policies', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('name', p.polname::text, 'permissive', p.polpermissive, 'roles', p.polroles::text, 'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid), 'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid)) ORDER BY p.polname) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid), '[]'::pg_catalog.jsonb)), pg_catalog.has_schema_privilege($2, c.relnamespace, 'USAGE') AND pg_catalog.has_table_privilege($2, c.oid, 'SELECT') AND pg_catalog.has_table_privilege($2, c.oid, 'MAINTAIN') FROM mdm_internal.source_identities s JOIN mdm_internal.source_bindings b USING (source_identity_id) LEFT JOIN pg_catalog.pg_class c ON c.oid = pg_catalog.to_regclass(s.relation_name)::pg_catalog.oid LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE s.entity_id = $1::pg_catalog.uuid ORDER BY s.source_name",
+            None,
+            &[context.entity_id.clone().into(), selected.oid.into()],
+        )
+        .map_err(|error| MdmError::SourceInvalid(error.to_string()))?;
+    if sources.len() != context.entity.sources.len() {
+        return Err(MdmError::SourceInvalid(
+            "source identity or binding is missing".into(),
+        ));
+    }
+    for row in sources {
+        let source_name = row
+            .get::<String>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::SourceInvalid("source name is missing".into()))?;
+        let source = context
+            .entity
+            .sources
+            .iter()
+            .find(|source| source.name == source_name)
+            .ok_or_else(|| MdmError::SourceInvalid("source definition is missing".into()))?;
+        let relation_name = row
+            .get::<String>(2)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::SourceInvalid("source relation is missing".into()))?;
+        let current_oid = row
+            .get::<pg_sys::Oid>(5)
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        let bound_oid = row
+            .get::<pg_sys::Oid>(3)
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        let stored_fingerprint = row
+            .get::<JsonB>(4)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .map(|value| value.0);
+        let current_fingerprint = row
+            .get::<JsonB>(6)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .map(|value| value.0);
+        let permitted = row
+            .get::<bool>(7)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .unwrap_or(false);
+        if relation_name != source.relation
+            || current_oid != bound_oid
+            || stored_fingerprint != current_fingerprint
+            || !permitted
+        {
+            return Err(MdmError::SourceInvalid(format!(
+                "source {} binding or execution-role privileges changed",
+                source.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn scope_identity(old: &IdentityState, selected: &BTreeSet<Uuid>) -> IdentityState {
+    let identity_ids = old
+        .memberships
+        .iter()
+        .filter(|membership| selected.contains(&membership.source_record_id))
+        .map(|membership| membership.mdm_id)
+        .collect::<BTreeSet<_>>();
+    IdentityState {
+        registry: old
+            .registry
+            .iter()
+            .filter(|row| identity_ids.contains(&row.mdm_id))
+            .cloned()
+            .collect(),
+        memberships: old
+            .memberships
+            .iter()
+            .filter(|row| selected.contains(&row.source_record_id))
+            .cloned()
+            .collect(),
+        aliases: Vec::new(),
+        splits: Vec::new(),
+    }
+}
+
+fn json_mentions_any(value: &Value, ids: &BTreeSet<String>) -> bool {
+    match value {
+        Value::String(value) => ids.contains(value),
+        Value::Array(values) => values.iter().any(|value| json_mentions_any(value, ids)),
+        Value::Object(values) => values.values().any(|value| json_mentions_any(value, ids)),
+        _ => false,
+    }
+}
+
+fn scope_reviews(
+    reviews: &[Review],
+    record_ids: &BTreeSet<Uuid>,
+    mdm_ids: &BTreeSet<Uuid>,
+) -> Vec<Review> {
+    let ids = record_ids
+        .iter()
+        .chain(mdm_ids)
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    reviews
+        .iter()
+        .filter(|review| json_mentions_any(&review.subjects, &ids))
+        .cloned()
+        .collect()
+}
+
+fn scope_current_golden(current: Value, mdm_ids: &BTreeSet<Uuid>) -> Value {
+    Value::Array(
+        current
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|row| {
+                row.get(0)
+                    .and_then(Value::as_str)
+                    .and_then(|id| parse_preview_uuid(id).ok())
+                    .is_some_and(|id| mdm_ids.contains(&id))
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
+fn validate_scoped_subjects(
+    client: &SpiClient<'_>,
+    context: &Context,
+    source_ids: &[Uuid],
+    mdm_ids: &[Uuid],
+    active_sources: &[SourceRow],
+    old_identity: &IdentityState,
+) -> Result<BTreeSet<Uuid>, MdmError> {
+    let active = active_sources
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let mut selected = BTreeSet::new();
+    for id in source_ids {
+        let record = client
+            .select(
+                "SELECT entity_id::text, active FROM mdm_internal.source_records WHERE source_record_id = $1::pg_catalog.uuid",
+                Some(1),
+                &[(*id).into()],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if record.is_empty() {
+            return Err(MdmError::SourceInvalid(format!(
+                "source record {id} does not exist"
+            )));
+        }
+        let row = record.first();
+        let entity_id = row
+            .get::<String>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("source record entity is NULL".into()))?;
+        let is_active = row
+            .get::<bool>(2)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .unwrap_or(false);
+        if entity_id != context.entity_id {
+            return Err(MdmError::SourceInvalid(
+                "scoped preview cannot include a record from another entity".into(),
+            ));
+        }
+        if !is_active || !active.contains(id) {
+            return Err(MdmError::SourceInvalid(format!(
+                "source record {id} is not active in the current publication"
+            )));
+        }
+        selected.insert(*id);
+    }
+    for id in mdm_ids {
+        let identity = client
+            .select(
+                "SELECT status FROM mdm_internal.identity_registry WHERE entity_id = $1::pg_catalog.uuid AND mdm_id = $2::pg_catalog.uuid",
+                Some(1),
+                &[context.entity_id.clone().into(), (*id).into()],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if identity.is_empty() {
+            let exists = client
+                .select(
+                    "SELECT EXISTS (SELECT FROM mdm_internal.identity_registry WHERE mdm_id = $1::pg_catalog.uuid)",
+                    Some(1),
+                    &[(*id).into()],
+                )
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .first()
+                .get::<bool>(1)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .unwrap_or(false);
+            return Err(MdmError::SourceInvalid(if exists {
+                "scoped preview cannot include an identity from another entity".into()
+            } else {
+                format!("identity {id} does not exist")
+            }));
+        }
+        let status = identity
+            .first()
+            .get::<String>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("identity status is NULL".into()))?;
+        if status != "active" {
+            return Err(MdmError::SourceInvalid(format!(
+                "identity {id} is not active"
+            )));
+        }
+        for membership in old_identity.memberships.iter().filter(|membership| {
+            membership.active
+                && membership.mdm_id == *id
+                && active.contains(&membership.source_record_id)
+        }) {
+            selected.insert(membership.source_record_id);
+        }
+    }
+    if selected.is_empty() {
+        return Err(MdmError::DefinitionInvalid(
+            "scoped preview has no active subjects".into(),
+        ));
+    }
+    Ok(selected)
+}
+
+fn expand_decision_scope(
+    context: &Context,
+    mut selected: BTreeSet<Uuid>,
+    active_sources: &[SourceRow],
+    old_identity: &IdentityState,
+    pair_decisions: &[crate::pair::PairDecision],
+    matches: &[DecisionEdge],
+    cannot_links: &[DecisionEdge],
+) -> Result<BTreeSet<Uuid>, MdmError> {
+    let active = active_sources
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let closure_limit = context
+        .entity
+        .limits
+        .get("max_decision_closure")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(crate::semantics::DEFAULT_MAX_DECISION_CLOSURE);
+    let mut neighbors = BTreeMap::<Uuid, BTreeSet<Uuid>>::new();
+    let mut connect = |left: Uuid, right: Uuid| {
+        neighbors.entry(left).or_default().insert(right);
+        neighbors.entry(right).or_default().insert(left);
+    };
+    for decision in pair_decisions {
+        connect(
+            decision.pair.left_source_record_id,
+            decision.pair.right_source_record_id,
+        );
+    }
+    for edge in matches.iter().chain(cannot_links) {
+        connect(edge.left_source_record_id, edge.right_source_record_id);
+    }
+    let mut records_by_identity = BTreeMap::<Uuid, Vec<Uuid>>::new();
+    for membership in old_identity
+        .memberships
+        .iter()
+        .filter(|membership| membership.active && active.contains(&membership.source_record_id))
+    {
+        records_by_identity
+            .entry(membership.mdm_id)
+            .or_default()
+            .push(membership.source_record_id);
+    }
+    for records in records_by_identity.values() {
+        if let Some(first) = records.first() {
+            for record in records.iter().skip(1) {
+                connect(*first, *record);
+            }
+        }
+    }
+    if selected.len() > closure_limit {
+        return Err(MdmError::ResolverLimit {
+            resource: "max_decision_closure",
+            observed: selected.len(),
+            limit: closure_limit,
+        });
+    }
+    let mut pending = selected.iter().copied().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < pending.len() {
+        let current = pending[index];
+        index += 1;
+        if let Some(adjacent) = neighbors.get(&current) {
+            for neighbor in adjacent {
+                if selected.insert(*neighbor) {
+                    if selected.len() > closure_limit {
+                        return Err(MdmError::ResolverLimit {
+                            resource: "max_decision_closure",
+                            observed: selected.len(),
+                            limit: closure_limit,
+                        });
+                    }
+                    pending.push(*neighbor);
+                }
+            }
+        }
+    }
+    Ok(selected)
+}
+
+fn preview_run(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    selected_role: &catalog::Role,
+    options: PreviewOptions,
+) -> Result<Value, MdmError> {
+    validate_preview_contract(client, context, selected_role)?;
+    let (scoped, sample_size, scope) = match options {
+        PreviewOptions::Validation => {
+            return Ok(json!({
+                "entity_name": context.entity.name,
+                "mode": "validation",
+                "evidence_level": "validation",
+                "exact": false,
+                "definition_version": context.definition_version,
+                "artifact_id": context.artifact_id,
+                "graph_digest": hex(&context.graph_digest),
+                "data_read": false,
+                "publication_revision": context.publication_revision
+            }));
+        }
+        PreviewOptions::Sampled(sample_size) => (false, Some(sample_size), None),
+        PreviewOptions::Scoped {
+            source_record_ids,
+            mdm_ids,
+        } => (true, None, Some((source_record_ids, mdm_ids))),
+    };
+    let limits = load_limits(context);
+    limits.validate()?;
+    let sources = if let Some(sample_size) = sample_size {
+        load_sources_ordered(client, context, sample_size)?
+    } else {
+        load_sources(client, context, limits.max_active_records)?
+    };
+    let all_active = sources.iter().map(|row| row.id).collect::<BTreeSet<_>>();
+    let source_names = sources
+        .iter()
+        .map(|source| (source.id, source.source_name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let (manual_matches, cannot_links) = load_decisions(client, context, &all_active)?;
+    let pair_decisions = load_pair_decisions(client, context, &all_active, &source_names)?;
+    let old_identity_all = load_old_identity(client, context)?;
+    let (selected_ids, source_ids, requested_mdm_ids) = if let Some((source_ids, mdm_ids)) = scope {
+        let seeds = validate_scoped_subjects(
+            client,
+            context,
+            &source_ids,
+            &mdm_ids,
+            &sources,
+            &old_identity_all,
+        )?;
+        let closure = expand_decision_scope(
+            context,
+            seeds,
+            &sources,
+            &old_identity_all,
+            &pair_decisions,
+            &manual_matches,
+            &cannot_links,
+        )?;
+        (closure, source_ids, mdm_ids)
+    } else {
+        (all_active.clone(), Vec::new(), Vec::new())
+    };
+    let selected_mdm_ids = old_identity_all
+        .memberships
+        .iter()
+        .filter(|membership| {
+            membership.active && selected_ids.contains(&membership.source_record_id)
+        })
+        .map(|membership| membership.mdm_id)
+        .collect::<BTreeSet<_>>();
+    let old_identity = scope_identity(&old_identity_all, &selected_ids);
+    let old_reviews = scope_reviews(
+        &load_reviews(client, context)?,
+        &selected_ids,
+        &selected_mdm_ids,
+    );
+    let old_golden = scope_current_golden(load_current_golden(client, context)?, &selected_mdm_ids);
+    let golden_rows = load_golden_rows(client, context)?
+        .into_iter()
+        .filter(|row| selected_ids.contains(&row.source_record_id))
+        .collect::<Vec<_>>();
+    let overrides = load_overrides(client, context)?
+        .into_iter()
+        .map(|(field, values)| {
+            (
+                field,
+                values
+                    .into_iter()
+                    .filter(|value| selected_ids.contains(&value.anchor_source_record_id))
+                    .collect(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let sources = sources
+        .into_iter()
+        .filter(|source| selected_ids.contains(&source.id))
+        .map(|source| EvaluationRecord {
+            source_record_id: source.id,
+            source_name: source.source_name,
+            source_sort_key: source.sort_key,
+        })
+        .collect::<Vec<_>>();
+    let pair_decisions = pair_decisions
+        .into_iter()
+        .filter(|decision| {
+            selected_ids.contains(&decision.pair.left_source_record_id)
+                && selected_ids.contains(&decision.pair.right_source_record_id)
+        })
+        .collect::<Vec<_>>();
+    let pair_examples = pair_decisions
+        .iter()
+        .take(10)
+        .map(|decision| {
+            json!({
+                "left_source_record_id": decision.pair.left_source_record_id.to_string(),
+                "right_source_record_id": decision.pair.right_source_record_id.to_string(),
+                "decision": decision.result.as_str(),
+                "reason_codes": decision.reason_codes
+            })
+        })
+        .collect::<Vec<_>>();
+    let pair_count = pair_decisions.len();
+    let old_revision = context
+        .publication_revision
+        .checked_add(1)
+        .ok_or_else(|| MdmError::OperationState("publication revision exhausted".into()))?;
+    let seed = json_bytes(&json!({
+        "entity_id": context.entity_id,
+        "source_record_ids": selected_ids.iter().map(ToString::to_string).collect::<Vec<_>>()
+    }));
+    let mut counter = 0u64;
+    let mut reserved = old_identity_all
+        .registry
+        .iter()
+        .map(|row| row.mdm_id)
+        .collect::<BTreeSet<_>>();
+    let mut allocator = || loop {
+        let current = counter;
+        counter = counter.saturating_add(1);
+        let hash = digest("pg_mdm/preview_id/v1", &[&seed, &current.to_be_bytes()]);
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&hash[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let id = Uuid::from_bytes(bytes);
+        if reserved.insert(id) {
+            break id;
+        }
+    };
+    let evaluation = evaluation::resolve_and_compare(evaluation::EvaluationInput {
+        entity: &context.entity,
+        definition_version: context.definition_version,
+        publication_revision: old_revision,
+        records: &sources,
+        manual_matches,
+        cannot_links,
+        pair_decisions,
+        limits,
+        old_identity: &old_identity,
+        old_reviews: &old_reviews,
+        old_golden: &old_golden,
+        golden_rows: &golden_rows,
+        overrides: &overrides,
+        allocator: &mut allocator,
+    })?;
+    let evidence_level = if scoped { "exact_subjects" } else { "sampled" };
+    let mut result = json!({
+        "entity_name": context.entity.name,
+        "mode": if scoped { "scoped" } else { "sampled" },
+        "evidence_level": evidence_level,
+        "exact": scoped,
+        "definition_version": context.definition_version,
+        "publication_revision": context.publication_revision,
+        "data_as_of": "last successful publication; later source changes may be pending",
+        "record_count": sources.len(),
+        "candidate_pair_count": pair_count,
+        "observed_work": {
+            "candidate_pairs": pair_count,
+            "union_facts": evaluation.resolution.accepted.len() + evaluation.resolution.rejected.len()
+        },
+        "changed_within_scope": evaluation.changed,
+        "examples": {
+            "pair_decisions": pair_examples,
+            "identity": evaluation::semantic_identity(&evaluation.identity),
+            "golden": evaluation::semantic_golden(&evaluation.golden),
+            "reviews": evaluation::semantic_reviews(&evaluation.reviews)
+        }
+    });
+    if scoped {
+        result["requested_subjects"] = json!({
+            "source_record_ids": source_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "mdm_ids": requested_mdm_ids.iter().map(ToString::to_string).collect::<Vec<_>>()
+        });
+        result["materialized_source_record_ids"] = json!(
+            selected_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        result["limitation"] = json!("Omitted records can change the full-entity result.");
+    } else if let Some(sample_size) = sample_size {
+        result["sample_size"] = json!(sample_size);
+    }
+    Ok(result)
+}
+
 #[pg_extern(
     name = "preview_entity",
     security_definer,
@@ -1786,15 +2253,10 @@ pub(crate) fn preview_entity(request: Internal) -> JsonB {
             .ok_or_else(|| MdmError::Unauthorized("preview request is required".into()))?;
         let helper_owner = catalog::validate_helper_owner()?;
         let (_, selected) = catalog::validate_caller(&helper_owner)?;
-        if !matches!(request.mode.as_str(), "validation" | "sampled" | "scoped") {
-            return Err(MdmError::DefinitionInvalid(
-                "preview mode must be validation, sampled, or scoped".into(),
-            ));
-        }
-        Spi::connect(|client| {
+        let options = parse_preview_options(&request.mode, &request.options)?;
+        Spi::connect_mut(|client| {
             let context = load_context(client, &request.entity_name, &selected, false)?;
-            let result = json!({"entity_name": context.entity.name, "mode": request.mode, "exact": request.mode == "scoped", "definition_version": context.definition_version, "graph_digest": hex(&context.graph_digest), "source_records": client.select("SELECT count(*) FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid AND active", Some(1), &[context.entity_id.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?.first().get::<i64>(1).map_err(|error| MdmError::Spi(error.to_string()))?.unwrap_or(0), "options": request.options});
-            Ok(JsonB(result))
+            Ok(JsonB(preview_run(client, &context, &selected, options)?))
         })
     })();
     result.unwrap_or_else(|error| crate::raise(error))
@@ -1855,10 +2317,10 @@ mod tests {
             ],
             ..IdentityState::default()
         };
-        let expected_identity = semantic_identity(&state);
+        let expected_identity = evaluation::semantic_identity(&state);
         state.registry.reverse();
         state.memberships.reverse();
-        assert_eq!(semantic_identity(&state), expected_identity);
+        assert_eq!(evaluation::semantic_identity(&state), expected_identity);
 
         let review = |key, reason: &str| Review {
             review_id: id(key),
@@ -1875,8 +2337,78 @@ mod tests {
             concurrency_version: 1,
         };
         assert_eq!(
-            semantic_reviews(&[review(1, "FIRST"), review(2, "SECOND")]),
-            semantic_reviews(&[review(2, "SECOND"), review(1, "FIRST")]),
+            evaluation::semantic_reviews(&[review(1, "FIRST"), review(2, "SECOND")]),
+            evaluation::semantic_reviews(&[review(2, "SECOND"), review(1, "FIRST")]),
         );
+    }
+
+    #[test]
+    fn scoped_identity_keeps_registry_rows_for_historical_memberships() {
+        let id = |value| Uuid::from_bytes([value; 16]);
+        let old = IdentityState {
+            registry: vec![identity::IdentityRecord {
+                mdm_id: id(2),
+                created_revision: 1,
+                retired_revision: Some(2),
+                status: identity::IdentityStatus::Merged,
+            }],
+            memberships: vec![identity::IdentityMembership {
+                source_record_id: id(3),
+                source_sort_key: vec![3],
+                mdm_id: id(2),
+                active: false,
+                first_membership_revision: 1,
+                last_membership_revision: 2,
+                membership_reason: "merged".into(),
+                last_change_revision: 2,
+            }],
+            ..IdentityState::default()
+        };
+
+        let scoped = scope_identity(&old, &BTreeSet::from([id(3)]));
+        assert_eq!(scoped.registry.len(), 1);
+        assert_eq!(scoped.memberships.len(), 1);
+        assert!(
+            identity::reconcile(
+                &scoped,
+                &crate::resolver::Resolution {
+                    memberships: Vec::new(),
+                    accepted: Vec::new(),
+                    rejected: Vec::new(),
+                },
+                3,
+                &mut || id(4)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn preview_options_reject_unknown_duplicate_and_empty_subjects() {
+        assert!(parse_preview_options("validation", &json!({})).is_ok());
+        assert!(parse_preview_options("validation", &json!({"limit": 2})).is_err());
+        assert!(parse_preview_options("sampled", &json!({"sample_size": 2})).is_ok());
+        assert!(parse_preview_options("sampled", &json!({"limit": 2})).is_err());
+        assert!(parse_preview_options("scoped", &json!({})).is_err());
+        assert!(
+            parse_preview_options(
+                "scoped",
+                &json!({"source_record_ids": [
+                    "00000000-0000-0000-0000-000000000001",
+                    "00000000-0000-0000-0000-000000000001"
+                ]})
+            )
+            .is_err()
+        );
+        assert!(
+            parse_preview_options(
+                "scoped",
+                &json!({"source_record_ids": ["00000000-0000-0000-0000-000000000001"]})
+            )
+            .is_ok()
+        );
+        assert!(parse_preview_uuid("00000000-0000-0000-0000-000000000001").is_ok());
+        assert!(parse_preview_uuid("00000000-0000-0000-0000-00000000000A").is_err());
+        assert!(parse_preview_uuid("００００００００-0000-0000-0000-000000000001").is_err());
     }
 }

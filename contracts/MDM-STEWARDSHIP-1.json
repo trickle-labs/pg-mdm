@@ -1,0 +1,176 @@
+{
+  "contract": "MDM-STEWARDSHIP/1",
+  "revision": 1,
+  "status": "proposed_for_joint_review",
+  "approvals": {
+    "pg_mdm_owner": "pending",
+    "pg_react_owner": "pending"
+  },
+  "sql": {
+    "relation": "mdm_steward.policy_cases_v1",
+    "columns": [
+      ["case_key", "bigint", "primary key, positive, generated, retained, never reused"],
+      ["review_id", "uuid", "unique, not null"],
+      ["entity_name", "name", "not null"],
+      ["issue_key", "bytea", "not null, exactly 32 bytes"],
+      ["occurrence", "integer", "not null, positive"],
+      ["status", "text", "not null, open|resolved"],
+      ["severity", "text", "not null"],
+      ["reason_code", "text", "not null"],
+      ["approved_metadata", "jsonb", "not null; v1 value is always {}"],
+      ["permitted_actions", "text[]", "not null; sorted distinct subset of ASSIGN_QUEUE, SET_DUE_AT, ESCALATE"],
+      ["assigned_queue", "name", "nullable"],
+      ["due_at", "timestamptz", "nullable"],
+      ["escalation_level", "integer", "not null, nonnegative"],
+      ["manual_assignment_protected", "boolean", "not null"],
+      ["opened_at", "timestamptz", "nullable"],
+      ["opened_at_source", "text", "not null, publication|administrator|unknown"],
+      ["resolved_at", "timestamptz", "nullable"],
+      ["review_version", "bigint", "not null, positive"],
+      ["definition_version", "bigint", "not null, positive"],
+      ["publication_revision", "bigint", "not null, nonnegative"],
+      ["stewardship_epoch", "bigint", "not null, nonnegative; equals the decision_epoch observed by the latest successful publication"],
+      ["evidence_basis_digest", "bytea", "not null, exactly 32 bytes"],
+      ["action_revision", "bigint", "not null, positive"],
+      ["pending_stewardship", "boolean", "not null"],
+      ["last_observed_at", "timestamptz", "not null"]
+    ],
+    "unique": [["entity_name", "issue_key", "occurrence"]],
+    "foreign_key": ["review_id", "retained mdm_internal.reviews.review_id"],
+    "reader_access": "No PUBLIC grant. React gets USAGE on mdm_steward and SELECT on this relation only; no RLS for the initial one-scope profile.",
+    "opening_time": "opened_at is publications.published_at for reviews.opened_revision. If unavailable, opened_at is null and opened_at_source is unknown; automatic SET_DUE_AT is denied until audited administrator backfill. resolved_at comes from the publication that resolved the occurrence when available.",
+    "case_key": "Allocate once per review_id from mdm_internal.policy_case_key_seq. Gaps after rollback are valid. Resolved occurrences and keys are retained; recurrence creates a new review_id and key.",
+    "approved_metadata_allowlist": [],
+    "permitted_actions": {
+      "open": ["ASSIGN_QUEUE", "ESCALATE", "SET_DUE_AT"],
+      "resolved": []
+    }
+  },
+  "freshness": {
+    "intent_inputs": [
+      "review_version",
+      "definition_version",
+      "publication_revision",
+      "stewardship_epoch",
+      "evidence_basis_digest",
+      "action_revision",
+      "policy_digest"
+    ],
+    "stewardship_epoch_meaning": "The decision_epoch associated with the latest successful observation. It may be older than the current entity decision_epoch; pending_stewardship is true in that case.",
+    "evidence_basis_fields": [
+      "entity_name",
+      "issue_key",
+      "occurrence",
+      "status",
+      "reason_code",
+      "subjects",
+      "approved_metadata",
+      "definition_version",
+      "artifact_digest",
+      "source_boundary_digest",
+      "observed_decision_epoch",
+      "semantic_versions"
+    ],
+    "action_revision": "Increment only when evidence or an action control can change policy eligibility or result. Observation timestamps, receipt writes, and unrelated publication advances do not increment it."
+  },
+  "intent": {
+    "signature": "mdm_steward.submit_policy_intent(binding_id uuid, request_key bytea, case_key bigint, action text, arguments jsonb, expected_review_version bigint, expected_definition_version bigint, expected_publication_revision bigint, expected_stewardship_epoch bigint, expected_evidence_basis_digest bytea, expected_action_revision bigint, expected_policy_digest bytea, policy_revision text, evaluation_ref text, work_ref text)",
+    "returns": [
+      ["receipt_id", "uuid"],
+      ["outcome", "text"],
+      ["reason_code", "text"],
+      ["case_key", "bigint"],
+      ["action_revision", "bigint"],
+      ["control", "jsonb"],
+      ["resulting_publication_revision", "bigint"]
+    ],
+    "request_key": "Exactly 32 bytes; unique with binding_id for idempotency.",
+    "policy_digest": "expected_policy_digest is exactly 32 bytes.",
+    "references": "policy_revision, evaluation_ref, work_ref are non-empty text, each at most 256 UTF-8 bytes.",
+    "arguments": {
+      "ASSIGN_QUEUE": {"queue": "name"},
+      "SET_DUE_AT": {"due_at": "PostgreSQL timestamptz input text"},
+      "ESCALATE": {"level": "positive integer"}
+    },
+    "argument_keys": "Each action accepts exactly its listed keys; extra keys, null values, and wrong JSON types are rejected.",
+    "outcomes": [
+      "APPLIED_CONTROL",
+      "NO_CHANGE",
+      "STALE_CASE",
+      "CASE_CLOSED",
+      "ACTION_DENIED",
+      "MANUAL_PROTECTION",
+      "OPENED_AT_UNKNOWN",
+      "LIMIT_EXCEEDED",
+      "BINDING_PAUSED",
+      "BINDING_REPLACED",
+      "POLICY_MISMATCH"
+    ],
+    "publication": "Every v1 intent has resulting_publication_revision null. Accepted control changes do not resolve identity or publish MDM output.",
+    "authority": "The bound automation role may submit only the three typed actions. It cannot decide, override golden values, refresh, rebuild, merge, split, or approve.",
+    "receipts": "Retain canonical request body and receipt without automatic deletion in v1; register them for logical dump."
+  },
+  "canonical_encoding": {
+    "version": 1,
+    "json": "UTF-8 compact JSON; object keys sorted by UTF-8 byte order; array order preserved; strings use RFC 8259 escaping; numbers are base-10 integers without leading zeroes; floating point values are forbidden.",
+    "digest": "SHA-256 over each part framed by an unsigned 32-bit big-endian byte length. First part is the UTF-8 domain tag, second part is the canonical JSON bytes.",
+    "intent_request_body": "Contains every submit_policy_intent input except request_key. The request_key is the idempotency lookup key and is not included in the body digest.",
+    "basis_domain_tag": "pg_mdm/policy-case-basis/v1",
+    "intent_domain_tag": "pg_mdm/policy-intent/v1",
+    "basis_vector": {
+      "body": {
+        "approved_metadata": {},
+        "artifact_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "canonical_encoding_version": 1,
+        "definition_version": 3,
+        "entity_name": "customer",
+        "issue_key": "1111111111111111111111111111111111111111111111111111111111111111",
+        "observed_decision_epoch": 8,
+        "occurrence": 1,
+        "reason_code": "POSSIBLE_DUPLICATE",
+        "semantic_versions": {"candidate": 1, "clustering": 1, "normalization": 1},
+        "source_boundary_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "status": "open",
+        "subjects": [
+          {"id": "40000000-0000-4000-8000-000000000001", "kind": "source_record"},
+          {"id": "40000000-0000-4000-8000-000000000002", "kind": "source_record"}
+        ]
+      },
+      "canonical_json_utf8": "{\"approved_metadata\":{},\"artifact_digest\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"canonical_encoding_version\":1,\"definition_version\":3,\"entity_name\":\"customer\",\"issue_key\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"observed_decision_epoch\":8,\"occurrence\":1,\"reason_code\":\"POSSIBLE_DUPLICATE\",\"semantic_versions\":{\"candidate\":1,\"clustering\":1,\"normalization\":1},\"source_boundary_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"status\":\"open\",\"subjects\":[{\"id\":\"40000000-0000-4000-8000-000000000001\",\"kind\":\"source_record\"},{\"id\":\"40000000-0000-4000-8000-000000000002\",\"kind\":\"source_record\"}]}",
+      "sha256": "2b73c392653f05c5706f315fb0ec635037a342acd5ff2df374e0edcf7836280e"
+    },
+    "intent_vector": {
+      "body": {
+        "action": "ASSIGN_QUEUE",
+        "arguments": {"queue": "priority"},
+        "binding_id": "30000000-0000-4000-8000-000000000001",
+        "case_key": 7,
+        "expected_action_revision": 2,
+        "expected_definition_version": 3,
+        "expected_evidence_basis_digest": "abababababababababababababababababababababababababababababababab",
+        "expected_policy_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "expected_publication_revision": 5,
+        "expected_review_version": 4,
+        "expected_stewardship_epoch": 8,
+        "evaluation_ref": "eval-1",
+        "policy_revision": "policy-1",
+        "work_ref": "work-1"
+      },
+      "request_key": "0000000000000000000000000000000000000000000000000000000000000001",
+      "canonical_json_utf8": "{\"action\":\"ASSIGN_QUEUE\",\"arguments\":{\"queue\":\"priority\"},\"binding_id\":\"30000000-0000-4000-8000-000000000001\",\"case_key\":7,\"evaluation_ref\":\"eval-1\",\"expected_action_revision\":2,\"expected_definition_version\":3,\"expected_evidence_basis_digest\":\"abababababababababababababababababababababababababababababababab\",\"expected_policy_digest\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"expected_publication_revision\":5,\"expected_review_version\":4,\"expected_stewardship_epoch\":8,\"policy_revision\":\"policy-1\",\"work_ref\":\"work-1\"}",
+      "sha256": "9f741d05ca8af964fb9fb87c073556abaac87e99af9e6307fee2e111473f643d"
+    }
+  },
+  "shared_conformance_cases": [
+    "same request key and same body returns the original receipt",
+    "same request key and changed body raises idempotency conflict",
+    "stale review, definition, publication basis, stewardship epoch, evidence digest, action revision, or policy digest cannot apply a control",
+    "newer unrelated publication does not stale an unchanged case basis",
+    "manual assignment protection denies automatic queue replacement",
+    "unknown opening time denies SET_DUE_AT",
+    "pause, binding replacement, and policy mismatch create the specified terminal outcome",
+    "receipt and control change commit atomically or both roll back",
+    "resolved occurrences remain readable and recurrence gets a new case key",
+    "restore preserves case keys, request bodies, and receipts"
+  ]
+}

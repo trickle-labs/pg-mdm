@@ -611,7 +611,7 @@ pub fn candidate_pair_overflow_sql(
 }
 
 fn match_node(channel: &CandidateChannel) -> Value {
-    // ponytail: pg_trickle 0.105.1 intermittently drops inserts from these projection deltas; restore AUTO after the bytea membership delta check passes.
+    // ponytail: FULL until the admitted 0.105.2 bytea regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
     node_with_refresh_mode(
         format!("blocks/{}", channel.channel_id),
         channel
@@ -693,7 +693,7 @@ pub fn compile(entity: &Entity) -> Value {
     let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
         channels: Vec::new(),
     });
-    // ponytail: candidate-pair joins refresh fully because pg_trickle 0.105.1 can drop multi-row pair inserts; restore AUTO when it preserves them.
+    // ponytail: FULL until the admitted 0.105.2 pair-join regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
     let pair_refresh_mode = "FULL";
     let fallback_logical_id = entity
         .sources
