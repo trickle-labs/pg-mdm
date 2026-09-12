@@ -245,29 +245,27 @@ pub fn normalized_field_sql(field: &Field, sources: &[Source]) -> String {
             continue;
         }
 
+        let field_value = format!("r.{}", quote_identifier(&field.name));
+        let field_state = format!("r.{}", quote_identifier(&format!("{}_state", field.name)));
         let normalize_call = if field.cleaner == "date" || field.logical_type == "date" {
             format!(
-                "mdm_graph.normalize_date(({})::date, '{cleaner_escaped}', 1, {}, '{options_escaped}'::jsonb)",
-                quote_identifier(&field.name),
-                quote_identifier(&format!("{}_state", field.name))
+                "mdm_graph.normalize_date(({field_value})::date, '{cleaner_escaped}', 1, {field_state}, '{options_escaped}'::jsonb)"
             )
         } else {
             format!(
-                "mdm_graph.normalize_text(({})::text, '{cleaner_escaped}', 1, {}, '{options_escaped}'::jsonb)",
-                quote_identifier(&field.name),
-                quote_identifier(&format!("{}_state", field.name))
+                "mdm_graph.normalize_text(({field_value})::text, '{cleaner_escaped}', 1, {field_state}, '{options_escaped}'::jsonb)"
             )
         };
 
-        let raw_value = format!("{}::text", quote_identifier(&field.name));
+        let raw_value = format!("{field_value}::text");
         let row_changed_at: String = source.row_changed_at.as_deref().map_or_else(
             || "NULL::timestamptz".into(),
-            |_| "row_changed_at::timestamptz".into(),
+            |_| "r.row_changed_at::timestamptz".into(),
         );
         let source_escaped = source.name.replace('\'', "''");
         let records_relation = node_ref(&format!("records/{}", source.name));
         let part_sql = format!(
-            "SELECT '{source_escaped}'::text AS source_name, s.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, s.raw_value AS raw_value, s.row_changed_at AS row_changed_at, (s.n).state AS state, (s.n).normalized AS normalized, (s.n).canonical_bytes AS canonical_bytes\nFROM (SELECT source_record_key, {raw_value} AS raw_value, {row_changed_at} AS row_changed_at, {normalize_call} AS n FROM {records_relation}) s\nJOIN mdm_graph.source_records sr ON sr.source_record_key = s.source_record_key AND sr.active\nJOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
+            "SELECT '{source_escaped}'::text AS source_name, r.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, '{field_escaped}'::text AS field_name, {raw_value} AS raw_value, {row_changed_at} AS row_changed_at, n.state AS state, n.normalized AS normalized, n.canonical_bytes AS canonical_bytes\nFROM {records_relation} AS r\nCROSS JOIN LATERAL {normalize_call} AS n\nJOIN mdm_graph.source_records sr ON sr.source_record_key = r.source_record_key AND sr.active\nJOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = '{source_escaped}'",
         );
         parts.push(part_sql);
     }

@@ -73,6 +73,10 @@ fn test_e2e_generated_normalization_sql_shape() {
     let email_field = &entity.fields[0];
     let norm_email_sql = normalized_field_sql(email_field, &entity.sources);
     assert!(norm_email_sql.contains("mdm_graph.normalize_text"));
+    assert!(norm_email_sql.contains("CROSS JOIN LATERAL mdm_graph.normalize_text"));
+    assert!(norm_email_sql.contains(
+        "n.state AS state, n.normalized AS normalized, n.canonical_bytes AS canonical_bytes"
+    ));
     assert!(norm_email_sql.contains("'email'"));
     assert!(norm_email_sql.contains("FROM @{records/crm}"));
 
