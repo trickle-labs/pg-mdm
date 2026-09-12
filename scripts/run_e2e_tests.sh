@@ -74,6 +74,8 @@ for _ in $(seq 1 600); do
     sleep 0.1
 done
 if [[ $boundary_captured != true ]]; then
+    docker exec "$container" psql -X -At -U postgres -d foundation -c \
+        "SELECT COALESCE(jsonb_agg(jsonb_build_object('application_name', application_name, 'state', state, 'wait_event_type', wait_event_type, 'wait_event', wait_event, 'elapsed_seconds', extract(epoch FROM pg_catalog.clock_timestamp() - query_start)::integer, 'blocking_pids', pg_catalog.pg_blocking_pids(pid))), '[]'::jsonb) FROM pg_catalog.pg_stat_activity WHERE datname = 'foundation' AND pid <> pg_catalog.pg_backend_pid() AND state <> 'idle'" >&2
     kill "$boundary_refresh" 2>/dev/null || true
     wait "$boundary_refresh" || true
     cat "$work_dir/boundary_refresh.log"
