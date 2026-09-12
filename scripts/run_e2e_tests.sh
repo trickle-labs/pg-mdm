@@ -84,14 +84,12 @@ fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "INSERT INTO public.crm_customer VALUES (4, 'After boundary', 'after@example.test', statement_timestamp())" >/dev/null
 if ! wait "$boundary_refresh"; then cat "$work_dir/boundary_refresh.log"; exit 1; fi
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
 DO $$
 BEGIN
-    IF (SELECT count(*) FROM mdm_out.customer_members
-        WHERE source_name = 'crm' AND active
-          AND source_record_id IN (
-              SELECT source_record_id FROM public.e2e_source_records(ARRAY[3]::bigint[]))) <> 1
-       OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'Before boundary') <> 1
+    IF (SELECT count(*) FROM mdm_out.customer c
+        JOIN mdm_out.customer_members m USING (mdm_id)
+        WHERE c.name = 'Before boundary' AND m.source_name = 'crm' AND m.active) <> 1
        OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 0 THEN
         RAISE EXCEPTION 'source write after the returned boundary was published early';
     END IF;
@@ -116,11 +114,9 @@ SQL
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
 DO $$
 BEGIN
-    IF (SELECT count(*) FROM mdm_out.customer_members
-        WHERE source_name = 'crm' AND active
-          AND source_record_id IN (
-              SELECT source_record_id FROM public.e2e_source_records(ARRAY[4]::bigint[]))) <> 1
-       OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'After boundary') <> 1 THEN
+    IF (SELECT count(*) FROM mdm_out.customer c
+        JOIN mdm_out.customer_members m USING (mdm_id)
+        WHERE c.name = 'After boundary' AND m.source_name = 'crm' AND m.active) <> 1 THEN
         RAISE EXCEPTION 'retry did not publish the later source write: members %, outputs %',
             (SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb)
              FROM mdm_out.customer_members m WHERE m.source_name = 'crm' AND m.active),
