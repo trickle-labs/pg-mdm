@@ -195,8 +195,7 @@ BEGIN
     IF NOT failed THEN
         RAISE EXCEPTION 'resolver limit did not fail closed';
     END IF;
-    SELECT publication_revision INTO STRICT revision_before
-    FROM mdm_internal.entities WHERE entity_name = 'customer';
+    revision_before := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint;
 
     SELECT * INTO STRICT create_result
     FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
