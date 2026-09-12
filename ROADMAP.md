@@ -1,140 +1,108 @@
-# `pg_mdm` V1 implementation roadmap
+# `pg_mdm` implementation roadmap
 
-## Purpose
+## Status after v0.11
 
-This roadmap divides the V1 design into testable development releases implemented sequentially by a coding agent with human review. Only one release is in progress at a time, and the next starts after the current release meets its exit evidence. The estimates are rough-order-of-magnitude ranges, not commitments, and include implementation, tests, documentation, review, and defect fixing. Their confidence is low until working code establishes delivery velocity.
+Reviewed 12 September 2026. pg-mdm v0.1 through v0.11 are released. The next work is to admit pg-trickle v0.105.2, close the remaining V1 implementation and evidence gaps, and deliver a focused set of capabilities from [DESIGN_V2.md](DESIGN_V2.md).
 
-The roadmap follows [`DESIGN_V1.md`](DESIGN_V1.md). Each release should leave its completed behavior runnable and tested, while features assigned to [`DESIGN_V2.md`](DESIGN_V2.md) remain out of scope. V1 uses full-entity resolution over complete terminal evidence relations. It does not depend on the `output_delta_consumer` capability or affected-set resolution.
+The [V1 design](DESIGN_V1.md) controls existing semantics. The [V2 design](DESIGN_V2.md#23-recommended-delivery-scope-and-dependencies) defines the proposed additions and their prerequisites. This roadmap controls sequencing. V2 is a design generation, not a package-version commitment. The v1.0 compatibility gate remains separate from delivery of optional V2 capabilities.
 
-The V1 design controls semantics, this roadmap controls sequencing, and the detailed plans describe implementation. Resolve contradictions in these documents before implementing the affected behavior. File layouts and SQL skeletons are starting points, not requirements to create unused modules. New features, including private implementations of V2 capabilities, require explicit project-owner approval. A missed estimate triggers review and re-estimation; removing an agreed V1 requirement also requires approval.
+The release numbers below are recommendations, not scheduled commitments. Write a reviewed implementation plan with executable exit cases before each release starts. Keep one implementation release in progress at a time. Estimate it from measured work and a fixed scope; the original V1 person-week estimates are no longer a useful forecast. Record required evidence before dependent work begins. Changes to V1 semantics require an explicit migration or correctness-repair plan.
 
-Versions v0.1 through v0.7 were built on `pg_trickle` v0.98.0. The v0.8 integration baseline is the published `pg_trickle` v0.105.1 artifact at commit `5bfdea89bbcca2bf6d606ddbf034b62eddf3b2ae` (tag object `fa6fbb0c17cdd3ac64f87b8d7611c828edaf5614`). CI uses `pg_trickle-0.105.1-pg18-linux-amd64.tar.gz` with SHA-256 `a6b1942ce5d2517dc8ad94a04ba3f2508fad4be21d6fc247df873502bcf2e69e`. This release advertises stable, enabled Graph V1 and Delta V1 contracts. The public-SQL admission test exercises Graph V1 capability discovery, durable `EXTERNAL` orchestration, owner-scoped RLS, canonical contracts, delegated source boundaries, and transactional commit and rollback. Delta V1 remains outside the V1 pg-mdm publication path.
+## Released baseline
 
-The v0.105.1 release adds owner-approved Graph V1 source delegation through PostgreSQL schema `USAGE` and table `SELECT, MAINTAIN`. The v0.8 admission suite pins that immutable artifact and exercises the delegated boundary. The broader v0.105.2 package and field qualification is not a prerequisite.
-
-Before attaching calendar dates, v0.1 and v0.2 must establish the extension toolchain and test harness. Revise the remaining estimates from measured delivery. A milestone is complete only when its behavior is installed, runnable, and covered by its stated tests. Design or partially wired code does not count. If a milestone exceeds its upper range, re-estimate the remaining work and submit any proposed scope reduction for review.
-
-Until Graph V1 passes its gate, tests use an SQL-backed production-shaped path:
-
-```text
-fixture source tables
-         |
-         v
-production-generated SQL
-         |
-         v
-versioned terminal relations
-         |
-         v
-production terminal readers
-         |
-         v
-reference resolver and publication
-```
-
-Tests may still load terminal relations directly for focused resolver cases, but those fixtures do not satisfy the integration-shaped exit evidence. From v0.3 onward, tests execute the generated normalization, candidate, pair, and evidence SQL against ordinary PostgreSQL fixture tables. They compare the terminal rows with independently constructed expectations before the production readers invoke the resolver. This remains a test arrangement, not a production bypass around Graph V1.
-
-The initial V1 integration supports only `pg_trickle` trigger capture. WAL capture remains out of scope until `pg_trickle` advertises it as qualified. Delta V1 also remains out of scope. A later release may use `output_delta_consumer` to optimize affected-set resolution, but V1 always reads the complete terminal evidence relations after a strict graph refresh.
-
-## Pre-implementation assessment
-
-Assessment date: 9 September 2026. The design is suitable for starting v0.1, with the following proof obligations assigned to existing releases. It is not yet evidence of a production-ready system. The main risks are the privileged execution path, preservation of versioned semantics, durable identity history, and the unadmitted upstream source-delegation behavior.
-
-| Gap addressed in the plans | Required evidence | Gate |
+| Releases | Delivered foundation | Source of scope and evidence requirements |
 |---|---|---|
-| Helper ownership and direct-call authorization | Install and upgrade ownership procedure; forged helper calls cannot write protected state | v0.1, v0.2 |
-| Role replacement and changing RLS visibility | Stored role binding; same-name replacement rejected; visibility changes cannot reuse stale evidence | v0.2, Graph V1 admission |
-| Defaults and Unicode behavior introduced after definition creation | Old definitions remain immutable; incomplete artifacts cannot execute; old cleaner behavior survives supported upgrades | v0.2–v0.6 |
-| Directive history and concurrent overrides | Operation, base revision, and epoch survive restore; stale writes and failed writes preserve the prior directive | v0.5, v0.7 |
-| Split history and revision-dependent review cleanup | Split, remerge, and split replay terminates; unchanged refreshes after splits remain observations | v0.7 |
-| No-change observations and output-trigger callbacks | Observations record the consumed decision epoch; reentrant or altered publications roll back | v0.7, v0.9 |
-| Recreated output tables and protected explanations | Clean restore preserves output grants and consumer objects; omitted-pair explanations enforce source and field permissions | v0.7 |
+| v0.1–v0.2 | Extension, roles, immutable definitions, validation, and artifacts | [v0.1 plan](plans/v0.1.md), [v0.2 plan](plans/v0.2.md) |
+| v0.3–v0.4 | Normalization, source identity, and bounded candidate generation | [v0.3 plan](plans/v0.3.md), [v0.4 plan](plans/v0.4.md) |
+| v0.5–v0.6 | Pair decisions, durable manual constraints, and conservative full resolution | [v0.5 plan](plans/v0.5.md), [v0.6 plan](plans/v0.6.md) |
+| v0.7 | Stable IDs, goldens, provenance, reviews, and publication model | [v0.7 plan](plans/v0.7.md) |
+| v0.8–v0.9 | Private Graph V1 installation, strict refresh, and atomic publication | [v0.8 plan](plans/v0.8.md), [changelog](CHANGELOG.md), `src/api/refresh.rs` |
+| v0.10–v0.11 | Operational checks, package upgrades, AUTO/FULL probes, and publication rollback/retry qualification | [v0.10 plan](plans/v0.10.md), [v0.11 plan](plans/v0.11.md), `tests/e2e.sql`, `scripts/run_e2e_tests.sh` |
 
-Start v0.1 with the installation and privilege proof. Complete the role-binding and semantic-manifest checks before v0.2 exits. An unresolved prerequisite blocks its dependent work; it does not require speculative implementation of later releases. The detailed [v0.8 plan](plans/v0.8.md) records its upstream gate, task order, and executable exit cases. Likewise, v0.9–v0.11 need reviewed task lists and executable exit cases before each starts.
+pg-mdm v0.11.0 is tagged at `97b78c8`. Its current dependency remains pg-trickle v0.105.1, as recorded in [DEPENDENCIES.md](DEPENDENCIES.md), `tests/Dockerfile.e2e`, and `src/version.rs`. Versions v0.1 through v0.7 used v0.98.0. Released code and test coverage do not establish that every original V1 acceptance criterion has passed.
 
-## Development releases
+Known baseline limitations must remain visible:
 
-### v0.1 — Extension foundation (3–5 person-weeks)
+- Candidate blocks and candidate-pair joins use explicit `FULL` refresh in `src/graph_spec.rs` because v0.105.1 can drop inserts for those shapes. The supported AUTO scan probe is not proof that all compiled MDM stages are differential.
+- `preview_entity()` returns metadata and counts for validation, sampled, and scoped modes. Its scoped `exact` flag currently lacks subproblem resolution behind it. Repair that claim and complete the V1 preview contract before using preview to authorize V2 actions.
+- The committed organization corpus is a four-record seed. The repository does not yet provide the held-out quality report and combined operating-envelope evidence required below.
+- MDM uses trigger capture and full terminal scans followed by full-entity resolution. Delta consumption, affected-set resolution, prepared runs, and V2 semantic events remain unimplemented.
 
-Detailed plan: [`plans/v0.1.md`](plans/v0.1.md).
+## Upstream v0.105.2 admission
 
-Establish the extension package, installation and upgrade scripts, internal and public schemas, roles, privileges, fixed security-definer search paths, durable operation records, and the durable-versus-derived dump policy. Declare `pg_trickle` as an extension dependency and lock the selected v0.98.0 artifact. Add one internal SQL adapter around `pgtrickle.integration_capabilities()`. On the baseline, the adapter must report `external_graph_refresh 1.0 enabled=false` and `output_delta_consumer 1.0 enabled=false` without treating either result as an installation failure. This release does not yet create or resolve entities.
+The [pg-trickle v0.105.2 release](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.105.2) is available at commit `33df4cc91fda4fbadba79470347a714c8509703a`. The release publishes `pg_trickle-0.105.2-pg18-linux-amd64.tar.gz` with SHA-256 `bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416`. Treat it as the next admission candidate; this document does not change the build lock.
 
-Build the Graph V1 conformance harness in this release. Against 0.98.0, positive Graph V1 tests must skip or block according to the advertised capability state. Negative tests must prove that `pg_mdm` fails closed and never reads private catalogs or calls provisional internal APIs.
+The [tagged capability manifest](https://github.com/trickle-labs/pg-trickle/blob/v0.105.2/docs/capability-manifest.json) advertises stable, enabled Graph V1, Delta V1, trigger capture, and WAL capture. It does not advertise `prepared_graph_generation` or `prepared_output_delta_binding`. Those remain in the [upstream post-1.0 proposal](https://github.com/trickle-labs/pg-trickle/blob/v0.105.2/plans/PROPOSAL_V2_PREPARED_GRAPH_GENERATIONS.md). Package/runtime qualification and benchmark smoke tests shipped; the 72-hour soak and seven-day longevity runs remain deferred upstream.
 
-Exit evidence: clean install, ownership setup, privilege, hostile-`search_path`, rollback, capability-discovery, logical dump and restore, and negative conformance tests run on the single PostgreSQL major inherited from the selected `pg_trickle` release. Archive the base install SQL and validate migration paths; the first real extension upgrade is in v0.2. The test report labels skipped capability cases separately from passes. Additional PostgreSQL majors are post-V1 scope.
+| Risk | Owner | Next required evidence |
+|---|---|---|
+| `RISK-PGT-GRAPH-V1` | pg-mdm release owner | Re-run public capability, canonical contract, durable `EXTERNAL`, delegated authorization/revocation, RLS, complete boundary, rollback/frontier, concurrency, lifecycle, clone, restore, upgrade, and private-API denial tests on the exact v0.105.2 package |
+| Candidate insert loss | Graph compiler maintainer | Reproduce bytea block-membership and multi-row pair-insert cases against complete SQL expectations and FULL reference. Preserve `FULL` until each affected AUTO shape passes |
+| Prepared execution unavailable | pg-mdm integration owner with upstream maintainer | Agree public SQL signatures, capability versions, leases, crash/restore behavior, and shared conformance; wait for a released enabled capability before MDM integration |
+| Incomplete qualification evidence | pg-mdm release owner | Map the V1 criteria to actual commands and retained results, record gaps, and complete the quality and operating evidence below |
 
-### v0.2 — Definitions and validation (5–7 person-weeks)
+Keep the current PostgreSQL 18 and trigger-capture scope for the next release. Upstream WAL availability permits a later MDM admission effort; it does not change MDM's supported capture mode. Review these risks on each dependency or compiler revision. Version checks alone do not admit a contract.
 
-Detailed plan: [`plans/v0.2.md`](plans/v0.2.md).
+## Recommended post-v0.11 releases
 
-Implement the entity, source, field, match, and golden-value definition model together with immutable definition versions, separate definition and compiled-artifact digests, frozen source identities, transactional output-name reservation, optimistic concurrency, and the initial `create` and `describe` surfaces. Compile each valid definition into an append-only `pg_trickle` artifact stored as data, but do not create a live graph. Prove execution-role authorization and source-query behavior under row-level security. Invalid or unsupported definitions must fail without leaving partially installed state.
+### v0.12: Admit v0.105.2 and reconcile V1 acceptance
 
-Exit evidence: definitions round-trip through `describe`; A→B→A creates three history rows; only a submission equal to the current desired definition is a no-op; equivalent definitions produce the same artifact; unauthorized role nomination, privilege revocation, and row-security failures fail closed; and a clean-database logical dump and restore preserves definition meaning after explicit role and source rebinding. Re-estimate v0.3–v0.7 from the effort measured through this release.
+1. Download and checksum the published artifact. Update `DEPENDENCIES.md`, the E2E image, `src/version.rs`, and installation documentation together in the implementation change.
+2. Run the cumulative Graph V1 admission and package checks against that artifact. Test pg-trickle 0.105.1-to-0.105.2 upgrade with existing MDM entities and publications, and the pg-mdm 0.11-to-next-release upgrade. Preserve IDs, definitions, grants, and consumer objects.
+3. Add the two candidate-insert regression cases and inspect actual `node_results`. Keep exact FULL fallbacks if the upstream defects persist. A strategy change produces a new immutable compiler artifact and a tested adoption/rebuild path.
+4. Audit every V1 acceptance criterion. Replace the scoped-preview exactness claim with a truthful result until the complete induced subproblem is evaluated, then finish the V1 sampled/scoped behavior through the production path. Record any other missing behavior as blocking work with an owner.
+5. Turn the organization fixture into executable quality checks with approved thresholds and held-out cases. Measure graph refresh, full MDM resolution, and publication separately. Record the supported envelope and remaining acceptance gaps.
 
-### v0.3 — Normalization (4–6 person-weeks)
+Exit when the admitted pins, upgrade archive, public API behavior, regression cases, and cumulative CI pass with linked results. Every unresolved V1 requirement must remain an explicit v1.0 blocker; resolve prerequisites before dependent V2 work. This release establishes a measured baseline and makes no prepared-execution claim.
 
-Detailed plan: [`plans/v0.3.md`](plans/v0.3.md).
+### v0.13: Exact entity preview and regression fixtures
 
-Implement the V1 built-in cleaners, typed normalized-value states, deterministic ordering rules, and source-record identity handling. Execute production-generated record and normalization SQL against fixture source tables and compare it with the versioned cleaner vectors. Tests must cover supported scalar and composite keys, exact cleaner dispatch, explicit unknown and redacted inputs, invalid and absent values, authoritative fields, hostile execution context, and equivalent results across clean rebuilds.
+Depends on the v0.12 integration and preview prerequisites. This is the first recommended V2 capability release, corresponding to design sections 8 and 17.
 
-### v0.4 — Candidate generation (6–9 person-weeks)
+Reuse the existing compiler, terminal readers, full resolver, identity reconciler, and golden selector in a shared non-publishing evaluation path. Add a separate private graph for a proposed definition, `exact_entity` preview within the measured transaction envelope, and labeled pair, partition, forbidden-co-membership, and golden fixtures. Extend existing metadata only with the manifest fields needed to bind the result: definition/artifact, source boundary, execution role, base publication, decision epoch, and semantic versions.
 
-Detailed plan: [`plans/v0.4.md`](plans/v0.4.md).
+Report membership, merge/split, survivor, golden, review, and schema effects. Use preview-local handles for new IDs. Do not allocate durable IDs or write public outputs during preview. Require a fresh preview or complete recomputation after any pinned input changes. Keep bounded explanation and cleanup rules in this release.
 
-Compile exact, composite, prefix, token, and other bounded V1 candidate channels into complete candidate blocks and canonical pairs. Enforce per-block and aggregate completeness limits so resource pressure fails the operation rather than truncating required work or treating an unexamined pair as a non-match.
+Exit evidence must compare preview with subsequent refresh from the same manifest, including rejected definitions, source/RLS changes, stewardship changes, merges, splits, resource failure, and schema changes. Assert that preview leaves the ID ledger, active definition, directives, and current publication unchanged. An entity too large for exact preview receives an explicit resource failure, not an exact label on a sample. No prepared capability is required.
 
-Exit evidence: both the Rust generator and production-generated PostgreSQL SQL match an independent all-pairs oracle. A separate graph stage rejects an oversized block before pair-join execution. Aggregate limits fail without publishing partial results. The release records block skew, discovery overlap, unique-pair growth, peak memory and temporary storage, and a provisional pilot envelope. Re-estimate v0.5–v0.7 from the measured candidate path.
+### v0.14: Explicit merge and split stewardship
 
-### v0.5 — Evidence and pair decisions (7–10 person-weeks)
+Depends on exact impact preview. Implement design section 12's merge and complete split partitions over durable source-record subjects. Reuse the immutable directive ledger, contradiction checks, and V1 identity policy. Bind writes to the preview digest, expected base revision, and decision epoch. Publish their effects through normal refresh.
 
-Detailed plan: [`plans/v0.5.md`](plans/v0.5.md).
+Exit evidence covers complete constraint compilation, contradictory and dormant directives, stale previews, concurrent writes, explicit supersession, retry, reactivation, and restore. A partial split specification or incomplete affected closure must be rejected atomically. Verify memberships, ID continuity, provenance, and bounded reasons after refresh.
 
-Evaluate built-in exact and fuzzy comparisons for discovered pairs, group correlated evidence, apply authority conflicts, and produce deterministic automatic pair decisions. Run generated evidence SQL through the same versioned terminal schemas and production readers used by the resolver. Add durable steward `MATCH` and `NOT_MATCH` decisions with precedence, optimistic concurrency, contradiction checks, and logical dump and restore coverage for current and superseded decisions.
+Keep move-member, locks, alternate continuity, approvals, assignment, and bulk operations in the optional backlog until a named workflow requires them. Their narrower scope never weakens existing pair decisions or source-record uniqueness.
 
-### v0.6 — Conservative clustering (7–10 person-weeks)
+### v0.15: Semantic change feed
 
-Detailed plan: [`plans/v0.6.md`](plans/v0.6.md).
+Depends on the publication comparison path and the supported merge/split semantics. Implement the optional change table from design section 15 with deterministic `(publication_revision, event_no)` order, stable event IDs, bounded protected payloads, and retained details for large member sets.
 
-Implement the full-reference resolver, deterministic edge order, must-link closure, cannot-link enforcement, and the V1 component-admission rule that prevents weak chain accretion. Compare the production union-find result with a deliberately simple set-based oracle on small graphs. Generated tests must exercise edge appearance and disappearance, conflicting constraints, large components, and stable results under input and plan reordering. Re-estimate v0.7 and later work from measured clustering cost.
+Ship cursor replay, idempotent consumption, retention promises, gap detection, and snapshot resynchronization together. Observation-only refreshes emit no events. Semantic-only changes advance the revision when the enabled feed requires an event. Implement event types only for available features.
 
-### v0.7 — Identity and publication model (8–12 person-weeks)
+Exit evidence covers merge, split, retirement, reactivation, member movement, golden/provenance and review changes, no-op refresh, retry, output-write rollback, authorization, restore, and retention gaps. Compare events with the semantic before-and-after publication and prove that events and current outputs commit together. Use ordinary SQL consumers; external delivery is optional later work.
 
-Detailed plan: [`plans/v0.7.md`](plans/v0.7.md).
+## Optional tracks after the first V2 scope
 
-Implement stable `mdm_id` allocation and reconciliation, merge and split continuity, aliases, golden-value selection, anchored overrides, provenance, reviews, and bounded machine-readable explanation. Publish the three V1 output-table shapes in resolver tests, without yet advancing a live `pg_trickle` graph. Deliver the release as four review gates: identity and history; goldens and overrides; reviews and explanation; then output DDL, logical diffs, and atomic publication.
+The dependency order and smallest implementation for every remaining catalogue area are recorded in [design section 23.5](DESIGN_V2.md#235-optional-capability-tracks). Do not assign release numbers before selecting a deployment need and completing its prerequisites.
 
-Exit evidence: generated histories preserve the specified identities and produce identical memberships, goldens, reviews, and explanations under replay and input reordering. No-op and provenance-only cases follow the canonical publication projection. A clean-database restore preserves IDs, aliases, splits, overrides, review history, and retained provenance. Re-estimate integration and qualification after this release.
+| Track | Entry condition | Required order |
+|---|---|---|
+| Full source contracts and valid time | A named source cannot use tracked/soft-delete semantics | Local snapshot or ordered events, completeness/replay, retained versions, corrections, then historical projections |
+| Configuration reuse and inference | Repeated definitions or a measured onboarding problem | Flat versioned fragments and provenance, fixture verification, then inferred proposals; deeper nesting only if needed |
+| Matching, clustering, continuity, and goldens | Labeled failures of the existing policies | One versioned built-in improvement with exact preview; custom code only after dependency inspection and invalidation are proven |
+| Extended stewardship | Pair decisions and merge/split cannot express a named workflow | Move-member and scoped locks, precedence and exact impact tests, then approvals, assignment, or bounded bulk action |
+| Resolved entities as sources | A consumer needs revision-bound MDM dependencies | Complete feed replay/resynchronization first, then cycle rejection, revision pinning, and merge/split propagation |
+| Prepared full resolution | Measurements show MDM resolution exceeds the transaction envelope and upstream ships the capability | Public capability admission, one run/worker, logged checkpoints, open-before-read, compare-and-swap promotion, abandonment, crash/restore verification, then multiple workers if justified |
+| Affected-set resolution | Full-resolution cost dominates and closure can be proved | Synchronous Delta V1 read/ack and FULL_INVALIDATION fallback, generated equivalence, then optional prepared delta binding after upstream delivery |
+| Diagnostics, verification, shared operations, and retention | An enabled feature or deployment needs the contract | Per-feature permissions, retention, and recovery first; richer diagnostics, namespaces, quotas, fairness, service objectives, holds, and compaction as required |
 
-### v0.8 — `pg_trickle` graph integration (6–10 person-weeks after upstream availability)
+Prepared full resolution needs `prepared_graph_generation`, not Delta V1. Affected-set resolution can use Delta V1 synchronously without prepared generations. Combining them adds the separate `prepared_output_delta_binding` prerequisite. Prepared major 1 still refreshes relational evidence in one transaction and freezes storage in place; it cannot solve an oversized graph-refresh transaction.
 
-Detailed plan: [`plans/v0.8.md`](plans/v0.8.md).
-
-Select one immutable compiled artifact for a definition version and create its private stream-table graph without rewriting either row. Create every member with `EXTERNAL` orchestration and initialization disabled. Obtain `stream_table_contract()` for each member and `graph_contract()` for the complete closure, then store an append-only graph binding with the artifact digest, database-local execution-role and source bindings, canonical graph digest, member contracts, and graph-binding digest. Add the supported lifecycle operations without reading private catalogs or calling provisional internal APIs.
-
-This release starts only after `pg_trickle` advertises `external_graph_refresh` major 1 as enabled and passes the v0.1 conformance harness. Run the admission suite against each qualifying upstream release when it appears; do not wait for v0.8 to discover its behavior. Re-run the previously skipped positive tests as the admission gate. Private catalogs and provisional internal APIs are not substitutes for the public contract.
-
-### v0.9 — Transactional refresh (6–9 person-weeks)
-
-Implement `preview`, `refresh`, and administrative rebuild around strict graph refresh, complete source boundaries, full terminal-relation scans, full-entity resolution, and atomic publication. Preview modes are `validation`, `sampled`, and `scoped`; a scoped preview is exact only for its materialized induced subproblem and does not claim full-entity impact. `mdm.refresh()` locks the entity and calls `refresh_graph_strict()` inside the caller's transaction. It records `graph_refresh_id`, `source_boundary`, and `source_boundary_digest`, reads the complete terminal evidence relations, runs the reference resolver from v0.6, and publishes memberships, golden values, and reviews in the same transaction. A failure after graph maintenance must roll back graph contents, consumed frontiers, MDM state, and public outputs.
-
-The initial population may use `full_policy = 'ALLOW'` because every v0.8 graph member starts empty. After that baseline, every qualifying graph shape must report differential or scoped maintenance in `node_results`. A graph shape may use the exact `FULL` fallback when its compiled queries lack a proven differential path. Qualification fails when a qualifying steady-state shape repeatedly uses `FULL` despite having a supported incremental path.
-
-Exit evidence: success, no-op, injected failure, concurrent source-write, concurrent lifecycle, fallback, and effective-strategy tests prove that graph and MDM state commit or roll back together.
-
-### v0.10 — Operational hardening (8–12 person-weeks)
-
-Complete the cross-cutting security, authorization, concurrency, lifecycle locking, crash recovery, clone isolation, backup and restore, extension upgrade, full-fallback, and resource-limit evidence started in earlier releases. Failures must use stable, actionable results and must never leave a partial publication or silently weaken candidate completeness.
-
-Run the cumulative tests against the exact pinned `pg_trickle` artifact. Cover concurrent writers, lifecycle races, backend and PostgreSQL failures, retry, resource limits, backup, restore, clone isolation, and extension upgrade.
-
-### v0.11 — Release qualification (5–8 person-weeks)
-
-Run the shared `pg_trickle` conformance suite and the generated differential-versus-full reference suite against the exact package used in CI. Cover inserts, updates, deletes, stewardship changes, merges, splits, golden-only changes, rollback, concurrency, fallback, rebuild, and upgrade. Check the effective refresh strategy for qualifying graph shapes. Qualify the operating envelope measured since v0.4 and complete the installation, administration, recovery, and user documentation required for a supported release.
+For the first V2 scope, completion means v0.13–v0.15 pass their gates on an admitted baseline and preserve existing V1 behavior. Declare deferred capabilities explicitly. Completing the entire catalogue requires plans and acceptance evidence for every optional track, including their interactions; the first V2 scope does not make that claim.
 
 ## Release evidence traceability
 
-Record the exact test name, command, commit, artifact and fixture digests, result, and reviewed evidence link for each release row below. A blank or skipped blocking test does not satisfy its invariant. The release owner signs off the evidence before the next milestone starts.
+Record the exact test name, command, commit, artifact and fixture digests, result, and reviewed evidence link for each release row below. A blank or skipped blocking test does not satisfy its invariant. The release owner signs off the evidence before dependent work starts. The owning-release column records the original obligation; it is not a completion status.
 
 | V1 invariant | Owning release | Required executable evidence |
 |---|---|---|
@@ -153,26 +121,20 @@ Record the exact test name, command, commit, artifact and fixture digests, resul
 | Authorization and RLS preservation | v0.1, v0.2, v0.7, v0.8 | Direct helper calls, role replacement, visibility invalidation, and explanation disclosure tests |
 | Restore and upgrade continuity | Every release from v0.2 | Archived upgrade starts; clean restore of durable state, output schema, grants, and supported consumer objects |
 
-## Upstream integration risk
-
-| Risk | Owner | Baseline | Admission cases | Current state |
-|---|---|---|---|---|
-| `RISK-PGT-GRAPH-V1` | `pg_mdm` release owner | v0.105.1 commit `5bfdea89`; Linux AMD64 package SHA-256 `a6b1942c…f2e69e` | Capability absence, disabled state, major mismatch, contract canonicalization, durable `EXTERNAL` mode, delegated source authorization and revocation, source-boundary completeness, strict rollback and frontier rollback, concurrency and lifecycle locking, clone, restore, upgrade, and forbidden private access | v0.8 pins the released v0.105.1 artifact and runs the delegated-source admission suite. Remaining strict refresh, rollback, and operational cases stay with v0.9–v0.11. |
-
-Review this risk on every upstream release and at each `pg_mdm` milestone. Record the tested artifact and unresolved conformance failures. Do not replace the gate with an upstream version-number check.
-
-The [v0.105.1 capability manifest](https://github.com/trickle-labs/pg-trickle/blob/v0.105.1/docs/capability-manifest.json) marks Graph V1 and Delta V1 stable and enabled. Admission must still prove execution-role preservation, RLS visibility invalidation, and enforcement of the block-limit stage before pair joins against each pg-mdm graph compiler revision. Ordinary fixture SQL alone cannot prove these upstream behaviors.
-
 ## Quality and operating evidence
 
-Use one committed, de-identified organization-resolution corpus from v0.4 onward. It must contain labeled pairs and clusters for shared contact details, weak chains, authoritative conflicts, deletions, reactivations, and identifiers that need business context. Record candidate recall, false merges, missed matches, cluster errors, and review volume against internal acceptance thresholds before v0.6 exits. This is release evidence, not the deferred user-facing V2 diagnostics product.
+Expand `tests/fixtures/organization_domain_v1.json` into a runnable, de-identified organization-resolution corpus. Include labeled pairs and clusters for shared contact details, weak chains, authoritative conflicts, deletions, reactivations, and identifiers that need business context. Record candidate recall, false merges, missed matches, cluster errors, and review volume. The current four-record seed does not satisfy this requirement.
 
-Use synthetic records when permission to commit source data is unavailable. Record the labels' origin, permitted use, and unresolved ambiguities. Freeze metric definitions, denominators, and acceptance thresholds before tuning defaults, with separate tuning and held-out cases. Require zero false merges in the explicit cannot-link, authoritative-conflict, and weak-chain safety fixtures. The release owner must approve numeric thresholds for the remaining quality measures before the v0.5 quality gate. Report performance and accuracy separately; an oracle proves the declared algorithm, not the business correctness of a match. Do not lower a threshold merely to pass a release.
+Use synthetic records when permission to commit source data is unavailable. Record label origin, permitted use, and unresolved ambiguities. Freeze metric definitions, denominators, and numeric acceptance thresholds with the release owner before tuning defaults. Separate tuning and held-out cases. Require zero false merges in explicit cannot-link, authoritative-conflict, and weak-chain safety fixtures. Report performance and accuracy separately; an algorithm oracle does not establish business correctness. Do not lower a threshold merely to pass a release.
 
-The provisional pilot envelope starts in v0.4 and grows with each release. Measure source rows, block memberships and skew, repeated discoveries, unique pairs, comparisons, component checks, memory, temporary storage, publication rows and bytes, retained history, and transaction duration. Record PostgreSQL, CPU, memory, storage, data distribution, and fixture digests with every result. V0.11 qualifies the combined envelope; it does not collect these measurements for the first time.
+Measure source rows, block memberships and skew, repeated discoveries, unique pairs, comparisons, component checks, memory, temporary storage, publication rows and bytes, retained history, and transaction duration. Record PostgreSQL, CPU, memory, storage, data distribution, fixture digests, compiler artifact, and upstream package with every result. Split timing among source/evidence work, full resolution, and publication so the decision between SQL optimization, affected-set work, and prepared execution has evidence.
+
+The v0.11 AUTO/FULL probes and MDM histories remain regression evidence. Complete the broader generated differential-versus-full comparison over source and stewardship changes, merges, splits, golden-only changes, fallback, rebuild, rollback, and upgrade. Compare all public outputs and durable identity/provenance state, not only row counts. Retain independent fixture and small-graph oracles alongside production-path comparisons.
 
 ## v1.0 release gate
 
-V1.0 freezes the public compatibility contract only after every V1 acceptance criterion passes. The supported `pg_trickle` release must advertise `external_graph_refresh` major 1 as enabled, and the shared suite must prove canonical graph contracts, durable external orchestration, strict transactional refresh, complete source boundaries, rollback, concurrency, clone isolation, recovery, and supported upgrades. V1 does not use `output_delta_consumer` and supports only trigger capture.
+V1.0 freezes the public compatibility contract only after every V1 acceptance criterion has executable, reviewed evidence. The admitted pg-trickle artifact must advertise enabled Graph V1 major 1 and pass canonical contract, durable external orchestration, strict transactional refresh, source-boundary, rollback, concurrency, clone, recovery, and supported-upgrade checks. V1 remains trigger-only and uses complete terminal scans with full-entity MDM resolution.
 
-The repository contains the v0.1 through v0.11 implementations. V1.0 remains gated on the complete acceptance evidence above. Every compiler revision retains its graph-specific admission and differential-equivalence checks.
+Close the preview behavior gap, missing quality thresholds and held-out results, measured operating envelope, and any other gaps found by the v0.12 audit. Preserve graph-specific regressions and truthful strategy reporting for every compiler revision. Require differential or scoped maintenance for qualifying steady-state shapes once their incremental path is proven; exact FULL remains the fallback for unqualified shapes. Retain package manifests, fixture digests, commands, CI results, installation/recovery instructions, and upgrade/restore evidence together. An unresolved blocking test, a skipped positive capability case, or a release tag alone cannot satisfy this gate.
+
+Optional V2 work may proceed once its prerequisites pass. It must neither delay a qualified V1 compatibility release merely to fill the catalogue nor waive an unmet V1 requirement.

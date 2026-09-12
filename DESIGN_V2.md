@@ -2,8 +2,9 @@
 
 ## Advanced source contracts, stewardship, history, integration, and operations on PostgreSQL
 
-**Status:** Candidate capabilities and dependency order, not an approved delivery backlog
-**Baseline:** [`DESIGN_V1.md`](DESIGN_V1.md)  
+**Status:** Post-v0.11 design with a recommended delivery scope; optional capabilities remain proposals
+**Reviewed:** 12 September 2026
+**Baseline:** Released `pg_mdm` v0.11.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). Upstream v0.105.2 is available; pg-mdm still pins v0.105.1.
 **Foundation:** [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) remains the incremental relational engine
 **Goal:** Add deeper source, matching, stewardship, history, integration, and operational capabilities without changing the small product model established by V1  
 **Product contract:** The same five nouns, five actions, and three primary public outputs
@@ -20,9 +21,30 @@ The architectural rule from V1 does not change:
 
 > **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-V2 deepens both sides of that boundary. The `prepared_graph_generation` capability lets `pg_trickle` freeze one externally orchestrated graph in place with durable member leases, while the optional `prepared_output_delta_binding` capability pins terminal delta ranges. `pg_mdm` may provide richer source contracts, alternate conservative clustering policies, entity-level stewardship, stable-ID continuity policies, valid-time projections, semantic events, checkpointed domain work, and multi-entity orchestration. `pg_trickle` does not make its graph refresh resumable and does not manage MDM workers or checkpoints. Neither extension is allowed to take over the other extension's governance. `pg_mdm` never reaches into private `pg_trickle` catalogs or buffers, and custom matching code never owns clustering, identity reconciliation, invalidation, or publication.
+V2 deepens both sides of that boundary. The proposed `prepared_graph_generation` capability would let `pg_trickle` freeze one externally orchestrated graph in place with durable member leases, while the proposed optional `prepared_output_delta_binding` capability would pin terminal delta ranges. `pg_mdm` may provide richer source contracts, alternate conservative clustering policies, entity-level stewardship, stable-ID continuity policies, valid-time projections, semantic events, checkpointed domain work, and multi-entity orchestration. `pg_trickle` does not make its graph refresh resumable and does not manage MDM workers or checkpoints. Neither extension is allowed to take over the other extension's governance. `pg_mdm` never reaches into private `pg_trickle` catalogs or buffers, and custom matching code never owns clustering, identity reconciliation, invalidation, or publication.
 
 This catalogue does not promise that every section ships. A capability enters a delivery backlog only after a deployment demonstrates the need and the project approves its prerequisites, deterministic semantics, bounded explanation, migration path, and tests. A focused release that solves that need is preferable to implementing the catalogue speculatively.
+
+### 1.1 Released baseline and remaining work
+
+V2 names a design generation, not a promise to release pg-mdm 2.0 or to implement every catalogue item. The recommended first scope is exact preview and regression fixtures, explicit merge and split stewardship, and a semantic change feed. These can use the existing synchronous Graph V1 path. The [roadmap](ROADMAP.md#recommended-post-v011-releases) sequences their implementation and keeps V1 acceptance work visible.
+
+The released code and upstream contracts establish the following boundary:
+
+| Item | State after the releases | Consequence for V2 |
+|---|---|---|
+| pg-mdm v0.11.0 | Synchronous strict graph refresh, full MDM resolution, identity history, and atomic publication | Reuse the compiler, resolver, and publication code |
+| pg-mdm dependency | [Build lock](DEPENDENCIES.md), `tests/Dockerfile.e2e`, and `src/version.rs` still select pg-trickle v0.105.1 | Admit and pin v0.105.2 in a separate implementation change |
+| Graph V1 and Delta V1 | Upstream v0.105.2 advertises `external_graph_refresh` 1.0 and `output_delta_consumer` 1.0 as stable and enabled | Graph V1 is sufficient for the first scope. Delta consumption still needs MDM implementation and equivalence proof |
+| Prepared generations and prepared delta binding | Neither capability appears in the v0.105.2 manifest. The upstream design remains a post-1.0 proposal | Sections 3 and 4 specify a future contract, not callable released APIs |
+| Capture | Upstream advertises trigger and WAL capture as stable | Keep MDM on trigger capture until its own WAL admission suite passes |
+| Preview | `preview_entity()` currently returns metadata and counts. It labels `scoped` as exact without resolving the requested subproblem | Repair the existing claim, then implement shared resolution and exact impact comparison |
+| Graph strategy | Candidate blocks and candidate-pair joins explicitly use `FULL` in `src/graph_spec.rs` to avoid dropped inserts on v0.105.1 | Keep these fallbacks until the exact graph regressions pass on an admitted artifact |
+| Release qualification | The [v0.11 plan](plans/v0.11.md) covers paired AUTO/FULL probes, compiled MDM histories, rollback, and cumulative operational checks | Audit the broader V1 criteria and record missing quality and workload evidence before declaring v1.0 |
+
+Upstream facts come from the [v0.105.2 capability manifest](https://github.com/trickle-labs/pg-trickle/blob/v0.105.2/docs/capability-manifest.json), [release notes](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.105.2), and [prepared-generation proposal](https://github.com/trickle-labs/pg-trickle/blob/v0.105.2/plans/PROPOSAL_V2_PREPARED_GRAPH_GENERATIONS.md). The release qualifies packages, upgrades, runtime behavior, and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred. Package qualification does not prove MDM-specific semantics or make prepared execution available.
+
+The remaining sections describe target behavior unless explicitly identified as released. A release tag is evidence of delivery, not evidence that every earlier design assertion has been implemented.
 
 ---
 
@@ -51,7 +73,7 @@ No V2 feature may weaken the V1 fail-closed rules. A richer source adapter canno
 
 ## 3. Architecture and the richer `pg_trickle` contract
 
-The V1 implementation compiles each immutable entity definition into a private `pg_trickle` graph and refreshes that graph inside the same transaction that resolves and publishes the MDM entity. V2 keeps that path as the default for small and medium entities because it is simple and has a strong atomicity story. V2 adds a prepared execution path for entities whose evidence graph or clustering work cannot reasonably fit in one transaction, but the prepared path is optional and must preserve the same semantic result.
+The V1 implementation compiles each immutable entity definition into a private `pg_trickle` graph and refreshes that graph inside the same transaction that resolves and publishes the MDM entity. V2 keeps that path as the default for small and medium entities because it is simple and has a strong atomicity story. V2 proposes a prepared execution path when MDM resolution cannot reasonably fit in one transaction. The evidence graph must still refresh within one transaction. This path is blocked on upstream capability delivery and must preserve the synchronous result.
 
 Later V2 releases may optimize the transactional path with affected-set MDM resolution. The full resolver remains the reference semantics. An affected-set implementation requires `output_delta_consumer`, must consume every typed batch or respond to `FULL_INVALIDATION` with full resolution, define and prove its closure rule, and pass generated equivalence tests for evidence changes, merges, splits, and stewardship decisions before it can publish results. Durable terminal deltas are not a prerequisite for prepared full resolution.
 
@@ -67,7 +89,7 @@ The richer integration contract also permits `pg_trickle` to maintain relational
 
 ## 4. Prepared and resumable refresh
 
-V2's prepared profile makes MDM resolution resumable for entities that exceed the practical transaction duration, memory, temporary-storage, or lock envelope of V1. It does not make the `pg_trickle` graph refresh resumable. `pgtrickle.prepare_graph()` must still complete one strict graph refresh in one PostgreSQL transaction. If relational evidence construction cannot fit that envelope, the entity is ineligible for this capability major and needs a later graph-execution design.
+The proposed prepared profile would make MDM resolution resumable for entities that exceed the practical transaction duration, memory, temporary-storage, or lock envelope of V1. It does not make the `pg_trickle` graph refresh resumable. `pgtrickle.prepare_graph()` must still complete one strict graph refresh in one PostgreSQL transaction. If relational evidence construction cannot fit that envelope, the entity is ineligible for this capability major and needs a later graph-execution design.
 
 The preparation transaction uses a durable MDM run ID as `request_id`, calls `prepare_graph()` with the private roots and expected graph digest, and stores the returned `prepared_generation_id`, `generation_digest`, graph refresh ID, source boundary, member contracts, and optional consumer bindings in the run manifest. The generation and MDM run record commit together. Request identity makes a retry after an uncertain connection result idempotent.
 
@@ -459,35 +481,61 @@ Public-schema changes remain conservative. Additive metadata and new optional ta
 
 ---
 
-## 23. Suggested delivery order
+## 23. Recommended delivery scope and dependencies
 
-The order below reflects technical dependencies rather than a requirement to ship every stage. User demand decides whether a stage is worth building.
+### 23.1 Admit the new baseline and close V1 gaps
 
-### 23.1 Reproducibility and prepared execution
+First qualify pg-trickle v0.105.2 against pg-mdm's compiled graphs, authorization rules, and publication transaction. Change the artifact pins only with that evidence. Reproduce the bytea candidate-block and multi-row candidate-pair insert failures before considering removal of `FULL`. A passing simple scan probe does not qualify those joins.
 
-First add richer manifests and exact `pg_trickle` capability negotiation. Then integrate `prepared_graph_generation` major 1 through `prepare_graph()`, mandatory prepared opening, verification, atomic promotion, and explicit abandonment. These foundations make large exact preview and checkpointed MDM resolution possible without implying resumable graph refresh or multiple physical generations. `prepared_output_delta_binding` and `output_delta_consumer` are not prerequisites for prepared full resolution; add them only with affected-set resolution after measurements justify that optimization.
+Audit the V1 acceptance criteria against executable tests and retained release results. Correct the current scoped-preview exactness claim and complete its promised subproblem behavior. Connect the organization corpus to runnable quality checks, add held-out cases, and measure the synchronous operating envelope. These are baseline obligations; a V2 feature cannot substitute for them.
 
-### 23.2 Source depth and time
+### 23.2 Exact preview, fixtures, and bounded manifests
 
-Add full source contracts only for concrete source systems that need them. Ordered changes and explicit completeness come before late correction. Valid-time projections come last because they depend on retained source versions, event order, and a clear reproducibility horizon.
+Make this the first V2 capability release. Reuse the production compiler, terminal readers, full resolver, identity reconciler, and golden selector for a non-publishing result. Extract only the shared resolve-and-compare path needed by preview. Keep output writes and durable ID allocation behind publication.
 
-### 23.3 Configuration and verification
+Start with `exact_entity` for local tracked and soft-delete sources that fit one transaction. A proposed definition uses a separate private graph and a proven source boundary. Pin the definition and artifact digests, base publication, decision epoch, execution role, source boundary, and semantic versions using the existing catalog metadata. New identities receive preview-local handles. Acceptance must recheck the pinned inputs; changed inputs require a fresh preview or a complete recomputation. Preview must not consume durable IDs, change directives, activate a definition, or mutate public outputs.
 
-Add flat organization fragments, per-path provenance, labeled fixtures, and exact entity preview. Add inference as a proposal tool. Nested composition should wait until flat fragments create demonstrated operational pain.
+Use labeled pair, partition, forbidden-co-membership, and golden fixtures through the same path. Report exact merges, splits, survivor choices, goldens, reviews, and output-schema effects with bounded details. Report semantic-event effects only when the feed is implemented. Establish fixture metrics and workload limits before adding inference or an interactive diagnostics product. Large exact preview can wait for prepared execution without blocking bounded synchronous preview.
 
-### 23.4 Stewardship and identity continuity
+### 23.3 Merge and split stewardship
 
-Add direct merge and explicit split first, then move-member and locks when workflows require them. Formalize directive precedence and exact impact preview before bulk action. Add alternate stable-ID continuity only after downstream users can explain why the V1 rule is harmful.
+Implement explicit merge and complete split partitions using the existing immutable decision ledger and constraint checks. Require the base revision, durable source-record subjects, decision epoch, and accepted preview digest. Persist all compiled constraints in one transaction, detect contradictions over the complete affected closure, and publish through the ordinary refresh path.
 
-### 23.5 Semantic integration
+Keep the V1 continuity policy for this release. Add move-member, locks, alternate continuity, approvals, assignment, and bulk action only with a concrete workflow and their additional precedence tests. The first merge or split release must already cover retry, stale preview, supersession, dormant records, reactivation, and clean restore.
 
-Define the complete semantic change-feed contract before allowing resolved entities as sources. Add downstream dependencies only after merge, split, retention, replay, and resynchronization semantics are stable.
+### 23.4 Semantic events before entity dependencies
 
-### 23.6 Shared operations and retention
+Create the optional change table from the existing semantic publication comparison. Define event order, stable IDs, payload permissions, no-change behavior, retained detail, consumer cursors, gaps, and snapshot resynchronization together. Events and current outputs commit or roll back together. Start with events for implemented operations; lock events become eligible only when locks exist.
 
-Add namespaces, quotas, fairness, service objectives, restore verification, and data-class retention only for deployments that need shared administration or formal controls. Add compaction after tests prove that it preserves the history, replay, identity, and explanation promises already in use.
+Use ordinary SQL consumers first. Resolved entities as sources follow only after replay and resynchronization work across merges, splits, restore, and retention gaps. They then add the acyclic dependency graph and exact upstream revision bindings described in section 16. External delivery is a separate adapter.
 
-Every stage should remain removable until a real deployment depends on it. Experimental capabilities should use explicit feature states and must not become compatibility promises merely because private code exists.
+### 23.5 Optional capability tracks
+
+These tracks cover the rest of the catalogue. Each needs a deployment use case, an owner, a bounded initial scope, and the acceptance evidence in section 26 before entering a release plan.
+
+| Track and design sections | Smallest useful implementation | Prerequisites and completion evidence |
+|---|---|---|
+| Source contracts and time, 5–6 | One local complete-snapshot or ordered-event contract | Prove scope and completeness, duplicates, per-record order, lifecycle, key incarnation, and replay. Retain source versions before late corrections and valid-time projections; test incomplete history and projection-scoped identity |
+| Composition and inference, 7–8 | Flat pinned fragments with per-path provenance | One canonical expansion path, conflict rejection, and unchanged old definitions. Add inference only as a proposal verified by fixtures and exact preview |
+| Matching and clustering, 9–11 | One demanded built-in channel or policy | Complete candidate oracle, bounded explanations, versioned migration, and quality evidence. Registered code waits for inspectable dependency closure and invalidation tests; approximate retrieval remains supplemental |
+| Extended stewardship, 12 | One required move, lock, or review workflow | Exact affected-closure preview, explicit scope and precedence, contradiction checks, authorization, and immutable audit. Approvals and bounded bulk action follow those guarantees |
+| Continuity and goldens, 13–14 | One demonstrated continuity policy or coherent field group | Exact impact preview, merge/split and lock contradiction tests, source timestamp comparability where needed, and complete provenance |
+| Revision-bound dependencies, 16 | One upstream-to-downstream entity relationship | Semantic feed replay and resynchronization, cycle rejection, merge/split handling, and independently atomic publications |
+| Prepared full resolution, 3–4 and 17 | One prepared run per entity, one worker, logged checkpoints | Upstream enabled `prepared_graph_generation` with admitted public APIs; open on every read transaction, idempotent replay, compare-and-swap promotion, explicit abandonment, and recovery/equivalence tests |
+| Affected-set resolution, 3 | Synchronous Delta V1 consumer with full fallback | Measured full-resolver bottleneck; proven closure for inserts, removals, merges, splits, and control changes; atomic acknowledgement; full resynchronization on invalidation or gaps. Prepared delta binding additionally requires both upstream prepared capabilities |
+| Diagnostics and recovery, 18 and 20 | Public graph-health links and read-only semantic verification | Actionable failures, bounded disclosure, restore and failover checks; verify each newly promised replay horizon |
+| Shared administration, 19 and 21 | Namespace isolation only when multiple administrative scopes are required | Scope every identity, graph, directive, event, and query before enabling shared use; test cross-namespace denial, quotas, and workload delay without semantic changes |
+| Retention and privacy, 20–21 | Data-class retention for each enabled feed, preview, or history feature | Gap handling, active promises, held records, protected payloads, and old-ID resolution. General compaction and key rotation follow preservation tests |
+
+Prepared execution is a separate dependency branch. Request upstream implementation and shared conformance for preparation, opening, leases, verification, promotion, and abandonment before scheduling MDM integration. Do not emulate these guarantees through private pg-trickle catalogs. Add multiple workers only after single-worker checkpoint replay is correct and measurements show useful parallelism. If graph refresh itself exceeds the transaction envelope, prepared major 1 cannot solve the problem.
+
+Retention and authorization ship with each feature that needs them. Deferring a general retention or namespace product never permits an unbounded feed, leaked preview, or broken consumer promise.
+
+### 23.6 Definition of complete
+
+Recommend closing the first V2 scope after exact preview and fixtures, merge/split stewardship, and the semantic feed pass their release gates. Record the enabled capability versions and explicit exclusions in the release manifest. This is a scoped V2 delivery, not completion of every optional track.
+
+To complete the entire catalogue, give every optional row above a reviewed implementation plan and demonstrate its section-26 acceptance cases in combination with the other enabled capabilities. Until then, label each row proposed, blocked, or deferred. Never mark a catalogue item complete because its upstream dependency shipped or because a private API exists.
 
 ---
 
@@ -515,7 +563,7 @@ V2 retains all twelve V1 invariants. When the associated capabilities are enable
 
 ## 25. Capability allocation
 
-This table summarizes where the release boundary now sits.
+This table allocates the V1 contract and proposed V2 additions. It is not an implementation-status table; section 1.1 records the released baseline.
 
 | Area | V1 contract | V2 addition |
 |---|---|---|
@@ -542,6 +590,8 @@ This table summarizes where the release boundary now sits.
 ---
 
 ## 26. V2 acceptance
+
+For a declared V2 release scope, acceptance requires every included capability to pass the gates in this section. Deferred catalogue items must remain explicitly excluded.
 
 V2 is acceptable when every implemented capability remains reachable through the five normal actions or a clearly privileged stewardship or administration function, leaves the three V1 primary outputs stable, preserves existing V1 definitions under their pinned semantic versions, publishes atomically, and provides a bounded explanation of its effect. The compiler must validate each capability's pinned prerequisites before source work begins. A capability is not complete until its failure boundary, migration path, rollback or abandonment behavior, retention requirements, and interaction with incremental and full reference resolution are tested.
 
