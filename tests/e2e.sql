@@ -759,11 +759,13 @@ $$;
 RESET ROLE;
 
 \connect foundation postgres
+INSERT INTO public.crm_customer VALUES
+    (9001, 'Steward One', 'steward-one@example.test', statement_timestamp()),
+    (9002, 'Steward Two', 'steward-two@example.test', statement_timestamp()),
+    (9003, 'Steward Three', 'steward-three@example.test', statement_timestamp());
 DO $$
 DECLARE
     norm mdm_internal.normalized_value;
-    e_id uuid;
-    s_id uuid;
 BEGIN
     norm := mdm_internal.normalize_text('  Foo  Bar  ', 'text', 1, 'present', '{}'::jsonb);
     IF norm.state <> 'value' OR norm.normalized <> 'foo bar' OR norm.canonical_bytes <> '\x0101666f6f20626172'::bytea THEN
@@ -775,12 +777,6 @@ BEGIN
         RAISE EXCEPTION 'normalize_date failed: %', norm;
     END IF;
 
-    SELECT entity_id INTO STRICT e_id FROM mdm_internal.entities WHERE entity_name = 'customer';
-    SELECT source_identity_id INTO STRICT s_id FROM mdm_internal.source_identities WHERE entity_id = e_id AND source_name = 'crm';
-    INSERT INTO mdm_internal.source_records (entity_id, source_identity_id, source_record_key, active)
-    VALUES (e_id, s_id, '\x01020304'::bytea, true),
-           (e_id, s_id, '\x01020305'::bytea, true),
-           (e_id, s_id, '\x01020306'::bytea, true);
 END
 $$;
 
@@ -823,18 +819,23 @@ RESET ROLE;
 \connect foundation postgres
 GRANT USAGE ON SCHEMA mdm_steward TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_steward.decide(text, uuid, uuid, text, bigint, text) TO mdm_administrator;
-CREATE FUNCTION public.e2e_steward_ids()
+CREATE FUNCTION public.e2e_source_records(ids bigint[])
 RETURNS TABLE(source_record_id uuid, source_record_key bytea)
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = pg_catalog, mdm_internal
+SET search_path = pg_catalog, mdm_internal, public
 AS $$
-    SELECT source_record_id, source_record_key
-    FROM mdm_internal.source_records
-    WHERE source_record_key IN ('\x01020304'::bytea, '\x01020305'::bytea, '\x01020306'::bytea)
+    SELECT r.source_record_id, r.source_record_key
+    FROM mdm_internal.source_records r
+    JOIN mdm_internal.source_identities s USING (source_identity_id)
+    JOIN mdm_internal.entities e USING (entity_id)
+    JOIN public.crm_customer c
+      ON r.source_record_key = pgtrickle.encode_row_id_v2(
+          'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id))
+    WHERE e.entity_name = 'customer' AND c.id = ANY (ids)
 $$;
-REVOKE ALL ON FUNCTION public.e2e_steward_ids() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.e2e_steward_ids() TO mdm_administrator;
+REVOKE ALL ON FUNCTION public.e2e_source_records(bigint[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_source_records(bigint[]) TO mdm_administrator;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -845,15 +846,9 @@ DECLARE
     third_id uuid;
     result record;
 BEGIN
-    SELECT source_record_id INTO STRICT left_id
-    FROM public.e2e_steward_ids()
-    WHERE source_record_key = '\x01020304'::bytea;
-    SELECT source_record_id INTO STRICT right_id
-    FROM public.e2e_steward_ids()
-    WHERE source_record_key = '\x01020305'::bytea;
-    SELECT source_record_id INTO STRICT third_id
-    FROM public.e2e_steward_ids()
-    WHERE source_record_key = '\x01020306'::bytea;
+    SELECT source_record_id INTO STRICT left_id FROM public.e2e_source_records(ARRAY[9001]::bigint[]);
+    SELECT source_record_id INTO STRICT right_id FROM public.e2e_source_records(ARRAY[9002]::bigint[]);
+    SELECT source_record_id INTO STRICT third_id FROM public.e2e_source_records(ARRAY[9003]::bigint[]);
     SELECT * INTO STRICT result
     FROM mdm_steward.decide('customer', left_id, right_id, 'MATCH', 0, 'confirmed by steward');
     IF result.decision_version <> 1 OR result.decision_epoch <> 1 THEN
@@ -917,10 +912,10 @@ DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
-          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 2
+          AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2
        OR (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
-          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 1 THEN
+          AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 1 THEN
         RAISE EXCEPTION 'insert reference result did not merge the duplicate email';
     END IF;
 END
@@ -947,7 +942,7 @@ DO $$
 BEGIN
     IF (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
-          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 2 THEN
+          AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2 THEN
         RAISE EXCEPTION 'update reference result did not split the records';
     END IF;
 END
@@ -1050,14 +1045,14 @@ DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
-          AND source_id->>'source_record_key' NOT IN ('01020304', '01020305', '01020306')) <> 1
+          AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[2]::bigint[]))) <> 1
        OR (SELECT count(*) FROM mdm_out.customer WHERE name = 'Acme Updated') <> 1 THEN
         RAISE EXCEPTION 'delete reference result is incomplete';
     END IF;
 END
 $$;
 
-DROP FUNCTION public.e2e_steward_ids();
+DROP FUNCTION public.e2e_source_records(bigint[]);
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;

@@ -48,6 +48,7 @@ struct Context {
     artifact_id: String,
     graph_digest: Vec<u8>,
     graph_root: String,
+    source_relations: BTreeMap<String, String>,
     evidence_relation: String,
     golden_relation: String,
 }
@@ -266,6 +267,21 @@ fn load_context(
         }
         relations.entry(logical_id).or_insert(relation_name);
     }
+    let source_relations = entity
+        .sources
+        .iter()
+        .map(|source| {
+            relations
+                .remove(&format!("records/{}", source.name))
+                .map(|relation| (source.name.clone(), relation))
+                .ok_or_else(|| {
+                    MdmError::GraphBinding(format!(
+                        "records relation for source {} is missing",
+                        source.name
+                    ))
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     Ok(Context {
         entity_id,
         entity,
@@ -275,6 +291,7 @@ fn load_context(
         artifact_id,
         graph_digest,
         graph_root,
+        source_relations,
         evidence_relation: relations
             .remove(&format!("evidence/{entity_name}"))
             .ok_or_else(|| MdmError::GraphBinding("evidence relation is missing".into()))?,
@@ -282,6 +299,44 @@ fn load_context(
             .remove(&format!("golden/{entity_name}"))
             .ok_or_else(|| MdmError::GraphBinding("golden relation is missing".into()))?,
     })
+}
+
+fn sync_source_records(client: &mut SpiClient<'_>, context: &Context) -> Result<bool, MdmError> {
+    let mut changed = false;
+    for source in &context.entity.sources {
+        let relation = context
+            .source_relations
+            .get(&source.name)
+            .ok_or_else(|| MdmError::GraphBinding("source records relation is missing".into()))?;
+        let sql = format!(
+            "WITH current_records AS MATERIALIZED (SELECT DISTINCT source_record_key FROM {relation}), deactivated AS (UPDATE mdm_internal.source_records r SET active = false WHERE r.entity_id = $1::pg_catalog.uuid AND r.source_identity_id = $2::pg_catalog.uuid AND r.active AND NOT EXISTS (SELECT FROM current_records c WHERE c.source_record_key = r.source_record_key) RETURNING 1), registered AS (INSERT INTO mdm_internal.source_records (entity_id, source_identity_id, source_record_key, active) SELECT $1::pg_catalog.uuid, $2::pg_catalog.uuid, source_record_key, true FROM current_records ON CONFLICT (entity_id, source_identity_id, source_record_key) DO UPDATE SET active = true, last_seen_at = pg_catalog.statement_timestamp() WHERE NOT mdm_internal.source_records.active RETURNING 1) SELECT EXISTS (SELECT FROM deactivated) OR EXISTS (SELECT FROM registered)"
+        );
+        let rows = client
+            .select(
+                "SELECT source_identity_id::text FROM mdm_internal.source_identities WHERE entity_id = $1::pg_catalog.uuid AND source_name = $2::pg_catalog.name",
+                Some(1),
+                &[context.entity_id.clone().into(), source.name.clone().into()],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        let source_identity_id = rows
+            .first()
+            .get::<String>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::GraphBinding("source identity is missing".into()))?;
+        let rows = client
+            .select(
+                &sql,
+                Some(1),
+                &[context.entity_id.clone().into(), source_identity_id.into()],
+            )
+            .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
+        changed |= rows
+            .first()
+            .get::<bool>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .unwrap_or(false);
+    }
+    Ok(changed)
 }
 
 fn grant_refresh_access(entity_name: &str) -> Result<(), MdmError> {
@@ -1412,7 +1467,10 @@ fn persist_refresh_inner(
             selected,
             session,
         )?;
-        let graph = refresh_graph(client, &context, &request.full_policy)?;
+        let mut graph = refresh_graph(client, &context, &request.full_policy)?;
+        if sync_source_records(client, &context)? {
+            graph = refresh_graph(client, &context, &request.full_policy)?;
+        }
         let limits = load_limits(&context);
         limits.validate()?;
         let sources = load_sources(client, &context, limits.max_active_records)?;
