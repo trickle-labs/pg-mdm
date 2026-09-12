@@ -39,7 +39,8 @@ INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.te
 CREATE FUNCTION public.delay_release_output()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    -- Keep the publication pause longer than a Docker/psql polling round trip.
+    -- Give the outer test a deterministic marker for the publication boundary.
+    PERFORM pg_catalog.pg_advisory_xact_lock(718110, 110972);
     PERFORM pg_catalog.pg_sleep(5);
     RETURN NEW;
 END
@@ -48,7 +49,7 @@ CREATE TRIGGER delay_release_output
 BEFORE INSERT OR UPDATE ON mdm_out.customer
 FOR EACH ROW EXECUTE FUNCTION public.delay_release_output();
 SQL
-docker exec -e PGAPPNAME=mdm_boundary_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb;
@@ -67,15 +68,13 @@ boundary_refresh=$!
 boundary_captured=false
 for _ in $(seq 1 600); do
     if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
-        -c "SELECT EXISTS (SELECT FROM pg_stat_activity WHERE application_name = 'mdm_boundary_refresh' AND wait_event = 'PgSleep')") == t ]]; then
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND classid = 718110::oid AND objid = 110972::oid AND objsubid = 2 AND granted)") == t ]]; then
         boundary_captured=true
         break
     fi
     sleep 0.1
 done
 if [[ $boundary_captured != true ]]; then
-    docker exec "$container" psql -X -At -U postgres -d foundation -c \
-        "SELECT COALESCE(jsonb_agg(jsonb_build_object('application_name', application_name, 'state', state, 'wait_event_type', wait_event_type, 'wait_event', wait_event, 'elapsed_seconds', extract(epoch FROM pg_catalog.clock_timestamp() - query_start)::integer, 'blocking_pids', pg_catalog.pg_blocking_pids(pid))), '[]'::jsonb) FROM pg_catalog.pg_stat_activity WHERE datname = 'foundation' AND pid <> pg_catalog.pg_backend_pid() AND state <> 'idle'" >&2
     kill "$boundary_refresh" 2>/dev/null || true
     wait "$boundary_refresh" || true
     cat "$work_dir/boundary_refresh.log"
