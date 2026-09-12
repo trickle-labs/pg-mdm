@@ -912,14 +912,60 @@ $$;
 RESET ROLE;
 \connect foundation postgres
 DO $$
+DECLARE
+    binding_id uuid;
+    pair_relation text;
+    evidence_relation text;
+    normalized_relation text;
+    pair_rows jsonb;
+    evidence_rows jsonb;
+    normalized_rows jsonb;
+    member_rows jsonb;
 BEGIN
+    SELECT gb.graph_binding_id INTO STRICT binding_id
+    FROM mdm_internal.graph_bindings gb
+    JOIN mdm_internal.entities e ON e.entity_id = gb.entity_id
+    WHERE e.entity_name = 'customer'
+    ORDER BY gb.graph_generation DESC
+    LIMIT 1;
+    SELECT relation_name INTO STRICT pair_relation
+    FROM mdm_internal.graph_members
+    WHERE graph_binding_id = binding_id AND logical_id = 'pairs/customer';
+    SELECT relation_name INTO STRICT evidence_relation
+    FROM mdm_internal.graph_members
+    WHERE graph_binding_id = binding_id AND logical_id = 'evidence/customer';
+    SELECT relation_name INTO STRICT normalized_relation
+    FROM mdm_internal.graph_members
+    WHERE graph_binding_id = binding_id AND logical_id = 'normalized/email';
+    EXECUTE pg_catalog.format(
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t',
+        pair_relation
+    ) INTO pair_rows;
+    EXECUTE pg_catalog.format(
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t',
+        evidence_relation
+    ) INTO evidence_rows;
+    EXECUTE pg_catalog.format(
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t WHERE t.field_name = ''email'' AND t.source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))',
+        normalized_relation
+    ) INTO normalized_rows;
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'source_id', source_id, 'source_record_id', source_record_id,
+        'mdm_id', mdm_id, 'active', active
+    ) ORDER BY source_id) INTO member_rows
+    FROM mdm_out.customer_members
+    WHERE source_name = 'crm'
+      AND source_record_id IN (
+          SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[])
+      );
     IF (SELECT count(*) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
           AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2
        OR (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
           AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 1 THEN
-        RAISE EXCEPTION 'insert reference result did not merge the duplicate email';
+        RAISE EXCEPTION 'insert reference result did not merge the duplicate email: members %, pairs %, evidence %, normalized %',
+            member_rows, pair_rows, evidence_rows, normalized_rows;
     END IF;
 END
 $$;

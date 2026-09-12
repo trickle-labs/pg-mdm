@@ -644,7 +644,7 @@ CREATE FUNCTION mdm_admin.drop_entity(entity_name text, confirm text) RETURNS js
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:859
+-- src/api/create.rs:863
 -- pg_mdm::api::create::persist_entity
 CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 /* </end connected objects> */
