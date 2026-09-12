@@ -554,13 +554,13 @@ CREATE FUNCTION mdm.describe(entity_name text, format text DEFAULT 'summary') RE
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/constructors.rs:276
+-- src/api/constructors.rs:273
 -- pg_mdm::api::constructors::entity
 CREATE FUNCTION mdm.entity(name text, sources jsonb[], fields jsonb[], matches jsonb[], golden_values jsonb[], preset text DEFAULT NULL, limits jsonb DEFAULT '{}'::jsonb, execution_role text DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/evidence.rs:56
+-- src/evidence.rs:54
 -- pg_mdm::evidence::evidence_digest
 CREATE FUNCTION mdm_internal.evidence_digest(value text) RETURNS bytea IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'evidence_digest_wrapper';
 /* </end connected objects> */
@@ -578,13 +578,13 @@ CREATE FUNCTION mdm.explain(entity_name text, subject jsonb, publication_revisio
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/constructors.rs:105
+-- src/api/constructors.rs:102
 -- pg_mdm::api::constructors::field
 CREATE FUNCTION mdm.field(name text, type text, cleaner text, cleaner_options jsonb DEFAULT '{}'::jsonb, display text DEFAULT 'masked') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'field_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/constructors.rs:247
+-- src/api/constructors.rs:244
 -- pg_mdm::api::constructors::golden_value
 CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'golden_value_wrapper';
 /* </end connected objects> */
@@ -596,7 +596,7 @@ CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capabilit
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/constructors.rs:171
+-- src/api/constructors.rs:168
 -- pg_mdm::api::constructors::match_rule
 CREATE FUNCTION mdm.match(name text, fields text[], comparison text, strength text, evidence_group text, threshold integer DEFAULT NULL, candidate jsonb DEFAULT NULL) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'match_rule_wrapper';
 /* </end connected objects> */
@@ -680,7 +680,7 @@ CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1714
+-- src/api/refresh.rs:1734
 -- pg_mdm::api::refresh::persist_refresh
 CREATE FUNCTION mdm_internal.persist_refresh(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_refresh_wrapper';
 /* </end connected objects> */
@@ -692,13 +692,13 @@ CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1756
+-- src/api/refresh.rs:1776
 -- pg_mdm::api::refresh::preview_entity
 CREATE FUNCTION mdm_internal.preview_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'preview_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1739
+-- src/api/refresh.rs:1759
 -- pg_mdm::api::refresh::preview
 CREATE FUNCTION mdm.preview(entity_name text, mode text DEFAULT 'validation', options jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'preview_wrapper';
 /* </end connected objects> */
@@ -710,19 +710,19 @@ CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS '
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1698
+-- src/api/refresh.rs:1718
 -- pg_mdm::api::refresh::rebuild
 CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1682
+-- src/api/refresh.rs:1702
 -- pg_mdm::api::refresh::refresh
 CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:425
+-- src/api/refresh.rs:421
 -- pg_mdm::api::refresh::refresh_access
 CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_access_wrapper';
 /* </end connected objects> */
@@ -734,7 +734,7 @@ CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c 
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/constructors.rs:32
+-- src/api/constructors.rs:29
 -- pg_mdm::api::constructors::source
 CREATE FUNCTION mdm.source(name text, relation regclass, source_id text[], mode text, fields jsonb, row_changed_at text DEFAULT NULL, soft_delete_when jsonb DEFAULT NULL, authority jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'source_wrapper';
 /* </end connected objects> */
