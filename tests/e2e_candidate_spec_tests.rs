@@ -53,6 +53,7 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         .iter()
         .find(|node| node["logical_id"] == "blocks/same_email")
         .unwrap();
+    assert_eq!(exact_block["refresh_mode"], "FULL");
     assert_eq!(exact_block["output_schema"]["block_key"], "bytea");
     assert!(
         exact_block["defining_sql"]

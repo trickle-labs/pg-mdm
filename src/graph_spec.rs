@@ -611,7 +611,8 @@ pub fn candidate_pair_overflow_sql(
 }
 
 fn match_node(channel: &CandidateChannel) -> Value {
-    node(
+    // ponytail: pg_trickle 0.105.1 intermittently drops inserts from these projection deltas; restore AUTO after the bytea membership delta check passes.
+    node_with_refresh_mode(
         format!("blocks/{}", channel.channel_id),
         channel
             .fields
@@ -620,6 +621,7 @@ fn match_node(channel: &CandidateChannel) -> Value {
             .collect(),
         candidate_block_sql(channel),
         json!({"channel_id":"text","block_key":"bytea","source_record_id":"uuid","source_sort_key":"bytea"}),
+        "FULL",
     )
 }
 
