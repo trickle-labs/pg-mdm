@@ -64,7 +64,7 @@ $$;
 SQL
 boundary_refresh=$!
 boundary_captured=false
-for _ in $(seq 1 100); do
+for _ in $(seq 1 600); do
     if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
         -c "SELECT EXISTS (SELECT FROM pg_stat_activity WHERE application_name = 'mdm_boundary_refresh' AND wait_event = 'PgSleep')") == t ]]; then
         boundary_captured=true
