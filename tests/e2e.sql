@@ -1124,12 +1124,13 @@ BEGIN
        OR (result->>'publication_revision')::bigint <> 5 THEN
         RAISE EXCEPTION 'delete refresh did not publish: %', result;
     END IF;
+    PERFORM public.e2e_customer_state();
     result := mdm.refresh('customer', 'ALLOW');
     output_state := public.e2e_customer_state();
     IF result->>'changed' <> 'false'
        OR (result->>'publication_revision')::bigint <> 5 THEN
-        RAISE EXCEPTION 'no-op refresh changed the publication: result %, output %',
-            result, output_state;
+        RAISE EXCEPTION 'no-op refresh changed the publication: changed %, revision %, internal categories %',
+            result->>'changed', result->>'publication_revision', output_state->'internal_changed';
     END IF;
 END
 $$;
