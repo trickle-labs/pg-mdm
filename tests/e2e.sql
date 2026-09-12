@@ -839,6 +839,20 @@ AS $$
 $$;
 REVOKE ALL ON FUNCTION public.e2e_source_records(bigint[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.e2e_source_records(bigint[]) TO mdm_administrator;
+CREATE FUNCTION public.e2e_customer_state()
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, mdm_out
+AS $$
+    SELECT pg_catalog.jsonb_build_object(
+        'members', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_out.customer_members m), '[]'::jsonb),
+        'entities', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id) FROM mdm_out.customer e), '[]'::jsonb),
+        'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb)
+    )
+$$;
+REVOKE ALL ON FUNCTION public.e2e_customer_state() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_customer_state() TO mdm_administrator;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -1084,11 +1098,8 @@ BEGIN
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'false'
        OR (result->>'publication_revision')::bigint <> 5 THEN
-        RAISE EXCEPTION 'no-op refresh changed the publication: result %, members %, entities %, reviews %',
-            result,
-            (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb) FROM mdm_out.customer_members m),
-            (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id), '[]'::jsonb) FROM mdm_out.customer e),
-            (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id), '[]'::jsonb) FROM mdm_out.customer_review r);
+        RAISE EXCEPTION 'no-op refresh changed the publication: result %, output %',
+            result, public.e2e_customer_state();
     END IF;
 END
 $$;
