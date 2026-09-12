@@ -1138,13 +1138,44 @@ fn allocate_ids(client: &mut SpiClient<'_>, count: usize) -> Result<Vec<Uuid>, M
 }
 
 fn semantic_identity(state: &IdentityState) -> Value {
-    json!({"registry": state.registry.iter().map(|row| json!([row.mdm_id.to_string(), row.status])).collect::<Vec<_>>(), "memberships": state.memberships.iter().map(|row| json!([row.source_record_id.to_string(), row.source_sort_key, row.mdm_id.to_string(), row.active, row.first_membership_revision, row.last_membership_revision, row.membership_reason])).collect::<Vec<_>>(), "aliases": state.aliases.iter().map(|row| json!([row.alias_mdm_id.to_string(), row.canonical_mdm_id.to_string()])).collect::<Vec<_>>(), "splits": state.splits.iter().map(|row| json!([row.parent_mdm_id.to_string(), row.child_mdm_id.to_string()])).collect::<Vec<_>>()})
+    let mut registry = state.registry.iter().collect::<Vec<_>>();
+    registry.sort_by_key(|row| row.mdm_id);
+    let mut memberships = state.memberships.iter().collect::<Vec<_>>();
+    memberships.sort_by(|left, right| {
+        left.source_sort_key
+            .cmp(&right.source_sort_key)
+            .then_with(|| left.source_record_id.cmp(&right.source_record_id))
+    });
+    let mut aliases = state.aliases.iter().collect::<Vec<_>>();
+    aliases.sort_by_key(|row| {
+        (
+            row.alias_mdm_id,
+            row.publication_revision,
+            row.canonical_mdm_id,
+        )
+    });
+    let mut splits = state.splits.iter().collect::<Vec<_>>();
+    splits.sort_by_key(|row| {
+        (
+            row.parent_mdm_id,
+            row.publication_revision,
+            row.child_mdm_id,
+        )
+    });
+    json!({
+        "registry": registry.iter().map(|row| json!([row.mdm_id.to_string(), row.status])).collect::<Vec<_>>(),
+        "memberships": memberships.iter().map(|row| json!([row.source_record_id.to_string(), row.source_sort_key, row.mdm_id.to_string(), row.active, row.first_membership_revision, row.last_membership_revision, row.membership_reason])).collect::<Vec<_>>(),
+        "aliases": aliases.iter().map(|row| json!([row.alias_mdm_id.to_string(), row.canonical_mdm_id.to_string()])).collect::<Vec<_>>(),
+        "splits": splits.iter().map(|row| json!([row.parent_mdm_id.to_string(), row.child_mdm_id.to_string()])).collect::<Vec<_>>()
+    })
 }
 
 fn semantic_reviews(reviews: &[Review]) -> Value {
+    let mut ordered = reviews.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|row| (row.issue_key, row.occurrence));
     json!(
-        reviews
-            .iter()
+        ordered
+            .into_iter()
             .map(|row| json!([
                 row.issue_key,
                 row.occurrence,
@@ -1780,5 +1811,72 @@ mod tests {
             NormalizedState::Value
         );
         assert!(normalized_state("partial").is_err());
+    }
+
+    #[test]
+    fn semantic_state_comparison_ignores_row_order() {
+        let id = |value| Uuid::from_bytes([value; 16]);
+        let mut state = IdentityState {
+            registry: vec![
+                identity::IdentityRecord {
+                    mdm_id: id(2),
+                    created_revision: 1,
+                    retired_revision: None,
+                    status: identity::IdentityStatus::Active,
+                },
+                identity::IdentityRecord {
+                    mdm_id: id(1),
+                    created_revision: 1,
+                    retired_revision: None,
+                    status: identity::IdentityStatus::Active,
+                },
+            ],
+            memberships: vec![
+                identity::IdentityMembership {
+                    source_record_id: id(4),
+                    source_sort_key: vec![2],
+                    mdm_id: id(2),
+                    active: true,
+                    first_membership_revision: 1,
+                    last_membership_revision: 1,
+                    membership_reason: "new".into(),
+                    last_change_revision: 1,
+                },
+                identity::IdentityMembership {
+                    source_record_id: id(3),
+                    source_sort_key: vec![1],
+                    mdm_id: id(1),
+                    active: true,
+                    first_membership_revision: 1,
+                    last_membership_revision: 1,
+                    membership_reason: "new".into(),
+                    last_change_revision: 1,
+                },
+            ],
+            ..IdentityState::default()
+        };
+        let expected_identity = semantic_identity(&state);
+        state.registry.reverse();
+        state.memberships.reverse();
+        assert_eq!(semantic_identity(&state), expected_identity);
+
+        let review = |key, reason: &str| Review {
+            review_id: id(key),
+            issue_key: [key; 32],
+            occurrence: 1,
+            status: ReviewStatus::Open,
+            severity: "warning".into(),
+            reason_code: reason.into(),
+            subjects: json!([]),
+            masked_summary: json!({}),
+            opened_revision: 1,
+            resolved_revision: None,
+            last_change_revision: 1,
+            concurrency_version: 1,
+        };
+        assert_eq!(
+            semantic_reviews(&[review(1, "FIRST"), review(2, "SECOND")]),
+            semantic_reviews(&[review(2, "SECOND"), review(1, "FIRST")]),
+        );
     }
 }
