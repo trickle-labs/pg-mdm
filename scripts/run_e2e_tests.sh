@@ -49,7 +49,7 @@ CREATE TRIGGER delay_release_output
 BEFORE INSERT OR UPDATE ON mdm_out.customer
 FOR EACH ROW EXECUTE FUNCTION public.delay_release_output();
 SQL
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb;
