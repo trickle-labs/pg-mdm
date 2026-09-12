@@ -31,7 +31,7 @@ pub fn source_key_sql(source: &ValidatedSource) -> Result<String, MdmError> {
     let source_name_escaped = source.name.replace('\'', "''");
 
     let sql = format!(
-        "pgtrickle.encode_row_id_v2('MDM_SOURCE_KEY_V1', ROW((SELECT entity_id FROM mdm_internal.entities WHERE entity_name = '{entity_name_escaped}'), (SELECT source_identity_id FROM mdm_internal.source_identities WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = '{entity_name_escaped}') AND source_name = '{source_name_escaped}'), {}))",
+        "pgtrickle.encode_row_id_v2('SCAN_KEY', ROW((SELECT entity_id FROM mdm_internal.entities WHERE entity_name = '{entity_name_escaped}'), (SELECT source_identity_id FROM mdm_internal.source_identities WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = '{entity_name_escaped}') AND source_name = '{source_name_escaped}'), {}))",
         quoted_cols.join(", ")
     );
 

@@ -151,7 +151,7 @@ pub fn source_record_sql(entity_name: &str, source: &Source) -> String {
     let mut select_items = vec![
         format!("'{}'::text AS source_name", source_name_escaped),
         format!(
-            "pgtrickle.encode_row_id_v2('MDM_SOURCE_KEY_V1', ROW((SELECT entity_id FROM mdm_graph.source_identity_map WHERE entity_name = '{entity_name_escaped}' AND source_name = '{source_name_escaped}'), (SELECT source_identity_id FROM mdm_graph.source_identity_map WHERE entity_name = '{entity_name_escaped}' AND source_name = '{source_name_escaped}'), {})) AS source_record_key",
+            "pgtrickle.encode_row_id_v2('SCAN_KEY', ROW((SELECT entity_id FROM mdm_graph.source_identity_map WHERE entity_name = '{entity_name_escaped}' AND source_name = '{source_name_escaped}'), (SELECT source_identity_id FROM mdm_graph.source_identity_map WHERE entity_name = '{entity_name_escaped}' AND source_name = '{source_name_escaped}'), {})) AS source_record_key",
             key_cols.join(", ")
         ),
     ];

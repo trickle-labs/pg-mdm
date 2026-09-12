@@ -27,7 +27,7 @@ fn test_scalar_source_key_sql() {
     };
 
     let sql = source_key_sql(&source).expect("generates sql");
-    assert!(sql.starts_with("pgtrickle.encode_row_id_v2('MDM_SOURCE_KEY_V1', ROW("));
+    assert!(sql.starts_with("pgtrickle.encode_row_id_v2('SCAN_KEY', ROW("));
     assert!(sql.contains("WHERE entity_name = 'customer'"));
     assert!(sql.contains("AND source_name = 'crm'"));
     assert!(sql.ends_with(", \"id\"))"));

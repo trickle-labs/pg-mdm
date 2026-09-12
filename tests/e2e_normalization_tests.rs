@@ -61,7 +61,7 @@ fn test_e2e_generated_normalization_sql_shape() {
     let source = &entity.sources[0];
     let rec_sql = source_record_sql(&entity.name, source);
     assert!(rec_sql.contains("SELECT 'crm'::text AS source_name"));
-    assert!(rec_sql.contains("pgtrickle.encode_row_id_v2('MDM_SOURCE_KEY_V1'"));
+    assert!(rec_sql.contains("pgtrickle.encode_row_id_v2('SCAN_KEY'"));
     assert!(rec_sql.contains("\"id\""));
     assert!(rec_sql.contains("\"email_addr\" AS \"email\""));
     assert!(rec_sql.contains("'present'::text AS \"email_state\""));
