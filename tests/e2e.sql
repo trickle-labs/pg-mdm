@@ -625,7 +625,8 @@ WITH proposed AS (
                 fields => ARRAY['email'],
                 comparison => 'exact',
                 strength => 'identity',
-                evidence_group => 'email'
+                evidence_group => 'email',
+                candidate => jsonb_build_object('kind', 'exact', 'field', 'email')
             )
         ],
         golden_values => ARRAY[
@@ -654,7 +655,8 @@ WITH proposed AS (
             mdm.field(name => 'email', type => 'text', cleaner => 'email')],
         matches => ARRAY[mdm.match(
             name => 'same_email', fields => ARRAY['email'], comparison => 'exact',
-            strength => 'identity', evidence_group => 'email')],
+            strength => 'identity', evidence_group => 'email',
+            candidate => jsonb_build_object('kind', 'exact', 'field', 'email'))],
         golden_values => ARRAY[mdm.golden_value(
             field => 'name', policy => 'prefer_source', sources => ARRAY['crm'])]
     ) AS definition
