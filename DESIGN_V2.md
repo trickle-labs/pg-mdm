@@ -27,7 +27,7 @@ This catalogue does not promise that every section ships. A capability enters a 
 
 ### 1.1 Released baseline and remaining work
 
-V2 names a design generation, not a promise to release pg-mdm 2.0 or to implement every catalogue item. The recommended first scope is exact preview and regression fixtures, explicit merge and split stewardship, and a semantic change feed. These can use the existing synchronous Graph V1 path. The [roadmap](ROADMAP.md#recommended-post-v011-releases) sequences their implementation and keeps V1 acceptance work visible.
+V2 names a design generation, not a promise to release pg-mdm 2.0 or to implement every catalogue item. The recommended first scope begins with policy-assisted review routing for pg-react, followed by exact preview and regression fixtures, explicit merge and split stewardship, and a semantic change feed. These can use the existing synchronous Graph V1 path. The [roadmap](ROADMAP.md#recommended-post-v011-releases) sequences their implementation and keeps V1 acceptance work visible.
 
 The released code and upstream contracts establish the following boundary:
 
@@ -267,7 +267,7 @@ Custom component checks can enrich a built-in policy, but there is no unrestrict
 
 V2 adds entity-level stewardship when pair decisions become too awkward for real operational work. The pair-level `MATCH`, pair-level `NOT_MATCH`, and anchored golden override remain valid primitives, but a steward may also request a merge of named entities, a split into an explicit member partition, movement of one source record to a target entity, a lock on identity or membership, a lock on one or more golden fields, or a narrowly scoped override of an automatic invariant.
 
-All stewardship actions append immutable directives. They never edit the three public output tables directly. A merge directive compiles to explicit membership requirements and planned ID continuity. A split directive names the complete intended partition of the current members and compiles to must-link and cannot-link constraints sufficient to preserve that partition. A move-member directive is represented as a bounded removal from one component and admission to another. Unlocking, clearing, or correcting an action supersedes an earlier directive rather than deleting history.
+All identity-changing stewardship actions append immutable directives. They never edit the three public output tables directly. A merge directive compiles to explicit membership requirements and planned ID continuity. A split directive names the complete intended partition of the current members and compiles to must-link and cannot-link constraints sufficient to preserve that partition. A move-member directive is represented as a bounded removal from one component and admission to another. Unlocking, clearing, or correcting an action supersedes an earlier directive rather than deleting history.
 
 Every merge, split, and move directive names an expected base publication revision and durable source-record identities. Entity IDs in the request are lookup handles resolved at that revision, not the stored subject of the directive. Acceptance expands the request against the complete base membership and stores the canonical compiled constraints and continuity plan. If membership changed since the named revision, the write fails and requires a new preview. A split constrains the named partition only; later source records follow the automatic policy unless a separate lock explicitly declares a future-membership scope. A lock states whether it protects a canonical ID, a fixed source-record set, or future membership. No directive acquires future scope merely because it named an entity that later merged, split, or gained members.
 
@@ -286,6 +286,20 @@ Some automatic invariants may be manually overridden, but the override must name
 Review becomes a workflow rather than only a queue. V2 may support assignment, ownership, due dates, approval requirements, comments, attachments by reference, and organization-specific reason codes. Priority can consider authoritative-source involvement, component size, downstream impact, stable-ID risk, age, and business criticality, but the score is decomposable in `mdm.explain()` and cannot change identity by itself.
 
 Bulk action is allowed only over a reproducible predicate evaluated at a named publication revision. The action must be homogeneous, bounded, previewed, and accompanied by aggregate impact plus representative explanations. If the complete population cannot be evaluated or the preview expires because its source or decision boundary changed, the bulk write is rejected. Large actions may use the prepared execution path, but the directives become active atomically.
+
+### 12.1 Policy-assisted review routing
+
+The [MDM integration plan](../pg-react/plans/PLAN_PG_MDM_STEWARDSHIP_INTEGRATION.md) and [React integration plan](../pg-react/plans/PLAN_PG_REACT_MDM_STEWARDSHIP.md) establish a current use case for assignment, due dates, escalation, and receipts. Their proposed `MDM-STEWARDSHIP/1` contract is owned by MDM. The [roadmap handoff](ROADMAP.md#pg-react-stewardship-integration) schedules contract freeze, implementation, and joint qualification. All interface names below remain proposed until those gates pass.
+
+MDM maintains a logged, permission-controlled `mdm_steward.policy_cases_v1` table and allocates a persistent unique `case_key bigint` for each UUID review occurrence. Keys are never hashes or reused identifiers. Preserve the occurrence's opening time and closed mapping through restore and the replay horizon. Existing occurrences need an auditable timestamp backfill; an unknown opening time blocks automatic deadlines. Publish evidence fields with the MDM publication transaction. Queue, deadline, and escalation controls change in their own audited control transaction. Tokens distinguish review version, definition, evidence basis, action-driving revision, publication revision, and stewardship epoch. Pending stewardship follows successful publication observations, including no-change observations.
+
+React submits only `ASSIGN_QUEUE`, `SET_DUE_AT`, and `ESCALATE` through the proposed `mdm_steward.submit_policy_intent(...)`. MDM authenticates the caller, deduplicates `(binding_id, request_key)`, and validates new requests against a locked case and automation binding. The binding pins permitted actions and the active policy digest. MDM enforces manual assignment protection and deadline/escalation limits, then commits the control and `mdm_steward.policy_receipts_v1` receipt together. Identical authorized retries return the receipt; changed arguments conflict. Stale, paused, replaced, unauthorized, and out-of-horizon requests cannot apply new controls.
+
+React owns routing evaluation, managed time, and immutable durable work. It completes local intent delivery, receipt correlation, and its database work in one transaction. It never invokes MDM refresh from a consequence. `APPLIED_CONTROL` does not close an identity case. A case closes only when a successful MDM publication resolves it. Later decision support must distinguish acceptance pending publication from applied publication. Receipts, audit timestamps, and unrelated publication changes cannot create repeat actions. An idle overdue case must escalate once per allowed level without source edits.
+
+The initial deployment uses one administrative scope, a shared PostgreSQL 18 database, trigger capture, scheduler off, `READ COMMITTED`, and independently owned graphs. React reads an authorized non-RLS metadata projection because its evaluated sources currently reject RLS. Keep sensitive evidence under MDM permissions and reject unsupported scopes. Never use a view or `BYPASSRLS` to bypass this restriction. Neither extension becomes a mandatory dependency of the other, and human stewardship works without React.
+
+This routing contract needs no exact entity preview, semantic feed, Delta V1, prepared execution, or general workflow engine. Optional M3 approval support adds exact-action proposals and authenticated distinct human approvals before React R4. The automation role cannot supply human votes, call human decision/override APIs, or lower administrator requirements. Automatic identity decisions, bulk actions, and direct merge/split by the worker require a separate future contract. Restore, clone, and policy replacement disable new automation until bindings, deduplication, and case bases are reconciled.
 
 ---
 
@@ -489,9 +503,15 @@ First qualify pg-trickle v0.105.2 against pg-mdm's compiled graphs, authorizatio
 
 Audit the V1 acceptance criteria against executable tests and retained release results. Correct the current scoped-preview exactness claim and complete its promised subproblem behavior. Connect the organization corpus to runnable quality checks, add held-out cases, and measure the synchronous operating envelope. These are baseline obligations; a V2 feature cannot substitute for them.
 
+#### Policy routing before exact preview
+
+Complete the M0 shared-contract work alongside upstream admission. Then deliver M1's review projection, M2's typed routing controls and receipts, and M4 joint qualification with React R0–R3 and R5. The roadmap assigns these to MDM v0.12–v0.15. This is now a named deployment requirement, so assignment and escalation move out of the deferred catalogue. Preserve MDM's human authority and test exact policy rows, request bodies, receipts, worker outcomes, time-only escalation, publication rollback, and recovery on the real shared stack.
+
+M3 approval requirements remain independently gated before React R4 at 0.51.0. A definition preview does not implement approval of an exact action. Identity-changing commands retain their stronger impact-preview and constraint requirements below.
+
 ### 23.2 Exact preview, fixtures, and bounded manifests
 
-Make this the first V2 capability release. Reuse the production compiler, terminal readers, full resolver, identity reconciler, and golden selector for a non-publishing result. Extract only the shared resolve-and-compare path needed by preview. Keep output writes and durable ID allocation behind publication.
+Deliver this after the initial routing integration, with no runtime dependency on pg-react. Reuse the production compiler, terminal readers, full resolver, identity reconciler, and golden selector for a non-publishing result. Extract only the shared resolve-and-compare path needed by preview. Keep output writes and durable ID allocation behind publication.
 
 Start with `exact_entity` for local tracked and soft-delete sources that fit one transaction. A proposed definition uses a separate private graph and a proven source boundary. Pin the definition and artifact digests, base publication, decision epoch, execution role, source boundary, and semantic versions using the existing catalog metadata. New identities receive preview-local handles. Acceptance must recheck the pinned inputs; changed inputs require a fresh preview or a complete recomputation. Preview must not consume durable IDs, change directives, activate a definition, or mutate public outputs.
 
@@ -501,7 +521,7 @@ Use labeled pair, partition, forbidden-co-membership, and golden fixtures throug
 
 Implement explicit merge and complete split partitions using the existing immutable decision ledger and constraint checks. Require the base revision, durable source-record subjects, decision epoch, and accepted preview digest. Persist all compiled constraints in one transaction, detect contradictions over the complete affected closure, and publish through the ordinary refresh path.
 
-Keep the V1 continuity policy for this release. Add move-member, locks, alternate continuity, approvals, assignment, and bulk action only with a concrete workflow and their additional precedence tests. The first merge or split release must already cover retry, stale preview, supersession, dormant records, reactivation, and clean restore.
+Keep the V1 continuity policy for this release. Routing and manual assignment protection belong to M1/M2; approval requirements belong to the separate M3 gate. Add move-member, identity and membership locks, alternate continuity, and bulk action only with a concrete workflow and their additional precedence tests. The first merge or split release must already cover retry, stale preview, supersession, dormant records, reactivation, and clean restore.
 
 ### 23.4 Semantic events before entity dependencies
 
@@ -518,7 +538,7 @@ These tracks cover the rest of the catalogue. Each needs a deployment use case, 
 | Source contracts and time, 5–6 | One local complete-snapshot or ordered-event contract | Prove scope and completeness, duplicates, per-record order, lifecycle, key incarnation, and replay. Retain source versions before late corrections and valid-time projections; test incomplete history and projection-scoped identity |
 | Composition and inference, 7–8 | Flat pinned fragments with per-path provenance | One canonical expansion path, conflict rejection, and unchanged old definitions. Add inference only as a proposal verified by fixtures and exact preview |
 | Matching and clustering, 9–11 | One demanded built-in channel or policy | Complete candidate oracle, bounded explanations, versioned migration, and quality evidence. Registered code waits for inspectable dependency closure and invalidation tests; approximate retrieval remains supplemental |
-| Extended stewardship, 12 | One required move, lock, or review workflow | Exact affected-closure preview, explicit scope and precedence, contradiction checks, authorization, and immutable audit. Approvals and bounded bulk action follow those guarantees |
+| Extended stewardship, 12 | One required move, identity lock, or bulk operation beyond M1/M2 routing | Exact affected-closure preview, explicit scope and precedence, contradiction checks, authorization, and immutable audit. M3 human approvals remain separately gated before React R4 |
 | Continuity and goldens, 13–14 | One demonstrated continuity policy or coherent field group | Exact impact preview, merge/split and lock contradiction tests, source timestamp comparability where needed, and complete provenance |
 | Revision-bound dependencies, 16 | One upstream-to-downstream entity relationship | Semantic feed replay and resynchronization, cycle rejection, merge/split handling, and independently atomic publications |
 | Prepared full resolution, 3–4 and 17 | One prepared run per entity, one worker, logged checkpoints | Upstream enabled `prepared_graph_generation` with admitted public APIs; open on every read transaction, idempotent replay, compare-and-swap promotion, explicit abandonment, and recovery/equivalence tests |
@@ -533,7 +553,7 @@ Retention and authorization ship with each feature that needs them. Deferring a 
 
 ### 23.6 Definition of complete
 
-Recommend closing the first V2 scope after exact preview and fixtures, merge/split stewardship, and the semantic feed pass their release gates. Record the enabled capability versions and explicit exclusions in the release manifest. This is a scoped V2 delivery, not completion of every optional track.
+The initial routing integration is complete after M0/M1/M2/M4 and React R0–R3/R5 pass joint qualification. Close the broader first V2 scope after exact preview and fixtures, merge/split stewardship, and the semantic feed also pass their release gates. Optional M3 approvals remain a separate gate. Record the enabled capability versions and explicit exclusions in the release manifest. This is a scoped V2 delivery, not completion of every optional track.
 
 To complete the entire catalogue, give every optional row above a reviewed implementation plan and demonstrate its section-26 acceptance cases in combination with the other enabled capabilities. Until then, label each row proposed, blocked, or deferred. Never mark a catalogue item complete because its upstream dependency shipped or because a private API exists.
 
