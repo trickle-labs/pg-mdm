@@ -535,27 +535,23 @@ fn candidate_pairs_sql_with_relation(
     limits: &crate::candidate::CandidateLimits,
     fallback_relation: &str,
 ) -> String {
-    let blocks = channels
+    let pairs = channels
         .iter()
         .map(|channel| {
             let relation = block_relation(channel);
             let stats = stats_relation(channel);
             format!(
-                "SELECT b.channel_id, b.block_key, b.source_record_id, b.source_sort_key\nFROM {relation} b\nJOIN {stats} s USING (channel_id, block_key)\nWHERE s.block_records <= {limit}",
-                limit = limits.max_block_records
+                "SELECT DISTINCT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {relation} l\nJOIN {stats} s USING (channel_id, block_key)\nJOIN {relation} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= {limit}",
+                limit = limits.max_block_records,
             )
         })
         .collect::<Vec<_>>();
-    if blocks.is_empty() {
+    if pairs.is_empty() {
         return format!(
-            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, ARRAY[]::text[] AS discovery_channels FROM {fallback_relation} AS empty WHERE false"
+            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key FROM {fallback_relation} AS empty WHERE false"
         );
     }
-    let union = blocks.join("\nUNION ALL\n");
-    format!(
-        "WITH complete_blocks AS (\n{union}\n), pairs AS (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key, l.channel_id\nFROM complete_blocks l\nJOIN complete_blocks r ON l.channel_id = r.channel_id AND l.block_key = r.block_key AND l.source_sort_key < r.source_sort_key\n)\nSELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key, pg_catalog.array_agg(DISTINCT channel_id ORDER BY channel_id) AS discovery_channels\nFROM pairs\nGROUP BY left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\n/* aggregate candidate limit: {limit} */",
-        limit = limits.max_candidate_pairs
-    )
+    pairs.join("\nUNION\n")
 }
 
 pub fn candidate_pairs_sql(
@@ -570,26 +566,8 @@ fn candidate_pair_stats_sql_with_relation(
     limits: &crate::candidate::CandidateLimits,
     fallback_relation: &str,
 ) -> String {
-    let blocks = channels
-        .iter()
-        .map(|channel| {
-            let relation = block_relation(channel);
-            let stats = stats_relation(channel);
-            format!(
-                "SELECT b.channel_id, b.block_key, b.source_record_id, b.source_sort_key\nFROM {relation} b\nJOIN {stats} s USING (channel_id, block_key)\nWHERE s.block_records <= {limit}",
-                limit = limits.max_block_records,
-            )
-        })
-        .collect::<Vec<_>>();
-    if blocks.is_empty() {
-        return format!(
-            "SELECT 0::bigint AS candidate_pairs FROM {fallback_relation} AS empty WHERE false"
-        );
-    }
-    let union = blocks.join("\nUNION ALL\n");
-    format!(
-        "WITH blocks AS (\n{union}\n), pairs AS (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id\nFROM blocks l\nJOIN blocks r ON l.channel_id = r.channel_id AND l.block_key = r.block_key AND l.source_sort_key < r.source_sort_key\nGROUP BY l.source_record_id, r.source_record_id\n)\nSELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM pairs"
-    )
+    let pairs = candidate_pairs_sql_with_relation(channels, limits, fallback_relation);
+    format!("SELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM ({pairs}) AS pairs")
 }
 
 pub fn candidate_pair_stats_sql(
@@ -741,12 +719,17 @@ pub fn compile(entity: &Entity) -> Value {
         format!("pairs/{}", entity.name),
         blocks,
         candidate_pairs_sql_with_relation(&plan.channels, &limits, &fallback_relation),
-        json!({"left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea","discovery_channels":"text[]"}),
+        json!({"left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea"}),
     ));
     let mut pair_stats_dependencies = plan
         .channels
         .iter()
-        .map(|channel| format!("block-stats/{}", channel.channel_id))
+        .map(|channel| format!("blocks/{}", channel.channel_id))
+        .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-stats/{}", channel.channel_id)),
+        )
         .chain(
             plan.channels
                 .iter()

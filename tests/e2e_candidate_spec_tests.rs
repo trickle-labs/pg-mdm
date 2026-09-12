@@ -68,15 +68,14 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         )
         .contains("block_records > 10000")
     );
-    assert!(
-        candidate_pairs_sql(
-            &pg_mdm::candidate::CandidatePlan::from_entity(&entity)
-                .unwrap()
-                .channels,
-            &candidate_limits(),
-        )
-        .contains("array_agg(DISTINCT channel_id")
+    let pair_sql = candidate_pairs_sql(
+        &pg_mdm::candidate::CandidatePlan::from_entity(&entity)
+            .unwrap()
+            .channels,
+        &candidate_limits(),
     );
+    assert!(pair_sql.contains("SELECT DISTINCT l.source_record_id"));
+    assert!(pair_sql.contains("\nUNION\n"));
 }
 
 #[test]
