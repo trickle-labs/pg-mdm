@@ -839,17 +839,46 @@ AS $$
 $$;
 REVOKE ALL ON FUNCTION public.e2e_source_records(bigint[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.e2e_source_records(bigint[]) TO mdm_administrator;
+CREATE TABLE public.e2e_customer_state_snapshot (
+    snapshot_id boolean PRIMARY KEY DEFAULT true CHECK (snapshot_id),
+    state jsonb NOT NULL
+);
+REVOKE ALL ON public.e2e_customer_state_snapshot FROM PUBLIC, mdm_administrator;
 CREATE FUNCTION public.e2e_customer_state()
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, mdm_out
 AS $$
+DECLARE
+    current_internal jsonb;
+    previous_internal jsonb;
+    changed_categories jsonb := '[]'::jsonb;
+BEGIN
     SELECT pg_catalog.jsonb_build_object(
+        'registry', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(i) ORDER BY i.mdm_id) FROM mdm_internal.identity_registry i JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
+        'memberships', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_internal.memberships m JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
+        'aliases', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(a) ORDER BY a.alias_mdm_id) FROM mdm_internal.identity_aliases a JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
+        'splits', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(s) ORDER BY s.parent_mdm_id, s.publication_revision, s.child_mdm_id) FROM mdm_internal.identity_splits s JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
+        'golden', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(g) - 'publication_revision' ORDER BY g.mdm_id, g.field_name) FROM mdm_internal.golden_provenance g JOIN mdm_internal.entities e ON e.entity_id = g.entity_id AND e.publication_revision = g.publication_revision WHERE e.entity_name = 'customer'), '[]'::jsonb)
+    ) INTO current_internal;
+    SELECT state INTO previous_internal FROM public.e2e_customer_state_snapshot WHERE snapshot_id;
+    IF FOUND THEN
+        SELECT COALESCE(pg_catalog.jsonb_agg(key ORDER BY key), '[]'::jsonb)
+        INTO changed_categories
+        FROM pg_catalog.jsonb_object_keys(current_internal) AS categories(key)
+        WHERE current_internal->key IS DISTINCT FROM previous_internal->key;
+        UPDATE public.e2e_customer_state_snapshot SET state = current_internal WHERE snapshot_id;
+    ELSE
+        INSERT INTO public.e2e_customer_state_snapshot(state) VALUES (current_internal);
+    END IF;
+    RETURN pg_catalog.jsonb_build_object(
         'members', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_out.customer_members m), '[]'::jsonb),
         'entities', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id) FROM mdm_out.customer e), '[]'::jsonb),
-        'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb)
-    )
+        'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb),
+        'internal_changed', changed_categories
+    );
+END
 $$;
 REVOKE ALL ON FUNCTION public.e2e_customer_state() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.e2e_customer_state() TO mdm_administrator;
@@ -1088,7 +1117,7 @@ DELETE FROM public.crm_customer WHERE id = 1;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
-DECLARE result jsonb;
+DECLARE result jsonb; output_state jsonb;
 BEGIN
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
@@ -1096,15 +1125,18 @@ BEGIN
         RAISE EXCEPTION 'delete refresh did not publish: %', result;
     END IF;
     result := mdm.refresh('customer', 'ALLOW');
+    output_state := public.e2e_customer_state();
     IF result->>'changed' <> 'false'
        OR (result->>'publication_revision')::bigint <> 5 THEN
         RAISE EXCEPTION 'no-op refresh changed the publication: result %, output %',
-            result, public.e2e_customer_state();
+            result, output_state;
     END IF;
 END
 $$;
 RESET ROLE;
 \connect foundation postgres
+DROP FUNCTION public.e2e_customer_state();
+DROP TABLE public.e2e_customer_state_snapshot;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_out.customer_members
