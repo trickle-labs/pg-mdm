@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
 use pgrx::{Internal, JsonB, Uuid, default};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::candidate::CandidatePair;
@@ -26,6 +26,27 @@ struct RefreshRequest {
     entity_name: String,
     full_policy: String,
     rebuild: bool,
+    source_snapshots: Vec<SourceSnapshot>,
+}
+
+#[derive(Clone, Debug)]
+struct SourceSnapshot {
+    source_name: String,
+    keys: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceScanSpec {
+    source_name: String,
+    sql: String,
+    max_active_records: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RefreshAccess {
+    entity_id: String,
+    relations: Vec<String>,
+    source_scans: Vec<SourceScanSpec>,
 }
 
 struct RefreshAccessRequest {
@@ -48,7 +69,6 @@ struct Context {
     artifact_id: String,
     graph_digest: Vec<u8>,
     graph_root: String,
-    source_relations: BTreeMap<String, String>,
     evidence_relation: String,
     golden_relation: String,
 }
@@ -267,21 +287,6 @@ fn load_context(
         }
         relations.entry(logical_id).or_insert(relation_name);
     }
-    let source_relations = entity
-        .sources
-        .iter()
-        .map(|source| {
-            relations
-                .remove(&format!("records/{}", source.name))
-                .map(|relation| (source.name.clone(), relation))
-                .ok_or_else(|| {
-                    MdmError::GraphBinding(format!(
-                        "records relation for source {} is missing",
-                        source.name
-                    ))
-                })
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
     Ok(Context {
         entity_id,
         entity,
@@ -291,7 +296,6 @@ fn load_context(
         artifact_id,
         graph_digest,
         graph_root,
-        source_relations,
         evidence_relation: relations
             .remove(&format!("evidence/{entity_name}"))
             .ok_or_else(|| MdmError::GraphBinding("evidence relation is missing".into()))?,
@@ -301,16 +305,16 @@ fn load_context(
     })
 }
 
-fn sync_source_records(client: &mut SpiClient<'_>, context: &Context) -> Result<bool, MdmError> {
-    let mut changed = false;
+fn sync_source_records(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    snapshots: &[SourceSnapshot],
+) -> Result<(), MdmError> {
     for source in &context.entity.sources {
-        let relation = context
-            .source_relations
-            .get(&source.name)
-            .ok_or_else(|| MdmError::GraphBinding("source records relation is missing".into()))?;
-        let sql = format!(
-            "WITH current_records AS MATERIALIZED (SELECT DISTINCT source_record_key FROM {relation}), deactivated AS (UPDATE mdm_internal.source_records r SET active = false WHERE r.entity_id = $1::pg_catalog.uuid AND r.source_identity_id = $2::pg_catalog.uuid AND r.active AND NOT EXISTS (SELECT FROM current_records c WHERE c.source_record_key = r.source_record_key) RETURNING 1), registered AS (INSERT INTO mdm_internal.source_records (entity_id, source_identity_id, source_record_key, active) SELECT $1::pg_catalog.uuid, $2::pg_catalog.uuid, source_record_key, true FROM current_records ON CONFLICT (entity_id, source_identity_id, source_record_key) DO UPDATE SET active = true, last_seen_at = pg_catalog.statement_timestamp() WHERE NOT mdm_internal.source_records.active RETURNING 1) SELECT EXISTS (SELECT FROM deactivated) OR EXISTS (SELECT FROM registered)"
-        );
+        let snapshot = snapshots
+            .iter()
+            .find(|snapshot| snapshot.source_name == source.name)
+            .ok_or_else(|| MdmError::GraphBinding("source snapshot is missing".into()))?;
         let rows = client
             .select(
                 "SELECT source_identity_id::text FROM mdm_internal.source_identities WHERE entity_id = $1::pg_catalog.uuid AND source_name = $2::pg_catalog.name",
@@ -323,44 +327,50 @@ fn sync_source_records(client: &mut SpiClient<'_>, context: &Context) -> Result<
             .get::<String>(1)
             .map_err(|error| MdmError::Spi(error.to_string()))?
             .ok_or_else(|| MdmError::GraphBinding("source identity is missing".into()))?;
-        let rows = client
+        let keys = JsonB(json!(
+            snapshot.keys.iter().map(|key| hex(key)).collect::<Vec<_>>()
+        ));
+        let sql = "WITH current_records AS MATERIALIZED (SELECT pg_catalog.decode(key, 'hex') AS source_record_key FROM pg_catalog.jsonb_array_elements_text($3::pg_catalog.jsonb) AS keys(key)), deactivated AS (UPDATE mdm_internal.source_records r SET active = false WHERE r.entity_id = $1::pg_catalog.uuid AND r.source_identity_id = $2::pg_catalog.uuid AND r.active AND NOT EXISTS (SELECT FROM current_records c WHERE c.source_record_key = r.source_record_key) RETURNING 1), registered AS (INSERT INTO mdm_internal.source_records AS target (entity_id, source_identity_id, source_record_key, active) SELECT $1::pg_catalog.uuid, $2::pg_catalog.uuid, source_record_key, true FROM current_records ON CONFLICT (entity_id, source_identity_id, source_record_key) DO UPDATE SET active = true, last_seen_at = pg_catalog.statement_timestamp() WHERE NOT target.active RETURNING 1) SELECT EXISTS (SELECT FROM deactivated) OR EXISTS (SELECT FROM registered)";
+        let _ = client
             .select(
-                &sql,
+                sql,
                 Some(1),
-                &[context.entity_id.clone().into(), source_identity_id.into()],
+                &[
+                    context.entity_id.clone().into(),
+                    source_identity_id.into(),
+                    keys.into(),
+                ],
             )
             .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
-        changed |= rows
-            .first()
-            .get::<bool>(1)
-            .map_err(|error| MdmError::Spi(error.to_string()))?
-            .unwrap_or(false);
     }
-    Ok(changed)
+    Ok(())
 }
 
-fn grant_refresh_access(entity_name: &str) -> Result<(), MdmError> {
+fn grant_refresh_access(entity_name: &str) -> Result<Vec<SourceSnapshot>, MdmError> {
     let helper_owner = catalog::validate_helper_owner()?;
-    let relations = catalog::call_helper(
-        "refresh_access",
-        RefreshAccessRequest {
-            entity_name: entity_name.to_owned(),
-        },
-    )?
-    .0
-    .get("relations")
-    .and_then(Value::as_array)
-    .ok_or_else(|| MdmError::Spi("refresh access helper returned invalid relations".into()))?
-    .iter()
-    .map(|relation| {
-        relation
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| MdmError::Spi("refresh access relation is not text".into()))
-    })
-    .collect::<Result<Vec<_>, _>>()?;
+    let access = serde_json::from_value::<RefreshAccess>(
+        catalog::call_helper(
+            "refresh_access",
+            RefreshAccessRequest {
+                entity_name: entity_name.to_owned(),
+            },
+        )?
+        .0,
+    )
+    .map_err(|error| {
+        MdmError::Spi(format!(
+            "refresh access helper returned invalid data: {error}"
+        ))
+    })?;
     Spi::connect_mut(|client| {
-        for relation_name in relations {
+        client
+            .update(
+                "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
+                None,
+                &[access.entity_id.clone().into()],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        for relation_name in &access.relations {
             client
                 .update(
                     &format!(
@@ -373,6 +383,42 @@ fn grant_refresh_access(entity_name: &str) -> Result<(), MdmError> {
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
         }
         Ok(())
+    })?;
+    Spi::connect(|client| {
+        let mut active_records = 0usize;
+        access
+            .source_scans
+            .into_iter()
+            .map(|scan| {
+                let remaining = scan.max_active_records.saturating_sub(active_records);
+                let query = format!("{} LIMIT {}", scan.sql, remaining.saturating_add(1));
+                let rows = client
+                    .select(&query, None, &[])
+                    .map_err(|error| MdmError::SourceInvalid(error.to_string()))?;
+                if rows.len() > remaining {
+                    return Err(MdmError::ResolverLimit {
+                        resource: "max_active_records",
+                        observed: active_records.saturating_add(rows.len()),
+                        limit: scan.max_active_records,
+                    });
+                }
+                active_records = active_records.saturating_add(rows.len());
+                let keys = rows
+                    .into_iter()
+                    .map(|row| {
+                        row.get::<Vec<u8>>(1)
+                            .map_err(|error| MdmError::Spi(error.to_string()))?
+                            .ok_or_else(|| {
+                                MdmError::SourceRecord("source record key is NULL".into())
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(SourceSnapshot {
+                    source_name: scan.source_name,
+                    keys,
+                })
+            })
+            .collect()
     })
 }
 
@@ -390,6 +436,7 @@ pub(crate) fn refresh_access(request: Internal) -> JsonB {
         let helper_owner = catalog::validate_helper_owner()?;
         let (_, selected) = catalog::validate_caller(&helper_owner)?;
         Spi::connect(|client| {
+            let context = load_context(client, &request.entity_name, &selected, false)?;
             let rows = client
                 .select(
                     "SELECT m.relation_name FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b ON b.graph_binding_id = m.graph_binding_id JOIN mdm_internal.entities e ON e.entity_id = b.entity_id WHERE e.entity_name = $1::pg_catalog.name AND b.definition_version = e.desired_version AND b.execution_role_oid = $2 AND b.graph_generation = (SELECT max(b2.graph_generation) FROM mdm_internal.graph_bindings b2 WHERE b2.entity_id = e.entity_id AND b2.definition_version = e.desired_version AND b2.execution_role_oid = $2) ORDER BY m.topological_ordinal",
@@ -405,7 +452,44 @@ pub(crate) fn refresh_access(request: Internal) -> JsonB {
                         .ok_or_else(|| MdmError::Spi("graph relation name is NULL".into()))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(JsonB(json!({"relations": relations})))
+            let max_active_records = load_limits(&context).max_active_records;
+            let source_scans = context
+                .entity
+                .sources
+                .iter()
+                .map(|source| {
+                    let rows = client
+                        .select(
+                            "SELECT relation_name FROM mdm_internal.source_identities WHERE entity_id = $1::pg_catalog.uuid AND source_name = $2::pg_catalog.name",
+                            Some(1),
+                            &[context.entity_id.clone().into(), source.name.clone().into()],
+                        )
+                        .map_err(|error| MdmError::Spi(error.to_string()))?;
+                    let relation_name = rows
+                        .first()
+                        .get::<String>(1)
+                        .map_err(|error| MdmError::Spi(error.to_string()))?
+                        .ok_or_else(|| MdmError::GraphBinding("source relation is missing".into()))?;
+                    let mut scan_source = source.clone();
+                    scan_source.relation = relation_name;
+                    let query = crate::graph_spec::source_record_sql(
+                        &context.entity.name,
+                        &scan_source,
+                    );
+                    Ok(json!({
+                        "source_name": source.name,
+                        "sql": format!(
+                            "SELECT source_record_key FROM ({query}) AS source_rows"
+                        ),
+                        "max_active_records": max_active_records
+                    }))
+                })
+                .collect::<Result<Vec<_>, MdmError>>()?;
+            Ok(JsonB(json!({
+                "entity_id": context.entity_id,
+                "relations": relations,
+                "source_scans": source_scans
+            })))
         })
     })();
     result.unwrap_or_else(|error| crate::raise(error))
@@ -1467,10 +1551,8 @@ fn persist_refresh_inner(
             selected,
             session,
         )?;
-        let mut graph = refresh_graph(client, &context, &request.full_policy)?;
-        if sync_source_records(client, &context)? {
-            graph = refresh_graph(client, &context, &request.full_policy)?;
-        }
+        sync_source_records(client, &context, &request.source_snapshots)?;
+        let graph = refresh_graph(client, &context, &request.full_policy)?;
         let limits = load_limits(&context);
         limits.validate()?;
         let sources = load_sources(client, &context, limits.max_active_records)?;
@@ -1599,15 +1681,15 @@ fn persist_refresh_inner(
 
 #[pg_extern(name = "refresh", requires = [persist_refresh], sql = "CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';")]
 pub(crate) fn refresh(entity_name: String, full_policy: default!(String, "'ALLOW'")) -> JsonB {
-    if let Err(error) = grant_refresh_access(&entity_name) {
-        crate::raise(error);
-    }
+    let source_snapshots =
+        grant_refresh_access(&entity_name).unwrap_or_else(|error| crate::raise(error));
     catalog::call_helper(
         "persist_refresh",
         RefreshRequest {
             entity_name,
             full_policy,
             rebuild: false,
+            source_snapshots,
         },
     )
     .unwrap_or_else(|error| crate::raise(error))
@@ -1615,15 +1697,15 @@ pub(crate) fn refresh(entity_name: String, full_policy: default!(String, "'ALLOW
 
 #[pg_extern(name = "rebuild", requires = [persist_refresh], sql = "CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';")]
 pub(crate) fn rebuild(entity_name: String, full_policy: default!(String, "'ALLOW'")) -> JsonB {
-    if let Err(error) = grant_refresh_access(&entity_name) {
-        crate::raise(error);
-    }
+    let source_snapshots =
+        grant_refresh_access(&entity_name).unwrap_or_else(|error| crate::raise(error));
     catalog::call_helper(
         "persist_refresh",
         RefreshRequest {
             entity_name,
             full_policy,
             rebuild: true,
+            source_snapshots,
         },
     )
     .unwrap_or_else(|error| crate::raise(error))
