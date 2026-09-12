@@ -827,8 +827,9 @@ SET search_path = pg_catalog, mdm_internal, public
 AS $$
     SELECT r.source_record_id, r.source_record_key
     FROM mdm_internal.source_records r
-    JOIN mdm_internal.source_identities s USING (source_identity_id)
-    JOIN mdm_internal.entities e USING (entity_id)
+    JOIN mdm_internal.source_identities s
+      ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
+    JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
     JOIN public.crm_customer c
       ON r.source_record_key = pgtrickle.encode_row_id_v2(
           'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id))
