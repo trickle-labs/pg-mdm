@@ -1084,7 +1084,11 @@ BEGIN
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'false'
        OR (result->>'publication_revision')::bigint <> 5 THEN
-        RAISE EXCEPTION 'no-op refresh changed the publication: %', result;
+        RAISE EXCEPTION 'no-op refresh changed the publication: result %, members %, entities %, reviews %',
+            result,
+            (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id), '[]'::jsonb) FROM mdm_out.customer_members m),
+            (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id), '[]'::jsonb) FROM mdm_out.customer e),
+            (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id), '[]'::jsonb) FROM mdm_out.customer_review r);
     END IF;
 END
 $$;
