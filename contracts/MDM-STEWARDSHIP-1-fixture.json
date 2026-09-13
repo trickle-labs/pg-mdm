@@ -1,6 +1,19 @@
 {
   "contract": "MDM-STEWARDSHIP/1",
   "revision": 1,
+  "policy_vector": {
+    "body": {
+      "canonical_encoding_version": 1,
+      "policy_package": {
+        "routes": [
+          {"queue": "priority", "reason_code": "POSSIBLE_DUPLICATE"}
+        ]
+      },
+      "policy_revision": "policy-1"
+    },
+    "canonical_json_utf8": "{\"canonical_encoding_version\":1,\"policy_package\":{\"routes\":[{\"queue\":\"priority\",\"reason_code\":\"POSSIBLE_DUPLICATE\"}]},\"policy_revision\":\"policy-1\"}",
+    "sha256": "741ea9560a69ba3185eaa34760ba38d473aa43daa8e8c530c6c6c2ce867c2614"
+  },
   "basis_vector": {
     "body": {
       "approved_metadata": {},
@@ -32,7 +45,7 @@
       "expected_action_revision": 2,
       "expected_definition_version": 3,
       "expected_evidence_basis_digest": "abababababababababababababababababababababababababababababababab",
-      "expected_policy_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "expected_policy_digest": "741ea9560a69ba3185eaa34760ba38d473aa43daa8e8c530c6c6c2ce867c2614",
       "expected_publication_revision": 5,
       "expected_review_version": 4,
       "expected_stewardship_epoch": 8,
@@ -41,8 +54,8 @@
       "work_ref": "work-1"
     },
     "request_key": "3ebd5539467befabbc0492e51e49fe2dc866a225cc73a36256d0a95a06b06d4e",
-    "canonical_json_utf8": "{\"action\":\"ASSIGN_QUEUE\",\"arguments\":{\"queue\":\"priority\"},\"binding_id\":\"30000000-0000-4000-8000-000000000001\",\"case_key\":7,\"evaluation_ref\":\"eval-1\",\"expected_action_revision\":2,\"expected_definition_version\":3,\"expected_evidence_basis_digest\":\"abababababababababababababababababababababababababababababababab\",\"expected_policy_digest\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"expected_publication_revision\":5,\"expected_review_version\":4,\"expected_stewardship_epoch\":8,\"policy_revision\":\"policy-1\",\"work_ref\":\"work-1\"}",
-    "sha256": "9f741d05ca8af964fb9fb87c073556abaac87e99af9e6307fee2e111473f643d"
+    "canonical_json_utf8": "{\"action\":\"ASSIGN_QUEUE\",\"arguments\":{\"queue\":\"priority\"},\"binding_id\":\"30000000-0000-4000-8000-000000000001\",\"case_key\":7,\"evaluation_ref\":\"eval-1\",\"expected_action_revision\":2,\"expected_definition_version\":3,\"expected_evidence_basis_digest\":\"abababababababababababababababababababababababababababababababab\",\"expected_policy_digest\":\"741ea9560a69ba3185eaa34760ba38d473aa43daa8e8c530c6c6c2ce867c2614\",\"expected_publication_revision\":5,\"expected_review_version\":4,\"expected_stewardship_epoch\":8,\"policy_revision\":\"policy-1\",\"work_ref\":\"work-1\"}",
+    "sha256": "5d1c1af60b706e1e2e6b45b784836793f51fe38144caac815830d02fefa82f99"
   },
   "request_key_vector": {
     "body": {
@@ -71,6 +84,8 @@
     "Pause, binding replacement, and policy mismatch create the specified terminal outcome.",
     "Receipt and control change commit atomically or both roll back.",
     "Resolved occurrences remain readable and recurrence gets a new case key.",
-    "Restore preserves case keys, request bodies, and receipts."
+    "Restore preserves case keys, request bodies, and receipts.",
+    "A case with pending_stewardship cannot receive control until a successful observation clears it.",
+    "Only the MDM administrator can register, pause, or replace bindings; role mismatch and replaced bindings fail closed."
   ]
 }

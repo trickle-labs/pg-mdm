@@ -24,12 +24,23 @@ fn verify_vector(domain: &str, vector: &Value) -> String {
 }
 
 #[test]
-fn proposed_stewardship_digest_vectors_are_self_consistent() {
+fn approved_stewardship_contract_and_vectors_match_fixture() {
     let contract: Value = serde_json::from_str(CONTRACT).expect("shared contract parses");
     assert_eq!(contract["contract"], "MDM-STEWARDSHIP/1");
-    assert_eq!(contract["status"], "proposed_for_joint_review");
-    assert_eq!(contract["approvals"]["pg_mdm_owner"], "pending");
-    assert_eq!(contract["approvals"]["pg_react_owner"], "pending");
+    assert_eq!(contract["status"], "approved");
+    assert_eq!(contract["approvals"]["pg_mdm_owner"]["status"], "approved");
+    assert_eq!(
+        contract["approvals"]["pg_mdm_owner"]["role"],
+        "pg-mdm M0 contract owner"
+    );
+    assert_eq!(
+        contract["approvals"]["pg_react_owner"]["status"],
+        "approved"
+    );
+    assert_eq!(
+        contract["approvals"]["pg_react_owner"]["role"],
+        "pg-react R0 adapter owner"
+    );
     let fixture: Value = serde_json::from_str(FIXTURE).expect("shared fixture parses");
     assert_eq!(fixture["contract"], contract["contract"]);
     assert_eq!(fixture["revision"], contract["revision"]);
@@ -49,6 +60,7 @@ fn proposed_stewardship_digest_vectors_are_self_consistent() {
 
     let encoding = &contract["canonical_encoding"];
     for (domain_key, vector_key) in [
+        ("policy_domain_tag", "policy_vector"),
         ("basis_domain_tag", "basis_vector"),
         ("intent_domain_tag", "intent_vector"),
         ("request_key_domain_tag", "request_key_vector"),
@@ -63,11 +75,55 @@ fn proposed_stewardship_digest_vectors_are_self_consistent() {
         fixture["intent_vector"]["request_key"],
         fixture["request_key_vector"]["sha256"]
     );
+    assert_eq!(
+        fixture["intent_vector"]["body"]["expected_policy_digest"],
+        fixture["policy_vector"]["sha256"]
+    );
+    assert_eq!(
+        contract["freshness"]["review_version_meaning"],
+        "The exact concurrency_version of the mdm_out.<entity>_review row for this case's review_id."
+    );
+    assert!(
+        contract["freshness"]["pending_stewardship_rule"]
+            .as_str()
+            .unwrap()
+            .contains("PENDING_STEWARDSHIP")
+    );
+    assert!(
+        contract["intent"]["outcomes"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("PENDING_STEWARDSHIP".into()))
+    );
 
     let receipt_columns = contract["sql"]["receipts"]["columns"]
         .as_array()
         .expect("receipt schema has columns");
-    assert!(receipt_columns.iter().any(|column| column[0] == "actor"));
+    assert!(receipt_columns.iter().any(|column| {
+        column[0] == "actor"
+            && column[1] == "name"
+            && column[2].as_str().unwrap().contains("current_user")
+    }));
+    let bindings = &contract["sql"]["bindings"];
+    assert_eq!(bindings["relation"], "mdm_steward.policy_bindings_v1");
+    assert_eq!(
+        bindings["administrator_surface"]["register"],
+        "mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) returns uuid; MDM generates binding_id."
+    );
+    assert!(
+        bindings["administrator_surface"]["authorization"]
+            .as_str()
+            .unwrap()
+            .contains("mdm_administrator")
+    );
+    assert!(
+        bindings["invariants"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(
+                "At most one active binding exists per scope.".into()
+            ))
+    );
     let conflict = &contract["intent"]["idempotency"]["changed_body"];
     assert_eq!(conflict["receipt_id"], Value::Null);
     assert_eq!(conflict["outcome"], "IDEMPOTENCY_CONFLICT");
