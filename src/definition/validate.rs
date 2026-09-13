@@ -353,17 +353,13 @@ fn semantic_manifest() -> Value {
             "minimum_minor": 0
         }
     });
-    if let (Some(manifest), Some(candidate)) = (
-        manifest.as_object_mut(),
-        semantics::semantic_manifest().get("candidate"),
-    ) {
-        manifest.insert("candidate".into(), candidate.clone());
-    }
-    if let (Some(manifest), Some(clustering)) = (
-        manifest.as_object_mut(),
-        semantics::semantic_manifest().get("clustering"),
-    ) {
-        manifest.insert("clustering".into(), clustering.clone());
+    let runtime_semantics = semantics::semantic_manifest();
+    for name in ["candidate", "evidence", "decisions", "clustering"] {
+        if let (Some(manifest), Some(section)) =
+            (manifest.as_object_mut(), runtime_semantics.get(name))
+        {
+            manifest.insert(name.into(), section.clone());
+        }
     }
     manifest
 }
@@ -623,6 +619,10 @@ mod tests {
             json!({"name": "external_graph_refresh", "major": 1, "minimum_minor": 0})
         );
         assert!(manifest.get("capabilities").is_none());
+        let runtime_semantics = semantics::semantic_manifest();
+        for section in ["candidate", "evidence", "decisions", "clustering"] {
+            assert_eq!(manifest[section], runtime_semantics[section]);
+        }
     }
 
     #[test]
