@@ -37,6 +37,9 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock pg_mdm.control ./
 COPY .cargo/ .cargo/
 COPY src/ src/
+COPY contracts/ contracts/
+COPY tests/organization_quality_tests.rs tests/stewardship_contract_tests.rs tests/
+COPY tests/fixtures/organization_domain_v1.json tests/fixtures/
 COPY scripts/ scripts/
 COPY sql/ sql/
 COPY justfile ./

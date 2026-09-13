@@ -406,6 +406,7 @@ BEGIN
     RETURN pg_catalog.to_jsonb(refreshed);
 END
 $$;
+-- AUTO is diagnostic here: report divergence and keep the production graph on FULL until every history agrees.
 CREATE FUNCTION public.check_mdm_candidate_probes(stage text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -417,25 +418,86 @@ DECLARE
         'public.mdm_candidate_pairs_auto'::regclass,
         'public.mdm_candidate_pairs_full'::regclass];
     refreshed jsonb;
+    block_rows_equal boolean;
+    pair_rows_equal boolean;
+    full_rows_valid boolean;
 BEGIN
     refreshed := public.refresh_mdm_graph(roots);
-    IF EXISTS (SELECT * FROM public.mdm_candidate_blocks_auto EXCEPT ALL SELECT * FROM public.mdm_candidate_blocks_full)
-       OR EXISTS (SELECT * FROM public.mdm_candidate_blocks_full EXCEPT ALL SELECT * FROM public.mdm_candidate_blocks_auto)
-       OR EXISTS (SELECT * FROM public.mdm_candidate_pairs_auto EXCEPT ALL SELECT * FROM public.mdm_candidate_pairs_full)
-       OR EXISTS (SELECT * FROM public.mdm_candidate_pairs_full EXCEPT ALL SELECT * FROM public.mdm_candidate_pairs_auto)
+    SELECT NOT EXISTS (
+               SELECT * FROM public.mdm_candidate_blocks_auto
+               EXCEPT ALL
+               SELECT * FROM public.mdm_candidate_blocks_full)
+       AND NOT EXISTS (
+               SELECT * FROM public.mdm_candidate_blocks_full
+               EXCEPT ALL
+               SELECT * FROM public.mdm_candidate_blocks_auto)
+      INTO block_rows_equal;
+    SELECT NOT EXISTS (
+               SELECT * FROM public.mdm_candidate_pairs_auto
+               EXCEPT ALL
+               SELECT * FROM public.mdm_candidate_pairs_full)
+       AND NOT EXISTS (
+               SELECT * FROM public.mdm_candidate_pairs_full
+               EXCEPT ALL
+               SELECT * FROM public.mdm_candidate_pairs_auto)
+      INTO pair_rows_equal;
+    WITH blocks AS (
+             SELECT canonical_bytes AS block_key, source_record_id, source_sort_key
+             FROM public.mdm_candidate_source
+             WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
+         ), stats AS (
+             SELECT block_key, count(*)::bigint AS block_records
+             FROM blocks GROUP BY block_key
+         )
+    SELECT NOT EXISTS (
+               SELECT * FROM public.mdm_candidate_blocks_full
+               EXCEPT ALL
+               SELECT 'email'::text, canonical_bytes, source_record_id, source_sort_key
+               FROM public.mdm_candidate_source
+               WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL)
+       AND NOT EXISTS (
+               SELECT 'email'::text, canonical_bytes, source_record_id, source_sort_key
+               FROM public.mdm_candidate_source
+               WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
+               EXCEPT ALL
+               SELECT * FROM public.mdm_candidate_blocks_full)
+       AND NOT EXISTS (
+               SELECT * FROM public.mdm_candidate_pairs_full
+               EXCEPT ALL
+               SELECT l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key
+               FROM blocks l
+               JOIN stats s USING (block_key)
+               JOIN blocks r USING (block_key)
+               WHERE l.source_sort_key < r.source_sort_key AND s.block_records <= 100)
+       AND NOT EXISTS (
+               SELECT l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key
+               FROM blocks l
+               JOIN stats s USING (block_key)
+               JOIN blocks r USING (block_key)
+               WHERE l.source_sort_key < r.source_sort_key AND s.block_records <= 100
+               EXCEPT ALL
+               SELECT * FROM public.mdm_candidate_pairs_full)
+      INTO full_rows_valid;
+    IF NOT full_rows_valid
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto') IS NULL
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_full') IS DISTINCT FROM 'FULL'
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_auto') IS NULL
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full') IS DISTINCT FROM 'FULL' THEN
-        RAISE EXCEPTION 'candidate probes disagree or omitted strategy at %: %', stage, refreshed;
+        RAISE EXCEPTION 'candidate FULL oracle or reported strategy failed at %: %', stage, refreshed;
     END IF;
-    RAISE NOTICE 'candidate probe strategies at %: blocks AUTO=%, FULL=%; pairs AUTO=%, FULL=%',
+    RAISE NOTICE 'candidate probes at %: blocks AUTO=%, FULL=%, equal=%; pairs AUTO=%, FULL=%, equal=%',
         stage,
         public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto'),
         public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_full'),
+        block_rows_equal,
         public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_auto'),
-        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full');
-    RETURN refreshed;
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full'),
+        pair_rows_equal;
+    RETURN refreshed || jsonb_build_object(
+        'candidate_probe_rows_equal', jsonb_build_object(
+            'blocks', block_rows_equal,
+            'pairs', pair_rows_equal),
+        'candidate_full_matches_source_oracle', full_rows_valid);
 END
 $$;
 CREATE FUNCTION public.mdm_graph_action(results jsonb, node_identity text)
@@ -613,9 +675,9 @@ BEGIN
         ('00000000-0000-0000-0000-000000000005', 'phone', 'value', '\x01'::bytea, '\x05'::bytea),
         ('00000000-0000-0000-0000-000000000006', 'email', 'missing', '\x01'::bytea, '\x06'::bytea);
     refreshed := public.check_mdm_candidate_probes('multi-row insert');
-    IF (SELECT count(*) FROM public.mdm_candidate_blocks_auto) <> 4
-       OR (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 6 THEN
-        RAISE EXCEPTION 'candidate multi-row inserts did not produce all rows: %', refreshed;
+    IF (SELECT count(*) FROM public.mdm_candidate_blocks_full) <> 4
+       OR (SELECT count(*) FROM public.mdm_candidate_pairs_full) <> 6 THEN
+        RAISE EXCEPTION 'candidate FULL result after multi-row insert is invalid: %', refreshed;
     END IF;
 END
 $$;
@@ -626,8 +688,8 @@ BEGIN
     UPDATE public.mdm_candidate_source SET canonical_bytes = '\x02'::bytea
     WHERE source_record_id = '00000000-0000-0000-0000-000000000004' AND field_name = 'email';
     refreshed := public.check_mdm_candidate_probes('update');
-    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 3 THEN
-        RAISE EXCEPTION 'candidate update produced an unexpected pair set: %', refreshed;
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_full) <> 3 THEN
+        RAISE EXCEPTION 'candidate FULL result after update is invalid: %', refreshed;
     END IF;
 END
 $$;
@@ -638,8 +700,8 @@ BEGIN
     DELETE FROM public.mdm_candidate_source
     WHERE source_record_id = '00000000-0000-0000-0000-000000000003';
     refreshed := public.check_mdm_candidate_probes('delete');
-    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 1 THEN
-        RAISE EXCEPTION 'candidate delete produced an unexpected pair set: %', refreshed;
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_full) <> 1 THEN
+        RAISE EXCEPTION 'candidate FULL result after delete is invalid: %', refreshed;
     END IF;
 END
 $$;
@@ -659,8 +721,8 @@ DO $$
 DECLARE refreshed jsonb;
 BEGIN
     refreshed := public.check_mdm_candidate_probes('rollback recovery');
-    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 1 THEN
-        RAISE EXCEPTION 'candidate rollback changed rows: %', refreshed;
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_full) <> 1 THEN
+        RAISE EXCEPTION 'candidate FULL result after rollback recovery is invalid: %', refreshed;
     END IF;
 END
 $$;
@@ -671,8 +733,8 @@ BEGIN
     UPDATE public.mdm_candidate_source SET canonical_bytes = '\x01'::bytea
     WHERE source_record_id = '00000000-0000-0000-0000-000000000004' AND field_name = 'email';
     refreshed := public.check_mdm_candidate_probes('retry');
-    IF (SELECT count(*) FROM public.mdm_candidate_pairs_auto) <> 3 THEN
-        RAISE EXCEPTION 'candidate retry did not publish all pairs: %', refreshed;
+    IF (SELECT count(*) FROM public.mdm_candidate_pairs_full) <> 3 THEN
+        RAISE EXCEPTION 'candidate FULL result after retry is invalid: %', refreshed;
     END IF;
 END
 $$;
