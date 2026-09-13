@@ -781,6 +781,30 @@ mod tests {
     }
 
     #[test]
+    fn replay_from_original_ledger_is_stable_under_input_reordering() {
+        let old = IdentityState {
+            registry: vec![identity(10, 1), identity(11, 2)],
+            memberships: vec![membership(1, 10, 1), membership(2, 11, 2)],
+            ..IdentityState::default()
+        };
+        let first = resolution(&[(1, 9), (2, 9), (3, 8)]);
+        let second = resolution(&[(3, 8), (2, 9), (1, 9)]);
+        let mut first_allocator = Allocator {
+            ids: vec![id(20)],
+            next: 0,
+        };
+        let mut second_allocator = Allocator {
+            ids: vec![id(20)],
+            next: 0,
+        };
+
+        let first = reconcile(&old, &first, 3, &mut first_allocator).unwrap();
+        let replay = reconcile(&old, &second, 3, &mut second_allocator).unwrap();
+
+        assert_eq!(replay, first);
+    }
+
+    #[test]
     fn alias_cycles_are_rejected() {
         let aliases = vec![
             IdentityAlias {

@@ -6,6 +6,9 @@ container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
 missing_log="$work_dir/missing.log"
+e2e_log="$work_dir/e2e-postgres.log"
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+source_revision=$(git -C "$repo_root" rev-parse HEAD)
 
 cleanup() {
     docker rm -fv "$container" >/dev/null 2>&1 || true
@@ -32,7 +35,7 @@ if docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d missing_de
 fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
 INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
@@ -167,6 +170,8 @@ original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d founda
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
 original_artifacts=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$artifact_query")
+source_identity_query="SELECT md5(COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(identity_digest, 'hex') || ':' || key_contract::text, '|' ORDER BY source_identity_id) FROM mdm_internal.source_identities), '') || '/' || COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(source_record_key, 'hex') || ':' || source_record_id::text || ':' || active::text, '|' ORDER BY source_identity_id, source_record_key) FROM mdm_internal.source_records), ''))"
+original_source_identities=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$source_identity_query")
 docker exec "$container" pg_dump -Fc -U postgres foundation >"$dump_file"
 before_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
     -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
@@ -253,6 +258,8 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v original_source_oid="$original_source_oid" -v original_role_oid="$original_role_oid" -f /tests/restore.sql
 restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
 test "$original_artifacts" = "$restored_artifacts"
+restored_source_identities=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$source_identity_query")
+test "$original_source_identities" = "$restored_source_identities"
 
 docker exec "$container" createdb -U postgres --template=restored pg_mdm_clone
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d pg_mdm_clone <<'SQL'
@@ -279,6 +286,12 @@ restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored 
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 test "$clone_sources" = 7
 test "$restored_sources" = 6
+
+docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
+python3 "$repo_root/scripts/record_e2e_evidence.py" \
+    "$container" "$image" "$source_revision" \
+    "$work_dir/database-envelope.json" "$e2e_log"
 
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'

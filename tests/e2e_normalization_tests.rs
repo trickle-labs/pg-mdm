@@ -92,4 +92,36 @@ fn test_e2e_generated_normalization_sql_shape() {
     assert!(nodes.iter().any(|n| n["logical_id"] == "normalized/email"));
     assert!(nodes.iter().any(|n| n["logical_id"] == "normalized/name"));
     assert!(nodes.iter().any(|n| n["logical_id"] == "normalized/dob"));
+    let candidates = nodes
+        .iter()
+        .find(|node| node["logical_id"].as_str().unwrap().starts_with("blocks/"))
+        .expect("candidate node");
+    assert!(
+        candidates["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("state = 'value'")
+    );
+    assert!(
+        candidates["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("canonical_bytes IS NOT NULL")
+    );
+    let evidence = nodes
+        .iter()
+        .find(|node| node["logical_id"] == "evidence/customer")
+        .expect("evidence node");
+    assert!(
+        evidence["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("l0.state = 'value'")
+    );
+    assert!(
+        evidence["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("r0.state = 'value'")
+    );
 }

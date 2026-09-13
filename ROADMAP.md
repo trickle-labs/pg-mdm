@@ -16,7 +16,7 @@ The release numbers below are recommendations, not scheduled commitments. Write 
 | v0.3–v0.4 | Normalization, source identity, and bounded candidate generation | [v0.3 plan](plans/v0.3.md), [v0.4 plan](plans/v0.4.md) |
 | v0.5–v0.6 | Pair decisions, durable manual constraints, and conservative full resolution | [v0.5 plan](plans/v0.5.md), [v0.6 plan](plans/v0.6.md) |
 | v0.7 | Stable IDs, goldens, provenance, reviews, and publication model | [v0.7 plan](plans/v0.7.md) |
-| v0.8–v0.9 | Private Graph V1 installation, strict refresh, and atomic publication | [v0.8 plan](plans/v0.8.md), [changelog](CHANGELOG.md), `src/api/refresh.rs` |
+| v0.8–v0.9 | Private Graph V1 installation, strict refresh, and atomic publication | [v0.8 plan](plans/v0.8.md); v0.9 has no separate `plans/v0.9.md`, see the [changelog entry](CHANGELOG.md#090), `src/api/refresh.rs` |
 | v0.10–v0.11 | Operational checks, package upgrades, AUTO/FULL probes, and publication rollback/retry qualification | [v0.10 plan](plans/v0.10.md), [v0.11 plan](plans/v0.11.md), `tests/e2e.sql`, `scripts/run_e2e_tests.sh` |
 
 pg-mdm v0.11.0 is tagged at `97b78c8`. Its current dependency remains pg-trickle v0.105.1, as recorded in [DEPENDENCIES.md](DEPENDENCIES.md), `tests/Dockerfile.e2e`, and `src/version.rs`. Versions v0.1 through v0.7 used v0.98.0. Released code and test coverage do not establish that every original V1 acceptance criterion has passed.

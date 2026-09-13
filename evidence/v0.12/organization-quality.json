@@ -1,0 +1,165 @@
+{
+  "command": "cargo test --test organization_quality_tests --features pg18 -- --nocapture",
+  "environment": {
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Homebrew)",
+    "postgres_runtime": "not used; this is the pure production-semantics fixture runner",
+    "runner_architecture": "arm64",
+    "runner_os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)"
+  },
+  "evidence_version": 1,
+  "inputs": {
+    "cargo_lock_sha256": "f96a398612cfe55176933349dbb84d7156691d5e1714d124909ce0b143638a01",
+    "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb"
+  },
+  "interpretation": "Synthetic semantic regression evidence only; it is not a production accuracy claim.",
+  "metrics": {
+    "fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
+    "format_version": 1,
+    "label_metadata": {
+      "label_origin": "synthetic records with manually assigned entity labels",
+      "permitted_use": "test-only semantic regression; not a production accuracy claim",
+      "thresholds": {
+        "applies_to": "held_out partition only",
+        "approval_basis": "user-directed v0.12 sign-off preparation",
+        "approval_status": "frozen for v0.12 synthetic regression gate",
+        "candidate_recall_min": 1.0,
+        "cluster_errors_max": 0,
+        "false_merges_max": 0,
+        "missed_matches_max": 0,
+        "review_count_max": 1
+      },
+      "unresolved_labels": [
+        "held_contact_1",
+        "held_contact_2"
+      ]
+    },
+    "lifecycle_checks": [
+      {
+        "after_delete_active_records": 11,
+        "after_reactivation_records": 2,
+        "case_id": "northwind_delete_reactivate",
+        "reactivated_entity": "northwind"
+      }
+    ],
+    "partitions": {
+      "held_out": {
+        "candidate_pairs": 11,
+        "candidate_positive_pairs": 3,
+        "candidate_recall": 1.0,
+        "cluster_errors": 0,
+        "false_merges": 0,
+        "labeled_positive_pairs": 3,
+        "missed_matches": 0,
+        "records": 15,
+        "review_count": 1,
+        "review_reason_distribution": {
+          "CANNOT_LINK": 1,
+          "SUPPORTING_ONLY": 1
+        },
+        "sources": {
+          "crm": 5,
+          "erp": 4,
+          "registry": 4,
+          "review_hold_1": 1,
+          "review_hold_2": 1
+        }
+      },
+      "tuning": {
+        "candidate_pairs": 18,
+        "candidate_positive_pairs": 3,
+        "candidate_recall": 1.0,
+        "cluster_errors": 0,
+        "false_merges": 0,
+        "labeled_positive_pairs": 3,
+        "missed_matches": 0,
+        "records": 12,
+        "review_count": 2,
+        "review_reason_distribution": {
+          "SUPPORTING_ONLY": 2
+        },
+        "sources": {
+          "crm": 5,
+          "erp": 4,
+          "registry": 3
+        }
+      }
+    },
+    "safety_cases": [
+      {
+        "case_id": "shared_contact",
+        "false_merges": 0,
+        "kind": "shared_contact",
+        "partition": "tuning"
+      },
+      {
+        "case_id": "weak_chain",
+        "false_merges": 0,
+        "kind": "weak_chain",
+        "partition": "tuning"
+      },
+      {
+        "case_id": "authoritative_conflict",
+        "false_merges": 0,
+        "kind": "authoritative_conflict",
+        "partition": "tuning"
+      },
+      {
+        "case_id": "business_context",
+        "false_merges": 0,
+        "kind": "business_context",
+        "partition": "tuning"
+      },
+      {
+        "case_id": "shared_contact",
+        "false_merges": 0,
+        "kind": "shared_contact",
+        "partition": "held_out"
+      },
+      {
+        "case_id": "weak_chain",
+        "false_merges": 0,
+        "kind": "weak_chain",
+        "partition": "held_out"
+      },
+      {
+        "case_id": "authoritative_conflict",
+        "false_merges": 0,
+        "kind": "authoritative_conflict",
+        "partition": "held_out"
+      },
+      {
+        "case_id": "business_context",
+        "false_merges": 0,
+        "kind": "business_context",
+        "partition": "held_out"
+      },
+      {
+        "case_id": "explicit_cannot_link",
+        "false_merges": 0,
+        "kind": "cannot_link",
+        "partition": "held_out"
+      }
+    ],
+    "safety_false_merges": 0,
+    "thresholds": {
+      "applies_to": "held_out partition only",
+      "approval_basis": "user-directed v0.12 sign-off preparation",
+      "approval_status": "frozen for v0.12 synthetic regression gate",
+      "candidate_recall_min": 1.0,
+      "cluster_errors_max": 0,
+      "false_merges_max": 0,
+      "missed_matches_max": 0,
+      "review_count_max": 1
+    },
+    "thresholds_frozen": true
+  },
+  "recorded_at_utc": "2026-09-13T17:54:15.045365+00:00",
+  "release_context": {
+    "pg_trickle_artifact_sha256": "bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416",
+    "postgres_image_digest": "sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf"
+  },
+  "result": "passed",
+  "retained_log": "evidence/v0.12/organization-quality.log",
+  "source_commit": "360e2b2448709e9574c0c318a60e27ef4ef8f73e"
+}

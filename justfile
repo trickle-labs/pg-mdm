@@ -52,6 +52,9 @@ test-publication-properties:
 test-organization-quality:
     cargo test --test organization_quality_tests --features pg18 -- --nocapture
 
+test-organization-quality-evidence:
+    python3 scripts/run_organization_quality_evidence.py
+
 test-stewardship-contract:
     cargo test --test stewardship_contract_tests --features pg18
 

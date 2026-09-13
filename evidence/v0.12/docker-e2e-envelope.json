@@ -1,0 +1,84 @@
+{
+  "command": "scripts/run_e2e_tests.sh",
+  "environment": {
+    "cpu": {
+      "model": "VirtualApple @ 2.50GHz",
+      "visible_processors": 10
+    },
+    "docker_engine_architecture": "arm64",
+    "docker_image_architecture": "amd64",
+    "docker_image_id": "sha256:d23f69ed1e649a9677071db26e7bc21921561f6cfb1a0084c9d95528b52dc92e",
+    "memory": {
+      "cgroup_limit_bytes": "max",
+      "cgroup_peak_bytes": 435761152,
+      "visible_available_bytes": 6658473984,
+      "visible_total_bytes": 8319504384
+    },
+    "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 117824516096 810321764352  13% /var/lib/postgresql"
+  },
+  "evidence_version": 1,
+  "inputs": {
+    "archived_pg_mdm_0_12_0_sha256": "6523d19b284bf9d1ee92c72741aa2a3843335a9429ef30fdceaeaf36a9b1929d",
+    "cargo_lock_sha256": "f96a398612cfe55176933349dbb84d7156691d5e1714d124909ce0b143638a01",
+    "e2e_sql_sha256": "74b6af5ab7c2e4675e0f6f185db157f2d522536213bc999ebd73216b7e1ddf67",
+    "operating_envelope_sql_sha256": "dd1abd9dd9e993cbe6851f426969e5dafbe47141ea19e742ebd8c760002edec8",
+    "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
+    "pg_mdm_package_manifest_sha256": "f9493c4630adbf52f8f61551b0a2c4bb750bb2730bce4277bce97dc9deee2076",
+    "pg_trickle_artifact_sha256": "bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416",
+    "pg_trickle_version": "0.105.2",
+    "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
+    "rust_toolchain": "1.98.0"
+  },
+  "limitations": [
+    "This report measures the small synthetic customer workload in the E2E suite, not a production-scale capacity envelope.",
+    "temporary_bytes is cumulative for the foundation database over the complete E2E run.",
+    "retained_history_table_bytes_database_wide includes whole-table sizes for MDM history relations; row counts are scoped to customer."
+  ],
+  "metrics": {
+    "block_memberships": 0,
+    "component_checks": 0,
+    "evidence_comparisons": 0,
+    "last_customer_refresh": {
+      "active_records": 6,
+      "component_checks": 0,
+      "elapsed_ms": 1203,
+      "publication_revision": 7,
+      "stage_timings_ms": {
+        "elapsed_before_operation_completion": 406,
+        "graph_refresh": 381,
+        "mdm_resolution": 20,
+        "publication": 1
+      }
+    },
+    "max_block_records": 0,
+    "output_bytes": 81920,
+    "outputs": {
+      "entity": {
+        "bytes": 32768,
+        "rows": 6
+      },
+      "members": {
+        "bytes": 32768,
+        "rows": 7
+      },
+      "reviews": {
+        "bytes": 16384,
+        "rows": 0
+      }
+    },
+    "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+    "repeated_pair_discoveries": 0,
+    "retained_history_rows_customer": 20,
+    "retained_history_table_bytes_database_wide": 196608,
+    "scope": "customer entity state after Docker E2E; temp_bytes is cumulative for foundation database",
+    "source_rows": 6,
+    "temporary_bytes": 0,
+    "unique_candidate_pairs": 0
+  },
+  "recorded_at_utc": "2026-09-13T17:50:30.602340+00:00",
+  "result": "passed",
+  "retained_log": "evidence/v0.12/docker-e2e.log",
+  "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including boundary, restore, and clone assertions, returned successfully.",
+  "source_commit": "27c7468db16eb5f0c9fe10ec20dd9f47d281e6eb"
+}

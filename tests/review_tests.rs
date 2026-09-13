@@ -57,6 +57,33 @@ fn issue_key_is_canonical_and_excludes_display_payload() {
 }
 
 #[test]
+fn occurrence_ids_are_stable_under_candidate_reordering() {
+    let candidates = [
+        candidate("one"),
+        ReviewCandidate::new(
+            7,
+            "warning",
+            "SPLIT_NOTICE",
+            &[Subject::uuid("mdm_id", id(4))],
+            json!({"kind":"split"}),
+            json!({"summary":"split"}),
+        ),
+    ];
+    let mut first_allocator = Allocator::default();
+    let mut replay_allocator = Allocator::default();
+
+    let first = reconcile(&[], &candidates, 1, &mut first_allocator);
+    let replay = reconcile(
+        &[],
+        &[candidates[1].clone(), candidates[0].clone()],
+        1,
+        &mut replay_allocator,
+    );
+
+    assert_eq!(replay, first);
+}
+
+#[test]
 fn lifecycle_opens_keeps_unchanged_updates_and_resolves() {
     let mut allocator = Allocator::default();
     let opened = reconcile(&[], &[candidate("one")], 1, &mut allocator);

@@ -787,5 +787,30 @@ mod tests {
                 all_pairs_oracle(&plan, &values),
             );
         }
+
+        #[test]
+        fn all_channels_are_order_independent_and_match_the_oracle(values in proptest::collection::vec(any::<u8>(), 1..8)) {
+            let plan = CandidatePlan { channels: vec![
+                CandidateChannel { channel_id: "exact".into(), kind: ChannelKind::Exact, fields: vec!["email".into()], prefix_length: None, token_min_length: None, owners: vec!["exact".into()] },
+                CandidateChannel { channel_id: "composite".into(), kind: ChannelKind::CompositeExact, fields: vec!["first".into(), "last".into()], prefix_length: None, token_min_length: None, owners: vec!["composite".into()] },
+                CandidateChannel { channel_id: "prefix".into(), kind: ChannelKind::Prefix, fields: vec!["name".into()], prefix_length: Some(2), token_min_length: None, owners: vec!["prefix".into()] },
+                CandidateChannel { channel_id: "token".into(), kind: ChannelKind::Token, fields: vec!["name".into()], prefix_length: None, token_min_length: Some(2), owners: vec!["token".into()] },
+            ]};
+            let mut records = Vec::new();
+            for (index, value) in values.into_iter().enumerate() {
+                let id = index as u8 + 1;
+                records.push(record(id, "email", &format!("e{}", value % 3)));
+                records.push(record(id, "first", &format!("f{}", value % 2)));
+                records.push(record(id, "last", &format!("l{}", value % 2)));
+                records.push(record(id, "name", &format!("n{} token{}", value % 3, value % 2)));
+            }
+
+            let expected = all_pairs_oracle(&plan, &records);
+            prop_assert_eq!(generate_candidates(&plan, &records, limits()).unwrap(), expected.clone());
+            records.reverse();
+            let mut reversed_plan = plan.clone();
+            reversed_plan.channels.reverse();
+            prop_assert_eq!(generate_candidates(&reversed_plan, &records, limits()).unwrap(), expected);
+        }
     }
 }

@@ -39,3 +39,40 @@ fn coherent_replacement_and_version_checks_work() {
     let components = manual_components(&[match_edge(1, 2), match_edge(2, 3)], 100).unwrap();
     assert_eq!(components.values().next().unwrap().len(), 3);
 }
+
+#[test]
+fn contradiction_diagnostic_contains_the_complete_deterministic_match_path() {
+    let existing = vec![
+        DecisionEdge {
+            decision_id: id(11),
+            ..match_edge(1, 2)
+        },
+        DecisionEdge {
+            decision_id: id(12),
+            ..match_edge(2, 3)
+        },
+        DecisionEdge {
+            decision_id: id(13),
+            ..match_edge(3, 4)
+        },
+    ];
+    let proposed = DecisionEdge {
+        decision_id: id(14),
+        ..not_match_edge(1, 4)
+    };
+    let error = validate_proposed_decision(&existing, &proposed, 100).unwrap_err();
+    let message = error.to_string();
+    for value in [1, 2, 3, 4] {
+        assert!(message.contains(&id(value).to_string()));
+    }
+    for value in 11..=14 {
+        assert!(message.contains(&id(value).to_string()));
+    }
+    assert!(message.len() < 512);
+}
+
+#[test]
+fn closure_limit_rejects_before_accepting_a_directive() {
+    let error = validate_proposed_decision(&[], &match_edge(1, 2), 1).unwrap_err();
+    assert_eq!(error.code(), "MDM_DECISION_CHECK_LIMIT");
+}

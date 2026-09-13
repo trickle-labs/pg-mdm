@@ -95,3 +95,43 @@ fn automatic_sort_is_total_and_identity_first() {
     sort_automatic_edges(&mut edges).unwrap();
     assert_eq!(edges[0].result, PairResult::AutomaticIdentity);
 }
+
+#[test]
+fn evidence_and_tied_edges_are_stable_under_input_reordering() {
+    let rules = vec![rule("a", "strong", "a"), rule("b", "strong", "b")];
+    let evidence = vec![
+        item("b", "b", EvidenceClass::Agree, Some(8_000)),
+        item("a", "a", EvidenceClass::Agree, Some(9_000)),
+    ];
+    let forward = decide_pair_for_rules(pair(), evidence.clone(), &rules, false, None);
+    let backward = decide_pair_for_rules(
+        pair(),
+        evidence.into_iter().rev().collect(),
+        &rules,
+        false,
+        None,
+    );
+    assert_eq!(forward, backward);
+    assert_eq!(forward.evidence[0].rule, "a");
+
+    let mut left = pair();
+    left.left_source_record_id = Uuid::from_bytes([1; 16]);
+    left.right_source_record_id = Uuid::from_bytes([4; 16]);
+    left.left_sort_key = vec![1];
+    left.right_sort_key = vec![4];
+    let mut right = pair();
+    right.left_source_record_id = Uuid::from_bytes([2; 16]);
+    right.right_source_record_id = Uuid::from_bytes([3; 16]);
+    right.left_sort_key = vec![2];
+    right.right_sort_key = vec![3];
+    let one_rule = [rule("strong", "strong", "group")];
+    let item = [item("strong", "group", EvidenceClass::Agree, Some(9_000))];
+    let first = decide_pair_for_rules(left, item.to_vec(), &one_rule, false, None);
+    let second = decide_pair_for_rules(right, item.to_vec(), &one_rule, false, None);
+    let mut forward = vec![first.clone(), second.clone()];
+    let mut backward = vec![second, first];
+    sort_automatic_edges(&mut forward).unwrap();
+    sort_automatic_edges(&mut backward).unwrap();
+    assert_eq!(forward, backward);
+    assert_eq!(forward[0].pair.left_sort_key, vec![1]);
+}

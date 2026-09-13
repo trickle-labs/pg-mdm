@@ -6,9 +6,14 @@
     "permitted_use": "test-only semantic regression; not a production accuracy claim",
     "unresolved_labels": ["held_contact_1", "held_contact_2"],
     "thresholds": {
-      "approval_status": "pending release-owner sign-off",
-      "candidate_recall_min": null,
-      "false_merges_max": null
+      "approval_status": "frozen for v0.12 synthetic regression gate",
+      "approval_basis": "user-directed v0.12 sign-off preparation",
+      "applies_to": "held_out partition only",
+      "candidate_recall_min": 1.0,
+      "false_merges_max": 0,
+      "missed_matches_max": 0,
+      "cluster_errors_max": 0,
+      "review_count_max": 1
     }
   },
   "candidate_plan": {

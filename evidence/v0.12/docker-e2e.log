@@ -1,0 +1,497 @@
+CREATE DATABASE
+You are now connected to database "foundation" as user "postgres".
+CREATE EXTENSION
+CREATE EXTENSION
+DO
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+DO
+You are now connected to database "postgres" as user "postgres".
+CREATE DATABASE
+You are now connected to database "upgrade" as user "postgres".
+CREATE EXTENSION
+CREATE EXTENSION
+ALTER EXTENSION
+DO
+ALTER EXTENSION
+DO
+ALTER EXTENSION
+DO
+ALTER EXTENSION
+DO
+ALTER EXTENSION
+DO
+ALTER EXTENSION
+DO
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+You are now connected to database "postgres" as user "postgres".
+CREATE DATABASE
+You are now connected to database "upgrade_direct" as user "postgres".
+CREATE EXTENSION
+CREATE EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+ALTER EXTENSION
+DO
+You are now connected to database "postgres" as user "postgres".
+CREATE DATABASE
+You are now connected to database "capability_errors" as user "postgres".
+CREATE EXTENSION
+CREATE EXTENSION
+DO
+CREATE FUNCTION
+CREATE FUNCTION
+ assert_adapter_error 
+----------------------
+ 
+(1 row)
+
+CREATE FUNCTION
+ assert_adapter_error 
+----------------------
+ 
+(1 row)
+
+CREATE FUNCTION
+ assert_adapter_error 
+----------------------
+ 
+(1 row)
+
+CREATE FUNCTION
+ assert_adapter_error 
+----------------------
+ 
+(1 row)
+
+CREATE FUNCTION
+DO
+CREATE FUNCTION
+DO
+You are now connected to database "foundation" as user "postgres".
+DO
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+GRANT ROLE
+GRANT
+GRANT
+GRANT
+GRANT
+You are now connected to database "postgres" as user "postgres".
+CREATE DATABASE
+You are now connected to database "graph_conformance" as user "postgres".
+CREATE EXTENSION
+CREATE EXTENSION
+CREATE TABLE
+INSERT 0 2
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+CREATE POLICY
+CREATE TABLE
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+CREATE TABLE
+INSERT 0 1
+GRANT
+CREATE TABLE
+GRANT
+SET
+SET
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+ create_stream_table 
+---------------------
+ 
+(1 row)
+
+CREATE FUNCTION
+CREATE FUNCTION
+CREATE FUNCTION
+DO
+BEGIN
+DO
+ROLLBACK
+DO
+BEGIN
+DO
+COMMIT
+DO
+DO
+DO
+DO
+DO
+DO
+BEGIN
+UPDATE 1
+DO
+ROLLBACK
+DO
+DO
+DROP FUNCTION
+DROP FUNCTION
+DROP FUNCTION
+RESET
+RESET
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+You are now connected to database "foundation" as user "postgres".
+BEGIN
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER SCHEMA
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+ALTER FUNCTION
+COMMIT
+DO
+CREATE SCHEMA
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+SET
+BEGIN
+         verify_installation          
+--------------------------------------
+ 01a09be2-49e8-7f27-9e9c-eeb749ab4436
+(1 row)
+
+ROLLBACK
+RESET
+RESET
+You are now connected to database "foundation" as user "postgres".
+GRANT
+CREATE TABLE
+GRANT
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+You are now connected to database "foundation" as user "postgres".
+DO
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+INSERT 0 3
+DO
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+SELECT 1
+DO
+ALTER EXTENSION
+DO
+DROP TABLE
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+GRANT
+GRANT
+CREATE FUNCTION
+REVOKE
+GRANT
+CREATE FUNCTION
+REVOKE
+GRANT
+CREATE FUNCTION
+REVOKE
+GRANT
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+INSERT 0 1
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DELETE 1
+CREATE TABLE
+REVOKE
+CREATE FUNCTION
+REVOKE
+GRANT
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+INSERT 0 2
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+UPDATE 1
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+SELECT 1
+CREATE FUNCTION
+CREATE TRIGGER
+UPDATE 1
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+DROP TRIGGER
+DROP FUNCTION
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+DROP TABLE
+DELETE 1
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DROP FUNCTION
+DROP TABLE
+DO
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+         verify_installation          
+--------------------------------------
+ 01a09be2-6e2c-7428-b8e9-c4637780be12
+(1 row)
+
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+DO
+GRANT
+GRANT
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+RESET
+You are now connected to database "foundation" as user "postgres".
+DO
+CREATE ROLE
+GRANT ROLE
+CREATE TABLE
+INSERT 0 1
+ALTER TABLE
+ALTER TABLE
+CREATE POLICY
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+You are now connected to database "foundation" as user "postgres".
+ALTER TABLE
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+BEGIN
+DO
+ROLLBACK
+You are now connected to database "foundation" as user "postgres".
+DROP TABLE
+REVOKE ROLE
+DROP ROLE
+CREATE TABLE
+INSERT 0 1
+GRANT
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+BEGIN
+             operation_id             |  entity_name   | desired_version | changed |                         definition_digest                          |                          artifact_digest                           
+--------------------------------------+----------------+-----------------+---------+--------------------------------------------------------------------+--------------------------------------------------------------------
+ 01a09be2-7315-7996-b6bb-b1b295c3c22d | typed_customer |               1 | t       | \xed2dd56f90014119756c0c5a1d903e07f09faf66f05d7ffdc45af98a643dc2e7 | \xa00e0003768afa186128f6ac69b1a1ce960a0102b8d1de7f3958f2e4797de264
+(1 row)
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             refresh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"changed": true, "identities": 1, "entity_name": "typed_customer", "node_results": {"27642": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_0", "result_class": "COMPLETED", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 1, "contract_generation": 14}, "27673": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_1", "result_class": "COMPLETED", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 1, "contract_generation": 17}, "27695": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_2", "result_class": "COMPLETED", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 1, "contract_generation": 13}, "27705": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_3", "result_class": "COMPLETED", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 1, "contract_generation": 9}, "27715": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_4", "result_class": "COMPLETED", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 1, "contract_generation": 3}, "27725": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_5", "result_class": "NO_DATA", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 0, "contract_generation": 3}, "27747": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_6", "result_class": "NO_DATA", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 0, "contract_generation": 3}, "27757": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_7", "result_class": "NO_DATA", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 0, "contract_generation": 4}, "27791": {"action": "FULL", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_8", "result_class": "NO_DATA", "rows_deleted": 0, "rows_updated": 0, "rows_inserted": 0, "contract_generation": 10}}, "open_reviews": 0, "operation_id": "01a09be2-7479-70a9-8d42-5e8646276d7d", "active_records": 1, "source_boundary": {"sources": [{"rls": false, "name": "source_identity_map", "owner": "mdm_helper_owner", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.source_identity_map", "position": {"kind": "CDC_BOUND", "token": "0/48E06B0", "version": 1}, "force_rls": false, "owner_oid": 23384, "source_type": "TABLE", "capture_mode": "TRIGGER", "columns_used": null, "completeness": "PROVEN", "source_relid": 18087, "column_snapshot": {"columns": [{"name": "entity_id", "ordinal": 1, "type_oid": 2950}, {"name": "entity_name", "ordinal": 2, "type_oid": 25}, {"name": "source_identity_id", "ordinal": 3, "type_oid": 2950}, {"name": "source_name", "ordinal": 4, "type_oid": 25}], "rls_forced": false, "rls_enabled": false, "partition_child_count": 0}, "source_placement": "local", "schema_fingerprint": "734315dcc40ccf09ce763c9ecf2433cd077786a568d2811e2aa846d162cf6615", "source_stable_name": "3467e69b3c4f0ce3"}, {"rls": false, "name": "source_records", "owner": "mdm_helper_owner", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.source_records", "position": {"kind": "CDC_BOUND", "token": "0/48E08C0", "version": 1}, "force_rls": false, "owner_oid": 23384, "source_type": "TABLE", "capture_mode": "TRIGGER", "columns_used": null, "completeness": "PROVEN", "source_relid": 18098, "column_snapshot": {"columns": [{"name": "entity_id", "ordinal": 1, "type_oid": 2950}, {"name": "source_identity_id", "ordinal": 2, "type_oid": 2950}, {"name": "source_record_key", "ordinal": 3, "type_oid": 17}, {"name": "source_record_id", "ordinal": 4, "type_oid": 2950}, {"name": "active", "ordinal": 5, "type_oid": 16}], "rls_forced": false, "rls_enabled": false, "partition_child_count": 0}, "source_placement": "local", "schema_fingerprint": "4cfac0df88d4e64274751f85a76059d5c24eefeda9968edfc00c72633a07aa27", "source_stable_name": "8dfe1979492d28ac"}, {"rls": false, "name": "typed_customer", "owner": "postgres", "schema": "public", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "public.typed_customer", "position": {"kind": "CDC_BOUND", "token": "0/48E1050", "version": 1}, "force_rls": false, "owner_oid": 10, "source_type": "TABLE", "capture_mode": "TRIGGER", "columns_used": null, "completeness": "PROVEN", "source_relid": 27634, "column_snapshot": {"columns": [{"name": "id", "ordinal": 1, "type_oid": 20}, {"name": "label", "ordinal": 2, "type_oid": 1043}, {"name": "amount", "ordinal": 3, "type_oid": 1700}, {"name": "changed", "ordinal": 4, "type_oid": 1114}], "rls_forced": false, "rls_enabled": false, "partition_child_count": 0}, "source_placement": "local", "schema_fingerprint": "609e9bdd22fb937d8b9e127ffd35d586e73d23763658a153c20e7fd9fb76e413", "source_stable_name": "fe4b18b5233cbf5f"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_0", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_0", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 14}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["amount", "amount_state", "changed", "changed_state", "label", "label_state", "row_changed_at", "source_name", "source_record_key"], "completeness": "PROVEN", "source_relid": 27642, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "d634fd15bb5633d4"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_1", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_1", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 17}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["canonical_bytes", "field_name", "normalized", "raw_value", "row_changed_at", "source_name", "source_record_id", "source_record_key", "source_sort_key", "state"], "completeness": "PROVEN", "source_relid": 27673, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "14c36dee349a8293"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_2", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_2", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 13}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["canonical_bytes", "field_name", "normalized", "raw_value", "row_changed_at", "source_name", "source_record_id", "source_record_key", "source_sort_key", "state"], "completeness": "PROVEN", "source_relid": 27695, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "feb5f81a6eda26c6"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_3", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_3", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 9}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["canonical_bytes", "field_name", "normalized", "raw_value", "row_changed_at", "source_name", "source_record_id", "source_record_key", "source_sort_key", "state"], "completeness": "PROVEN", "source_relid": 27705, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "470180724438dc43"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_4", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_4", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 3}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["candidate_pairs"], "completeness": "PROVEN", "source_relid": 27715, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "c47755366e2718a2"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_5", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_5", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 3}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["candidate_pairs", "max_candidate_pairs"], "completeness": "PROVEN", "source_relid": 27725, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "7e957243d15fe5e0"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_6", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_6", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 3}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["left_sort_key", "left_source_record_id", "right_sort_key", "right_source_record_id"], "completeness": "PROVEN", "source_relid": 27747, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "073c2cd24544f8bf"}, {"rls": false, "name": "mdm_g_01a09be273247133a8f00d2410984259_7", "owner": "mdm_administrator", "schema": "mdm_graph", "relkind": "r", "cdc_mode": "TRIGGER", "identity": "mdm_graph.mdm_g_01a09be273247133a8f00d2410984259_7", "position": {"kind": "UPSTREAM_STREAM_TABLE_STATE", "version": 1, "is_populated": false, "contract_generation": 4}, "force_rls": false, "owner_oid": 23385, "source_type": "STREAM_TABLE", "capture_mode": "TRIGGER", "columns_used": ["class", "comparator", "comparator_version", "evidence_group", "left_sort_key", "left_source_record_id", "left_value_digest", "right_sort_key", "right_source_record_id", "right_value_digest", "rule", "score"], "completeness": "PROVEN", "source_relid": 27757, "column_snapshot": null, "source_placement": "local", "schema_fingerprint": null, "source_stable_name": "723556bbeb7abe60"}], "safe_bound": "0/48E1050", "completeness": "PROVEN", "graph_refresh_id": 11, "manifest_version": 1, "database_instance_id": "e12564138c7ee19b954cd45986c503e9"}, "component_checks": 0, "graph_refresh_id": 11, "stage_timings_ms": {"publication": 9, "graph_refresh": 307, "mdm_resolution": 12, "elapsed_before_operation_completion": 332}, "publication_revision": 1, "source_boundary_digest": "acbb5777f3a4a6f6b00df091152f88e251f0367141f49dd44ff38288d359a947"}
+(1 row)
+
+DO
+ROLLBACK
+RESET
+You are now connected to database "foundation" as user "postgres".
+DROP FUNCTION
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+You are now connected to database "foundation" as user "postgres".
+DROP TABLE
+REVOKE
+You are now connected to database "foundation" as user "mdm_test_login".
+SET
+DO
+You are now connected to database "foundation" as user "postgres".
+GRANT
+BEGIN
+CREATE FUNCTION
+SET
+SET
+DO
+RESET
+RESET
+ROLLBACK
+BEGIN
+SET
+SET
+DO
+DO
+RESET
+RESET
+SELECT 11
+UPDATE 1
+SET
+SET
+DO
+RESET
+RESET
+DO
+UPDATE 1
+SET
+SET
+                     drop_entity                      
+------------------------------------------------------
+ {"entity_name": "drop_probe", "dropped_members": 11}
+(1 row)
+
+RESET
+RESET
+DO
+ROLLBACK
+DO
+You are now connected to database "postgres" as user "postgres".
+DROP DATABASE
+You are now connected to database "foundation" as user "postgres".
+
+PASS: E2E runner reached evidence collection after all database assertions.
