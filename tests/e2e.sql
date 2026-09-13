@@ -1389,7 +1389,7 @@ BEGIN
     before_state := public.e2e_preview_state();
     scoped := mdm.preview('customer', 'scoped', pg_catalog.jsonb_build_object('mdm_ids', pg_catalog.to_jsonb(mdm_ids)));
     after_state := public.e2e_preview_state();
-    IF cardinality(mdm_ids) <> 1
+    IF cardinality(mdm_ids) <> 2
        OR scoped->>'evidence_level' <> 'exact_subjects'
        OR scoped->>'record_count' <> '2'
        OR pg_catalog.jsonb_array_length(scoped->'materialized_source_record_ids') <> 2
