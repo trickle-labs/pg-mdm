@@ -282,6 +282,6 @@ test "$restored_sources" = 6
 
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'
-echo 'PASS: AUTO/FULL equivalence and MDM insert/update/delete, rollback, retry, and no-op qualification'
+echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies'
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'SKIPPED: Delta V1 positive conformance, output_delta_consumer is not used by V1'

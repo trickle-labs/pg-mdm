@@ -17,7 +17,7 @@ jobs:
       - run: docker run --rm pg_mdm:test cargo fmt -- --check
       - run: docker run --rm pg_mdm:test cargo clippy --all-targets --features pg18 -- -D warnings
       - run: docker run --rm pg_mdm:test cargo test --lib --features pg18
-      - run: docker run --rm pg_mdm:test cargo test --test organization_quality_tests --features pg18 -- --nocapture
+      - run: docker run --rm pg_mdm:test cargo test --test organization_quality_tests --features pg18 -- --nocapture | tee organization-quality.log
       - run: docker run --rm pg_mdm:test cargo test --test stewardship_contract_tests --features pg18
       - run: docker run --rm pg_mdm:test cargo pgrx test pg18 --features pg_test
       - run: docker run --rm pg_mdm:test scripts/check_security_definer.sh
@@ -26,12 +26,21 @@ jobs:
       - run: docker run --rm pg_mdm:test python3 scripts/package_manifest.py /package > package-manifest.json
       - uses: actions/upload-artifact@v4
         with:
-          name: pg_mdm-0.12.0-package-manifest
-          path: package-manifest.json
+          name: pg_mdm-0.12.0-test-evidence
+          path: |
+            package-manifest.json
+            organization-quality.log
+          if-no-files-found: warn
 
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - run: scripts/run_e2e_tests.sh
+      - run: scripts/run_e2e_tests.sh | tee e2e.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pg_mdm-0.12.0-e2e-log
+          path: e2e.log
+          if-no-files-found: warn

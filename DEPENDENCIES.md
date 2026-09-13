@@ -22,6 +22,8 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 
 The baseline capability response contains `external_graph_refresh 1.0 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.
 
+The pg-trickle 0.105.2 release includes package/runtime qualification and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
+
 ## Archived v0.1 Linux package checksums
 
 | Packaged file | SHA-256 |
