@@ -1212,6 +1212,7 @@ DECLARE
     after_state jsonb;
     validation jsonb;
     sampled jsonb;
+    sampled_repeat jsonb;
     scoped jsonb;
     source_ids jsonb;
     duplicate_id text;
@@ -1219,6 +1220,7 @@ BEGIN
     before_state := public.e2e_preview_state();
     validation := mdm.preview('customer', 'validation');
     sampled := mdm.preview('customer', 'sampled', '{"sample_size":2}'::jsonb);
+    sampled_repeat := mdm.preview('customer', 'sampled', '{"sample_size":2}'::jsonb);
     SELECT pg_catalog.jsonb_agg(source_record_id::text ORDER BY source_record_id), min(source_record_id::text)
     INTO source_ids, duplicate_id
     FROM public.e2e_source_records(ARRAY[9001, 9002]::bigint[]);
@@ -1228,6 +1230,7 @@ BEGIN
        OR validation->>'data_read' <> 'false'
        OR sampled->>'evidence_level' <> 'sampled' OR sampled->>'exact' <> 'false'
        OR sampled->>'sample_size' <> '2' OR sampled->>'record_count' <> '2'
+       OR sampled IS DISTINCT FROM sampled_repeat
        OR scoped->>'evidence_level' <> 'exact_subjects' OR scoped->>'exact' <> 'true'
        OR scoped->>'limitation' NOT LIKE '%Omitted records can change the full-entity result%'
        OR before_state IS DISTINCT FROM after_state THEN
@@ -1249,6 +1252,34 @@ END
 $$;
 RESET ROLE;
 \connect foundation postgres
+INSERT INTO mdm_internal.definition_artifacts (
+    entity_id, definition_version, compiler_version, artifact_format_version,
+    artifact_bytes, artifact_digest, created_by_name
+)
+SELECT entity_id, desired_version, 2147483647, 1,
+       pg_catalog.decode('ff', 'hex'),
+       pg_catalog.decode(pg_catalog.repeat('ff', 32), 'hex'),
+       current_user::text
+FROM mdm_internal.entities
+WHERE entity_name = 'customer';
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm.preview('customer', 'validation');
+        RAISE EXCEPTION 'preview accepted a graph binding for a different artifact';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'MDM_GRAPH_BINDING: graph binding is invalid: no graph binding exists for the desired definition' THEN
+            RAISE;
+        END IF;
+    END;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
+DELETE FROM mdm_internal.definition_artifacts
+WHERE artifact_digest = pg_catalog.decode(pg_catalog.repeat('ff', 32), 'hex');
 CREATE TABLE public.e2e_customer_state_snapshot (
     snapshot_id boolean PRIMARY KEY DEFAULT true CHECK (snapshot_id),
     state jsonb NOT NULL
@@ -1381,10 +1412,29 @@ SET ROLE mdm_administrator;
 DO $$
 DECLARE
     mdm_ids uuid[];
+    source_record_id uuid;
+    expected_source_ids jsonb;
     before_state jsonb;
     after_state jsonb;
     scoped jsonb;
 BEGIN
+    SELECT r.source_record_id INTO STRICT source_record_id
+    FROM public.e2e_source_records(ARRAY[1]::bigint[]) AS r;
+    SELECT pg_catalog.jsonb_agg(r.source_record_id::text ORDER BY r.source_record_id)
+    INTO expected_source_ids
+    FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]) AS r;
+    before_state := public.e2e_preview_state();
+    scoped := mdm.preview(
+        'customer', 'scoped',
+        pg_catalog.jsonb_build_object('source_record_ids', pg_catalog.jsonb_build_array(source_record_id::text))
+    );
+    after_state := public.e2e_preview_state();
+    IF scoped->>'record_count' <> '2'
+       OR scoped->'materialized_source_record_ids' IS DISTINCT FROM expected_source_ids
+       OR before_state IS DISTINCT FROM after_state THEN
+        RAISE EXCEPTION 'scoped preview did not expand candidate-pair neighbors read-only: %, %, %',
+            scoped, before_state, after_state;
+    END IF;
     mdm_ids := public.e2e_active_mdm_ids(ARRAY[1, 2]::bigint[]);
     before_state := public.e2e_preview_state();
     scoped := mdm.preview('customer', 'scoped', pg_catalog.jsonb_build_object('mdm_ids', pg_catalog.to_jsonb(mdm_ids)));
@@ -1595,8 +1645,6 @@ BEGIN
 END
 $$;
 
-DROP FUNCTION public.e2e_source_records(bigint[]);
-
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 SELECT mdm_admin.verify_installation();
@@ -1732,6 +1780,7 @@ DROP ROLE mdm_source_owner;
 CREATE TABLE public.typed_customer (
     id bigint PRIMARY KEY, label varchar(80), amount numeric(12, 2), changed timestamp(3)
 );
+INSERT INTO public.typed_customer VALUES (1, 'typed', 1.00, statement_timestamp());
 GRANT SELECT, MAINTAIN ON public.typed_customer TO mdm_administrator;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -1750,7 +1799,32 @@ SELECT * FROM mdm.create(mdm.entity(
     matches => ARRAY[mdm.match(name => 'same_label', fields => ARRAY['label'],
         comparison => 'exact', strength => 'identity', evidence_group => 'label')],
     golden_values => ARRAY[]::jsonb[]));
+SELECT mdm.refresh('typed_customer', 'ALLOW');
+DO $$
+DECLARE
+    customer_record_id uuid;
+BEGIN
+    SELECT source_record_id INTO STRICT customer_record_id
+    FROM public.e2e_source_records(ARRAY[9001]::bigint[]);
+    BEGIN
+        PERFORM mdm.preview(
+            'typed_customer', 'scoped',
+            pg_catalog.jsonb_build_object('source_record_ids', pg_catalog.jsonb_build_array(customer_record_id::text))
+        );
+        RAISE EXCEPTION 'scoped preview accepted a source record from another entity';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'MDM_SOURCE_INVALID: invalid source contract: scoped preview cannot include a record from another entity' THEN
+            RAISE;
+        END IF;
+    END;
+END
+$$;
 ROLLBACK;
+RESET ROLE;
+\connect foundation postgres
+DROP FUNCTION public.e2e_source_records(bigint[]);
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
 DO $$
 BEGIN
     BEGIN
