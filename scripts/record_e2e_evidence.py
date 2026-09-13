@@ -67,7 +67,7 @@ cpu_info = {
     "visible_processors": int(in_container("nproc")),
     "model": in_container("awk -F: '/model name/ {sub(/^[ \\t]+/, \"\", $2); print $2; exit}' /proc/cpuinfo"),
 }
-storage_info = in_container("df -B1 /var/lib/postgresql/data")
+storage_info = in_container('df -B1 "$PGDATA"')
 package_manifest = in_container("cat /evidence/pg_mdm-package-manifest.sha256") + "\n"
 evidence_dir = ROOT / "evidence" / "v0.12"
 evidence_dir.mkdir(parents=True, exist_ok=True)
