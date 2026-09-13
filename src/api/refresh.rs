@@ -192,9 +192,14 @@ fn load_context(
         .ok_or_else(|| MdmError::Spi("artifact ID is NULL".into()))?;
     let binding = client
         .select(
-            "SELECT b.graph_binding_id::text, b.graph_digest, gm.relation_name FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC LIMIT 1",
+            "SELECT b.graph_binding_id::text, b.graph_digest, gm.relation_name FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 AND b.artifact_id = $4::pg_catalog.uuid ORDER BY b.graph_generation DESC LIMIT 1",
             Some(1),
-            &[entity_id.clone().into(), definition_version.into(), format!("golden/{}", entity_name).into()],
+            &[
+                entity_id.clone().into(),
+                definition_version.into(),
+                format!("golden/{}", entity_name).into(),
+                artifact_id.clone().into(),
+            ],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
     if binding.is_empty() {
@@ -2410,5 +2415,64 @@ mod tests {
         assert!(parse_preview_uuid("00000000-0000-0000-0000-000000000001").is_ok());
         assert!(parse_preview_uuid("00000000-0000-0000-0000-00000000000A").is_err());
         assert!(parse_preview_uuid("００００００００-0000-0000-0000-000000000001").is_err());
+    }
+
+    #[test]
+    fn scoped_preview_rejects_decision_closure_over_limit() {
+        let id = |value| Uuid::from_bytes([value; 16]);
+        let context = Context {
+            entity_id: String::new(),
+            entity: parse_entity(json!({
+                "name": "customer",
+                "sources": [], "fields": [], "matches": [], "golden_values": [],
+                "preset": null, "limits": {"max_decision_closure": 2},
+                "execution_role": null
+            }))
+            .expect("test entity parses"),
+            definition_version: 1,
+            decision_epoch: 0,
+            publication_revision: 0,
+            artifact_id: String::new(),
+            graph_digest: Vec::new(),
+            graph_root: String::new(),
+            evidence_relation: String::new(),
+            golden_relation: String::new(),
+        };
+        let records = [id(1), id(2), id(3)]
+            .into_iter()
+            .map(|id| SourceRow {
+                id,
+                source_name: "test".into(),
+                sort_key: id.as_bytes().to_vec(),
+            })
+            .collect::<Vec<_>>();
+        let edges = [(id(1), id(2)), (id(2), id(3))]
+            .into_iter()
+            .map(
+                |(left_source_record_id, right_source_record_id)| DecisionEdge {
+                    decision_id: id(0),
+                    left_source_record_id,
+                    right_source_record_id,
+                    decision: DecisionKind::Match,
+                },
+            )
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            expand_decision_scope(
+                &context,
+                BTreeSet::from([id(1)]),
+                &records,
+                &IdentityState::default(),
+                &[],
+                &edges,
+                &[],
+            ),
+            Err(MdmError::ResolverLimit {
+                resource: "max_decision_closure",
+                observed: 3,
+                limit: 2
+            })
+        ));
     }
 }
