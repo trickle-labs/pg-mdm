@@ -7,15 +7,15 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:d23f69ed1e649a9677071db26e7bc21921561f6cfb1a0084c9d95528b52dc92e",
+    "docker_image_id": "sha256:de04b23170c6e79509853ef9cfa9aa3dd628781571f9acf3e4f0883271c80ec1",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 435761152,
-      "visible_available_bytes": 6658473984,
+      "cgroup_peak_bytes": 456286208,
+      "visible_available_bytes": 6473121792,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 117824516096 810321764352  13% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 117825490944 810320789504  13% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
@@ -42,13 +42,13 @@
     "last_customer_refresh": {
       "active_records": 6,
       "component_checks": 0,
-      "elapsed_ms": 1203,
+      "elapsed_ms": 2064,
       "publication_revision": 7,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 406,
-        "graph_refresh": 381,
-        "mdm_resolution": 20,
-        "publication": 1
+        "elapsed_before_operation_completion": 690,
+        "graph_refresh": 652,
+        "mdm_resolution": 29,
+        "publication": 4
       }
     },
     "max_block_records": 0,
@@ -76,9 +76,9 @@
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-13T17:50:30.602340+00:00",
+  "recorded_at_utc": "2026-09-13T20:55:11.715998+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including boundary, restore, and clone assertions, returned successfully.",
-  "source_commit": "27c7468db16eb5f0c9fe10ec20dd9f47d281e6eb"
+  "source_commit": "83e1da8dbc3a5469622c77ff3f71dc037f7c1256"
 }
