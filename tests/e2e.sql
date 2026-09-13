@@ -424,22 +424,30 @@ DECLARE
 BEGIN
     refreshed := public.refresh_mdm_graph(roots);
     SELECT NOT EXISTS (
-               SELECT * FROM public.mdm_candidate_blocks_auto
+               SELECT channel_id, block_key, source_record_id, source_sort_key
+               FROM public.mdm_candidate_blocks_auto
                EXCEPT ALL
-               SELECT * FROM public.mdm_candidate_blocks_full)
+               SELECT channel_id, block_key, source_record_id, source_sort_key
+               FROM public.mdm_candidate_blocks_full)
        AND NOT EXISTS (
-               SELECT * FROM public.mdm_candidate_blocks_full
+               SELECT channel_id, block_key, source_record_id, source_sort_key
+               FROM public.mdm_candidate_blocks_full
                EXCEPT ALL
-               SELECT * FROM public.mdm_candidate_blocks_auto)
+               SELECT channel_id, block_key, source_record_id, source_sort_key
+               FROM public.mdm_candidate_blocks_auto)
       INTO block_rows_equal;
     SELECT NOT EXISTS (
-               SELECT * FROM public.mdm_candidate_pairs_auto
+               SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+               FROM public.mdm_candidate_pairs_auto
                EXCEPT ALL
-               SELECT * FROM public.mdm_candidate_pairs_full)
+               SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+               FROM public.mdm_candidate_pairs_full)
        AND NOT EXISTS (
-               SELECT * FROM public.mdm_candidate_pairs_full
+               SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+               FROM public.mdm_candidate_pairs_full
                EXCEPT ALL
-               SELECT * FROM public.mdm_candidate_pairs_auto)
+               SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+               FROM public.mdm_candidate_pairs_auto)
       INTO pair_rows_equal;
     WITH blocks AS (
              SELECT canonical_bytes AS block_key, source_record_id, source_sort_key
@@ -450,7 +458,8 @@ BEGIN
              FROM blocks GROUP BY block_key
          )
     SELECT NOT EXISTS (
-               SELECT * FROM public.mdm_candidate_blocks_full
+               SELECT channel_id, block_key, source_record_id, source_sort_key
+               FROM public.mdm_candidate_blocks_full
                EXCEPT ALL
                SELECT 'email'::text, canonical_bytes, source_record_id, source_sort_key
                FROM public.mdm_candidate_source
@@ -460,9 +469,11 @@ BEGIN
                FROM public.mdm_candidate_source
                WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
                EXCEPT ALL
-               SELECT * FROM public.mdm_candidate_blocks_full)
+               SELECT channel_id, block_key, source_record_id, source_sort_key
+               FROM public.mdm_candidate_blocks_full)
        AND NOT EXISTS (
-               SELECT * FROM public.mdm_candidate_pairs_full
+               SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+               FROM public.mdm_candidate_pairs_full
                EXCEPT ALL
                SELECT l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key
                FROM blocks l
@@ -476,7 +487,8 @@ BEGIN
                JOIN blocks r USING (block_key)
                WHERE l.source_sort_key < r.source_sort_key AND s.block_records <= 100
                EXCEPT ALL
-               SELECT * FROM public.mdm_candidate_pairs_full)
+               SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+               FROM public.mdm_candidate_pairs_full)
       INTO full_rows_valid;
     IF NOT full_rows_valid
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto') IS NULL
