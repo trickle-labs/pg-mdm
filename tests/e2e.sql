@@ -251,6 +251,7 @@ GRANT mdm_administrator, mdm_configurator, mdm_steward_role, mdm_output_reader,
 GRANT USAGE ON SCHEMA mdm_admin TO mdm_administrator;
 GRANT USAGE ON SCHEMA mdm TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO mdm_administrator;
+GRANT EXECUTE ON FUNCTION mdm_admin.drop_entity(text, text) TO mdm_administrator;
 
 \connect postgres postgres
 CREATE DATABASE graph_conformance;
@@ -902,6 +903,60 @@ FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer defin
 \quit 1
 \endif
 
+DO $$
+DECLARE
+    summary jsonb;
+BEGIN
+    summary := mdm.describe('customer', 'summary');
+    IF summary->>'active_version' IS NOT NULL
+       OR summary->>'graph_state' <> 'ready'
+       OR (summary->>'member_count')::integer <= 0
+       OR summary::text LIKE '%mdm_graph.%'
+       OR summary->'graph' ? 'contract'
+       OR summary->'graph' ? 'members' THEN
+        RAISE EXCEPTION 'create did not install a bounded dormant graph: %', summary;
+    END IF;
+END
+$$;
+
+\connect foundation postgres
+DO $$
+DECLARE
+    member record;
+    contract jsonb;
+    row_count bigint;
+    member_count integer := 0;
+BEGIN
+    FOR member IN
+        SELECT gm.relation_oid, gm.relation_name
+        FROM mdm_internal.graph_members gm
+        JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+        JOIN mdm_internal.entities e USING (entity_id)
+        WHERE e.entity_name = 'customer' AND gb.definition_version = 1
+        ORDER BY gm.topological_ordinal
+    LOOP
+        member_count := member_count + 1;
+        SELECT c.contract INTO STRICT contract
+        FROM pgtrickle.stream_table_contract(member.relation_oid::regclass) c;
+        IF contract->>'orchestration_mode' <> 'EXTERNAL'
+           OR contract #>> '{relation,owner}' <> 'mdm_administrator' THEN
+            RAISE EXCEPTION 'graph member contract is not externally owned: %', contract;
+        END IF;
+        EXECUTE pg_catalog.format('SELECT pg_catalog.count(*) FROM %s', member.relation_oid::regclass)
+            INTO row_count;
+        IF row_count <> 0 THEN
+            RAISE EXCEPTION 'graph member was initialized before refresh: % has % rows',
+                member.relation_name, row_count;
+        END IF;
+    END LOOP;
+    IF member_count = 0 THEN
+        RAISE EXCEPTION 'create did not install graph members';
+    END IF;
+END
+$$;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
 WITH proposed AS (
     SELECT mdm.entity(
         name => 'customer',
@@ -932,11 +987,19 @@ FROM mdm.create((SELECT definition FROM proposed), 1, NULL)
 DO $$
 DECLARE
     described jsonb;
+    summary jsonb;
     result record;
 BEGIN
     described := mdm.describe('customer', 'definition');
+    summary := mdm.describe('customer', 'summary');
     IF described->>'name' IS DISTINCT FROM 'customer' THEN
         RAISE EXCEPTION 'definition description did not round trip';
+    END IF;
+    SELECT * INTO STRICT result FROM mdm.create(described, 1, 'definition round trip');
+    IF result.changed
+       OR encode(result.definition_digest, 'hex') IS DISTINCT FROM summary->>'definition_digest'
+       OR encode(result.artifact_digest, 'hex') IS DISTINCT FROM summary->>'artifact_digest' THEN
+        RAISE EXCEPTION 'definition round trip changed a semantic or artifact digest';
     END IF;
     SELECT * INTO STRICT result FROM mdm.create(
         jsonb_set(described, '{limits,max_candidate_pairs}', '100'), 1, 'definition B');
@@ -989,10 +1052,10 @@ BEGIN
     IF (SELECT count(DISTINCT definition_digest) FROM mdm_internal.definitions) <> 2 THEN
         RAISE EXCEPTION 'A to B to A did not preserve definition identity';
     END IF;
-    IF (SELECT count(*) FROM mdm_internal.operations) <> 4
+    IF (SELECT count(*) FROM mdm_internal.operations) <> 5
        OR (SELECT count(*) FROM mdm_internal.operations
            WHERE operation_kind = 'create' AND status = 'succeeded'
-             AND actor_name = 'mdm_test_login' AND actor_role_name = 'mdm_administrator') <> 4 THEN
+             AND actor_name = 'mdm_test_login' AND actor_role_name = 'mdm_administrator') <> 5 THEN
         RAISE EXCEPTION 'unexpected operation count after v0.2 create';
     END IF;
 END
@@ -1074,6 +1137,33 @@ RESET ROLE;
 
 
 \connect foundation postgres
+DO $$
+DECLARE entity_columns text[]; member_columns text[]; review_columns text[];
+BEGIN
+    SELECT pg_catalog.array_agg(a.attname::text || ':' || pg_catalog.format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum)
+      INTO entity_columns
+      FROM pg_catalog.pg_attribute a
+     WHERE a.attrelid = 'mdm_out.customer'::pg_catalog.regclass
+       AND a.attnum > 0 AND NOT a.attisdropped;
+    SELECT pg_catalog.array_agg(a.attname::text || ':' || pg_catalog.format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum)
+      INTO member_columns
+      FROM pg_catalog.pg_attribute a
+     WHERE a.attrelid = 'mdm_out.customer_members'::pg_catalog.regclass
+       AND a.attnum > 0 AND NOT a.attisdropped;
+    SELECT pg_catalog.array_agg(a.attname::text || ':' || pg_catalog.format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum)
+      INTO review_columns
+      FROM pg_catalog.pg_attribute a
+     WHERE a.attrelid = 'mdm_out.customer_review'::pg_catalog.regclass
+       AND a.attnum > 0 AND NOT a.attisdropped;
+    IF entity_columns IS DISTINCT FROM ARRAY['mdm_id:uuid', 'name:text', 'member_count:bigint', 'has_review:boolean', 'last_change_revision:bigint']
+       OR member_columns IS DISTINCT FROM ARRAY['source_record_id:uuid', 'source_name:name', 'source_id:jsonb', 'mdm_id:uuid', 'active:boolean', 'first_membership_revision:bigint', 'last_membership_revision:bigint', 'membership_reason:text', 'last_change_revision:bigint']
+       OR review_columns IS DISTINCT FROM ARRAY['review_id:uuid', 'issue_key:bytea', 'occurrence:integer', 'status:text', 'severity:text', 'reason_code:text', 'subjects:jsonb', 'masked_summary:jsonb', 'opened_revision:bigint', 'resolved_revision:bigint', 'last_change_revision:bigint', 'concurrency_version:bigint'] THEN
+        RAISE EXCEPTION 'public output table names, column order, or PostgreSQL types changed: %, %, %',
+            entity_columns, member_columns, review_columns;
+    END IF;
+END
+$$;
+
 CREATE TABLE public.e2e_pg_trickle_upgrade_snapshot AS
 SELECT e.publication_revision,
        (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.graph_generation)
@@ -1301,7 +1391,9 @@ BEGIN
         'memberships', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_internal.memberships m JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
         'aliases', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(a) ORDER BY a.alias_mdm_id) FROM mdm_internal.identity_aliases a JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
         'splits', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(s) ORDER BY s.parent_mdm_id, s.publication_revision, s.child_mdm_id) FROM mdm_internal.identity_splits s JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
-        'golden', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(g) - 'publication_revision' ORDER BY g.mdm_id, g.field_name) FROM mdm_internal.golden_provenance g JOIN mdm_internal.entities e ON e.entity_id = g.entity_id AND e.publication_revision = g.publication_revision WHERE e.entity_name = 'customer'), '[]'::jsonb)
+        'golden', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(g) - 'publication_revision' ORDER BY g.mdm_id, g.field_name) FROM mdm_internal.golden_provenance g JOIN mdm_internal.entities e ON e.entity_id = g.entity_id AND e.publication_revision = g.publication_revision WHERE e.entity_name = 'customer'), '[]'::jsonb),
+        'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_internal.reviews r JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb),
+        'facts', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(f) ORDER BY f.publication_revision, f.fact_number) FROM mdm_internal.resolution_facts f JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'), '[]'::jsonb)
     ) INTO current_internal;
     SELECT state INTO previous_internal FROM public.e2e_customer_state_snapshot WHERE snapshot_id;
     IF FOUND THEN
@@ -1314,6 +1406,9 @@ BEGIN
         INSERT INTO public.e2e_customer_state_snapshot(state) VALUES (current_internal);
     END IF;
     RETURN pg_catalog.jsonb_build_object(
+        'publication_revision', (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'),
+        'publication_count', (SELECT count(*) FROM mdm_internal.publications p JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'),
+        'observation_count', (SELECT count(*) FROM mdm_internal.publication_observations o JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'),
         'members', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_out.customer_members m), '[]'::jsonb),
         'entities', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id) FROM mdm_out.customer e), '[]'::jsonb),
         'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb),
@@ -1558,13 +1653,25 @@ WHERE id = 2;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
+DECLARE before_state jsonb; after_state jsonb;
 BEGIN
+    before_state := public.e2e_customer_state();
     BEGIN
         PERFORM mdm.refresh('customer', 'ALLOW');
         RAISE EXCEPTION 'refresh unexpectedly passed the injected publication failure';
     EXCEPTION WHEN OTHERS THEN
         IF strpos(SQLERRM, 'injected publication failure') = 0 THEN RAISE; END IF;
     END;
+    after_state := public.e2e_customer_state();
+    IF after_state->'internal_changed' <> '[]'::jsonb
+       OR after_state->'entities' IS DISTINCT FROM before_state->'entities'
+       OR after_state->'members' IS DISTINCT FROM before_state->'members'
+       OR after_state->'reviews' IS DISTINCT FROM before_state->'reviews'
+       OR after_state->'publication_revision' IS DISTINCT FROM before_state->'publication_revision'
+       OR after_state->'publication_count' IS DISTINCT FROM before_state->'publication_count'
+       OR after_state->'observation_count' IS DISTINCT FROM before_state->'observation_count' THEN
+        RAISE EXCEPTION 'failed publication changed internal or public semantic state: before %, after %', before_state, after_state;
+    END IF;
 END
 $$;
 RESET ROLE;
@@ -1613,18 +1720,24 @@ DELETE FROM public.crm_customer WHERE id = 1;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
-DECLARE result jsonb; output_state jsonb;
+DECLARE result jsonb; before_state jsonb; output_state jsonb;
 BEGIN
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
        OR (result->>'publication_revision')::bigint <> 5 THEN
         RAISE EXCEPTION 'delete refresh did not publish: %', result;
     END IF;
-    PERFORM public.e2e_customer_state();
+    before_state := public.e2e_customer_state();
     result := mdm.refresh('customer', 'ALLOW');
     output_state := public.e2e_customer_state();
     IF result->>'changed' <> 'false'
-       OR (result->>'publication_revision')::bigint <> 5 THEN
+       OR (result->>'publication_revision')::bigint <> 5
+       OR output_state->'internal_changed' <> '[]'::jsonb
+       OR output_state->'entities' IS DISTINCT FROM before_state->'entities'
+       OR output_state->'members' IS DISTINCT FROM before_state->'members'
+       OR output_state->'reviews' IS DISTINCT FROM before_state->'reviews'
+       OR output_state->'publication_count' IS DISTINCT FROM before_state->'publication_count'
+       OR (output_state->>'observation_count')::bigint <> (before_state->>'observation_count')::bigint + 1 THEN
         RAISE EXCEPTION 'no-op refresh changed the publication: changed %, revision %, internal categories %',
             result->>'changed', result->>'publication_revision', output_state->'internal_changed';
     END IF;
@@ -1878,6 +1991,108 @@ $$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;
+
+-- Entity drop validates the complete binding before changing graph or MDM state.
+BEGIN;
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+DO $$
+DECLARE proposed jsonb;
+BEGIN
+    proposed := jsonb_set(mdm.describe('customer', 'definition'), '{name}', '"drop_probe"');
+    PERFORM mdm.create(proposed);
+END
+$$;
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm_admin.drop_entity('drop_probe', 'wrong confirmation');
+        RAISE EXCEPTION 'entity drop accepted the wrong confirmation';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_GRAPH_LIFECYCLE') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+CREATE TABLE public.e2e_drop_member_names AS
+SELECT DISTINCT gm.relation_name
+FROM mdm_internal.graph_members gm
+JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+JOIN mdm_internal.entities e USING (entity_id)
+WHERE e.entity_name = 'drop_probe';
+WITH target AS (
+    SELECT gm.graph_binding_id, gm.logical_id
+    FROM mdm_internal.graph_members gm
+    JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'drop_probe' AND gb.graph_generation = (
+        SELECT max(b.graph_generation)
+        FROM mdm_internal.graph_bindings b
+        WHERE b.entity_id = e.entity_id
+    )
+    ORDER BY gm.topological_ordinal
+    LIMIT 1
+)
+UPDATE mdm_internal.graph_members gm
+SET relation_oid = (gm.relation_oid::bigint + 1000000)::oid
+FROM target
+WHERE gm.graph_binding_id = target.graph_binding_id
+  AND gm.logical_id = target.logical_id;
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm_admin.drop_entity('drop_probe', 'drop_probe');
+        RAISE EXCEPTION 'entity drop accepted a changed member OID';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(SQLERRM, 'MDM_GRAPH_LIFECYCLE') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM mdm_internal.entities WHERE entity_name = 'drop_probe')
+       OR EXISTS (
+           SELECT FROM public.e2e_drop_member_names n
+           WHERE pg_catalog.to_regclass(n.relation_name) IS NULL
+       ) THEN
+        RAISE EXCEPTION 'failed entity drop did not roll back every graph and output change';
+    END IF;
+END
+$$;
+UPDATE mdm_internal.graph_members gm
+SET relation_oid = pg_catalog.to_regclass(gm.relation_name)::oid
+WHERE pg_catalog.to_regclass(gm.relation_name) IS NOT NULL
+  AND gm.relation_oid <> pg_catalog.to_regclass(gm.relation_name)::oid;
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+SELECT mdm_admin.drop_entity('drop_probe', 'drop_probe');
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM mdm_internal.entities WHERE entity_name = 'drop_probe')
+       OR EXISTS (
+           SELECT FROM public.e2e_drop_member_names n
+           WHERE pg_catalog.to_regclass(n.relation_name) IS NOT NULL
+       ) THEN
+        RAISE EXCEPTION 'confirmed entity drop left MDM state or graph members behind';
+    END IF;
+END
+$$;
+ROLLBACK;
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM mdm_internal.entities WHERE entity_name = 'drop_probe')
+       OR pg_catalog.to_regclass('mdm_out.customer') IS NULL THEN
+        RAISE EXCEPTION 'lifecycle qualification did not roll back cleanly';
+    END IF;
+END
+$$;
 
 \connect postgres postgres
 DROP DATABASE graph_conformance WITH (FORCE);

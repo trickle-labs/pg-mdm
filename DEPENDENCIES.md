@@ -19,6 +19,12 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.2/pg_trickle-0.105.2-pg18-linux-amd64.tar.gz` |
 | Artifact SHA-256 | `bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416` |
 | Capture mode | trigger |
+| E2E database `LC_COLLATE` / `LC_CTYPE` | `en_US.utf8` / `en_US.utf8` |
+| Normalization fixture SHA-256 | `c01d1b0fe2b938dd09d3afa48e4e43bf648b47d0715595aa0b208ffca68826aa` |
+| Candidate fixture SHA-256 | `a1e25c791b20c4420b665ee5d36fd4b9ea4946be0d60deb87ac1e824858b6478` |
+| Comparator fixture SHA-256 | `87802cdfad5c4ed7a917bf4e0b184beb24836203a8c58b1477403fc5fe44cfd0` |
+| Pair-precedence fixture SHA-256 | `ed2324ebcb1744ed5cf945189b7a5b30bb1838a38cd1c6f537a206f79986bd33` |
+| Organization-quality fixture SHA-256 | `19f069e7227f10fb7d61fa60d490d763ce2eb578e2f09f04c631cac23d5b02ee` |
 
 The baseline capability response contains `external_graph_refresh 1.0 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.
 

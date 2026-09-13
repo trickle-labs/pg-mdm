@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use pgrx::Uuid;
 
@@ -72,15 +72,60 @@ fn union(parent: &mut BTreeMap<Uuid, Uuid>, left: Uuid, right: Uuid) {
     }
 }
 
-fn contradiction_path(edge: &DecisionEdge, other: &DecisionEdge) -> String {
+fn contradiction_path(matches: &[DecisionEdge], cannot: &DecisionEdge) -> String {
+    let mut graph = BTreeMap::<Uuid, Vec<(Uuid, &DecisionEdge)>>::new();
+    for edge in matches
+        .iter()
+        .filter(|edge| edge.decision == DecisionKind::Match)
+    {
+        graph
+            .entry(edge.left_source_record_id)
+            .or_default()
+            .push((edge.right_source_record_id, edge));
+        graph
+            .entry(edge.right_source_record_id)
+            .or_default()
+            .push((edge.left_source_record_id, edge));
+    }
+    for neighbors in graph.values_mut() {
+        neighbors.sort_by_key(|(record, edge)| (*record, edge.decision_id));
+    }
+
+    let start = cannot.left_source_record_id;
+    let end = cannot.right_source_record_id;
+    let mut previous = BTreeMap::<Uuid, (Uuid, &DecisionEdge)>::new();
+    let mut queue = VecDeque::from([start]);
+    let mut visited = BTreeSet::from([start]);
+    while let Some(record) = queue.pop_front() {
+        if record == end {
+            break;
+        }
+        for (neighbor, edge) in graph.get(&record).into_iter().flatten() {
+            if visited.insert(*neighbor) {
+                previous.insert(*neighbor, (record, edge));
+                queue.push_back(*neighbor);
+            }
+        }
+    }
+    let mut path = Vec::new();
+    let mut record = end;
+    while record != start {
+        let Some((parent, edge)) = previous.get(&record).copied() else {
+            break;
+        };
+        path.push(format!(
+            "{}:{}-{}",
+            edge.decision_id, edge.left_source_record_id, edge.right_source_record_id
+        ));
+        record = parent;
+    }
+    path.reverse();
     format!(
-        "{}:{}-{} crosses {}:{}-{}",
-        edge.decision_id,
-        edge.left_source_record_id,
-        edge.right_source_record_id,
-        other.decision_id,
-        other.left_source_record_id,
-        other.right_source_record_id
+        "MATCH path [{}] crosses NOT_MATCH {}:{}-{}",
+        path.join(" -> "),
+        cannot.decision_id,
+        start,
+        end
     )
 }
 
@@ -143,20 +188,9 @@ pub fn validate_proposed_decision(
         if find(&mut parent, edge.left_source_record_id)
             == find(&mut parent, edge.right_source_record_id)
         {
-            let match_edge = current.iter().find(|candidate| {
-                candidate.decision == DecisionKind::Match
-                    && find(&mut parent, candidate.left_source_record_id)
-                        == find(&mut parent, candidate.right_source_record_id)
-            });
-            let path = match_edge
-                .map(|match_edge| contradiction_path(match_edge, edge))
-                .unwrap_or_else(|| {
-                    format!(
-                        "{}:{}-{}",
-                        edge.decision_id, edge.left_source_record_id, edge.right_source_record_id
-                    )
-                });
-            return Err(MdmError::DecisionContradiction(path));
+            return Err(MdmError::DecisionContradiction(contradiction_path(
+                &current, edge,
+            )));
         }
     }
     Ok(())

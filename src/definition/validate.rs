@@ -624,4 +624,26 @@ mod tests {
         );
         assert!(manifest.get("capabilities").is_none());
     }
+
+    #[test]
+    fn output_names_reserve_suffixes_without_postgres_truncation() {
+        let names = output_names(&"a".repeat(55)).unwrap();
+        assert_eq!(
+            names.iter().map(|name| name.name.len()).collect::<Vec<_>>(),
+            [55, 63, 62]
+        );
+        assert!(output_names(&"a".repeat(56)).is_err());
+    }
+
+    #[test]
+    fn supporting_matches_cannot_own_candidate_channels() {
+        let mut entity = definition(("email", "email"));
+        entity.matches[0].strength = "supporting".into();
+        entity.matches[0].candidate = Some(json!({"kind": "exact", "field": "email"}));
+        assert!(matches!(
+            validate_entity_local(&entity),
+            Err(MdmError::DefinitionInvalid(message))
+                if message == "supporting match match_a cannot define a candidate channel"
+        ));
+    }
 }

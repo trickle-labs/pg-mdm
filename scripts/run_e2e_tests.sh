@@ -167,6 +167,8 @@ original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d founda
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
 original_artifacts=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$artifact_query")
+source_identity_query="SELECT md5(COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(identity_digest, 'hex') || ':' || key_contract::text, '|' ORDER BY source_identity_id) FROM mdm_internal.source_identities), '') || '/' || COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(source_record_key, 'hex') || ':' || source_record_id::text || ':' || active::text, '|' ORDER BY source_identity_id, source_record_key) FROM mdm_internal.source_records), ''))"
+original_source_identities=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$source_identity_query")
 docker exec "$container" pg_dump -Fc -U postgres foundation >"$dump_file"
 before_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
     -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
@@ -253,6 +255,8 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v original_source_oid="$original_source_oid" -v original_role_oid="$original_role_oid" -f /tests/restore.sql
 restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
 test "$original_artifacts" = "$restored_artifacts"
+restored_source_identities=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$source_identity_query")
+test "$original_source_identities" = "$restored_source_identities"
 
 docker exec "$container" createdb -U postgres --template=restored pg_mdm_clone
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d pg_mdm_clone <<'SQL'

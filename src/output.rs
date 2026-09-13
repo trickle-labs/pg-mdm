@@ -150,4 +150,15 @@ mod tests {
         assert!(ddl[1].contains("customer_members"));
         assert!(ddl[2].contains("customer_review"));
     }
+
+    #[test]
+    fn output_schema_rejects_reserved_columns_and_names_that_would_truncate() {
+        assert!(validate_output_fields(&[field("MDM_ID", 1, "text")]).is_err());
+        assert!(
+            validate_output_fields(&[field("email", 1, "text"), field("EMAIL", 2, "text")])
+                .is_err()
+        );
+        assert!(output_table_ddl(&"a".repeat(56), &[]).is_err());
+        assert!(output_table_ddl(&"a".repeat(55), &[]).is_ok());
+    }
 }

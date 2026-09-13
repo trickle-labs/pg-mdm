@@ -690,13 +690,29 @@ fn load_pair_decisions(
     active: &BTreeSet<Uuid>,
     source_names: &BTreeMap<Uuid, String>,
 ) -> Result<Vec<crate::pair::PairDecision>, MdmError> {
+    let max_candidate_pairs = context
+        .entity
+        .limits
+        .get("max_candidate_pairs")
+        .map(|value| crate::semantics::validate_limit_value("max_candidate_pairs", value))
+        .transpose()?
+        .unwrap_or_else(|| crate::semantics::candidate_limits().max_candidate_pairs);
+    let (max_rows, fetch_limit) =
+        pair_evidence_fetch_limit(max_candidate_pairs, context.entity.matches.len())?;
     let query = format!(
-        "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key, rule, evidence_group, class, score, comparator, comparator_version, left_value_digest, right_value_digest FROM {} ORDER BY left_sort_key, right_sort_key, rule",
+        "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key, rule, evidence_group, class, score, comparator, comparator_version, left_value_digest, right_value_digest FROM {} ORDER BY left_sort_key, right_sort_key, rule LIMIT $1::bigint",
         context.evidence_relation
     );
     let rows = client
-        .select(&query, None, &[])
+        .select(&query, None, &[fetch_limit.into()])
         .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if rows.len() > max_rows {
+        return Err(MdmError::ResolverLimit {
+            resource: "max_pair_evidence_rows",
+            observed: rows.len(),
+            limit: max_rows,
+        });
+    }
     let mut grouped: BTreeMap<(Uuid, Uuid), PairEvidence> = BTreeMap::new();
     for row in rows {
         let left = row
@@ -816,6 +832,20 @@ fn load_pair_decisions(
             )
         })
         .collect())
+}
+
+fn pair_evidence_fetch_limit(
+    max_candidate_pairs: usize,
+    rule_count: usize,
+) -> Result<(usize, i64), MdmError> {
+    let max_rows = max_candidate_pairs
+        .checked_mul(rule_count.max(1))
+        .ok_or_else(|| MdmError::ResolverInvalid("pair evidence row limit overflow".into()))?;
+    let fetch_limit = max_rows
+        .checked_add(1)
+        .and_then(|limit| i64::try_from(limit).ok())
+        .ok_or_else(|| MdmError::ResolverInvalid("pair evidence row limit overflow".into()))?;
+    Ok((max_rows, fetch_limit))
 }
 
 #[allow(clippy::useless_conversion)]
@@ -2270,6 +2300,13 @@ pub(crate) fn preview_entity(request: Internal) -> JsonB {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evidence_reader_fetches_at_most_one_row_past_its_candidate_ceiling() {
+        assert_eq!(pair_evidence_fetch_limit(10, 3).unwrap(), (30, 31));
+        assert_eq!(pair_evidence_fetch_limit(10, 0).unwrap(), (10, 11));
+        assert!(pair_evidence_fetch_limit(usize::MAX, 2).is_err());
+    }
 
     #[test]
     fn refresh_metadata_rejects_unproven_boundaries() {

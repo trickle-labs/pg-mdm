@@ -776,4 +776,105 @@ mod tests {
             oracle::resolve(input).unwrap()
         );
     }
+
+    #[test]
+    fn generated_small_graphs_match_oracle_and_ignore_input_order() {
+        let pairs = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)];
+        let records = || {
+            (1..=4)
+                .map(|value| ResolverRecord {
+                    source_record_id: id(value),
+                    source_sort_key: vec![value],
+                    authority: BTreeMap::new(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let manual = DecisionEdge {
+            decision_id: id(9),
+            left_source_record_id: id(1),
+            right_source_record_id: id(2),
+            decision: DecisionKind::Match,
+        };
+        let cannot = DecisionEdge {
+            decision_id: id(8),
+            left_source_record_id: id(3),
+            right_source_record_id: id(4),
+            decision: DecisionKind::NotMatch,
+        };
+
+        for mask in 0..(1 << pairs.len()) {
+            let decisions = pairs
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| mask & (1 << *bit) != 0)
+                .map(|(bit, (left, right))| {
+                    edge(*left, *right, &format!("g{bit}"), (bit % 3) as u8)
+                })
+                .collect::<Vec<_>>();
+            let baseline = ResolverInput {
+                records: records(),
+                manual_matches: vec![manual.clone()],
+                cannot_links: vec![cannot.clone()],
+                pair_decisions: decisions.clone(),
+                limits: ResolverLimits::default(),
+            };
+            let expected = resolve(baseline.clone()).unwrap();
+            assert_eq!(
+                expected,
+                oracle::resolve(baseline).unwrap(),
+                "edge mask {mask:#08b}"
+            );
+
+            let reordered = ResolverInput {
+                records: records().into_iter().rev().collect(),
+                manual_matches: vec![DecisionEdge {
+                    left_source_record_id: id(2),
+                    right_source_record_id: id(1),
+                    ..manual.clone()
+                }],
+                cannot_links: vec![DecisionEdge {
+                    left_source_record_id: id(4),
+                    right_source_record_id: id(3),
+                    ..cannot.clone()
+                }],
+                pair_decisions: decisions.into_iter().rev().collect(),
+                limits: ResolverLimits::default(),
+            };
+            assert_eq!(
+                resolve(reordered.clone()).unwrap(),
+                expected,
+                "edge mask {mask:#08b}"
+            );
+            assert_eq!(
+                oracle::resolve(reordered).unwrap(),
+                expected,
+                "edge mask {mask:#08b}"
+            );
+            assert_eq!(expected.memberships.len(), 4);
+            assert_eq!(
+                expected
+                    .memberships
+                    .iter()
+                    .map(|membership| membership.source_record_id)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([id(1), id(2), id(3), id(4)])
+            );
+            assert!(expected.rejected.iter().all(|fact| {
+                !fact.reason_code.is_empty()
+                    && fact.reason_code.len() <= 64
+                    && fact.evidence_groups.len() <= pairs.len()
+            }));
+            let left = expected
+                .memberships
+                .iter()
+                .find(|membership| membership.source_record_id == id(3))
+                .unwrap();
+            let right = expected
+                .memberships
+                .iter()
+                .find(|membership| membership.source_record_id == id(4))
+                .unwrap();
+            assert_ne!(left.component_key, right.component_key);
+        }
+    }
 }
