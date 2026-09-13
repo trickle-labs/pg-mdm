@@ -58,8 +58,8 @@ def in_container(command):
 
 
 memory_info = {
-    "visible_total_bytes": int(in_container("awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo")),
-    "visible_available_bytes": int(in_container("awk '/^MemAvailable:/ {print $2 * 1024}' /proc/meminfo")),
+    "visible_total_bytes": int(in_container("awk '/^MemTotal:/ {printf \"%.0f\\n\", $2 * 1024}' /proc/meminfo")),
+    "visible_available_bytes": int(in_container("awk '/^MemAvailable:/ {printf \"%.0f\\n\", $2 * 1024}' /proc/meminfo")),
     "cgroup_limit_bytes": in_container("cat /sys/fs/cgroup/memory.max"),
     "cgroup_peak_bytes": int(in_container("cat /sys/fs/cgroup/memory.peak")),
 }
