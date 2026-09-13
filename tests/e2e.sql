@@ -911,10 +911,21 @@ BEGIN
     IF summary->>'active_version' IS NOT NULL
        OR summary->>'graph_state' <> 'ready'
        OR (summary->>'member_count')::integer <= 0
+       OR summary #>> '{candidate_plan,channels,0,channel_id}' <> 'same_email'
+       OR summary #>> '{candidate_plan,channels,0,fields,0}' <> 'email'
+       OR summary #>> '{candidate_plan,max_block_records}' IS NULL
+       OR summary #>> '{candidate_plan,max_candidate_pairs}' IS NULL
+       OR summary #>> '{candidate_plan,warning_block_records}' IS NULL
+       OR summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_block_records}' IS NULL
+       OR summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_candidate_pairs}' IS NULL
+       OR summary #>> '{candidate_semantics,evidence,absolute_max_comparator_work}' IS NULL
+       OR summary #>> '{candidate_semantics,decisions,absolute_max_decision_closure}' IS NULL
+       OR summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_active_records}' IS NULL
+       OR summary->'resolver_limits' IS NULL
        OR summary::text LIKE '%mdm_graph.%'
        OR summary->'graph' ? 'contract'
        OR summary->'graph' ? 'members' THEN
-        RAISE EXCEPTION 'create did not install a bounded dormant graph: %', summary;
+        RAISE EXCEPTION 'create did not expose the complete bounded plan and dormant graph: %', summary;
     END IF;
 END
 $$;
@@ -1627,6 +1638,15 @@ BEGIN
         WHERE source_name = 'crm' AND active
           AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2 THEN
         RAISE EXCEPTION 'update reference result did not split the records';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mdm_out.customer_members m
+        JOIN mdm_internal.entities e ON e.entity_name = 'customer'
+        WHERE m.source_name = 'crm'
+          AND m.last_change_revision < e.publication_revision
+    ) THEN
+        RAISE EXCEPTION 'public row last-change revisions were not retained independently of the current entity revision';
     END IF;
 END
 $$;
