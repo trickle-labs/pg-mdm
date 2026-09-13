@@ -24,7 +24,7 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Candidate fixture SHA-256 | `a1e25c791b20c4420b665ee5d36fd4b9ea4946be0d60deb87ac1e824858b6478` |
 | Comparator fixture SHA-256 | `87802cdfad5c4ed7a917bf4e0b184beb24836203a8c58b1477403fc5fe44cfd0` |
 | Pair-precedence fixture SHA-256 | `ed2324ebcb1744ed5cf945189b7a5b30bb1838a38cd1c6f537a206f79986bd33` |
-| Organization-quality fixture SHA-256 | `19f069e7227f10fb7d61fa60d490d763ce2eb578e2f09f04c631cac23d5b02ee` |
+| Organization-quality fixture SHA-256 | `f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb` |
 
 The baseline capability response contains `external_graph_refresh 1.0 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.
 

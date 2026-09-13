@@ -6,6 +6,9 @@ container="pg-mdm-e2e-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
 missing_log="$work_dir/missing.log"
+e2e_log="$work_dir/e2e-postgres.log"
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+source_revision=$(git -C "$repo_root" rev-parse HEAD)
 
 cleanup() {
     docker rm -fv "$container" >/dev/null 2>&1 || true
@@ -32,7 +35,7 @@ if docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d missing_de
 fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
 INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
@@ -283,6 +286,12 @@ restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored 
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 test "$clone_sources" = 7
 test "$restored_sources" = 6
+
+docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
+python3 "$repo_root/scripts/record_e2e_evidence.py" \
+    "$container" "$image" "$source_revision" \
+    "$work_dir/database-envelope.json" "$e2e_log"
 
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'

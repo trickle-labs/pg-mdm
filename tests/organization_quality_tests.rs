@@ -312,7 +312,7 @@ fn organization_fixture_report_uses_production_candidate_and_resolution_paths() 
     assert_eq!(fixture.format_version, 1);
     assert_eq!(
         fixture.metadata["thresholds"]["approval_status"],
-        "pending release-owner sign-off"
+        "frozen for v0.12 synthetic regression gate"
     );
 
     let mut partition_reports = serde_json::Map::new();
@@ -322,6 +322,30 @@ fn organization_fixture_report_uses_production_candidate_and_resolution_paths() 
         partition_reports.insert(name.clone(), partition_metrics(records, &current));
         runs.insert(name.clone(), current);
     }
+
+    let held_out = &partition_reports["held_out"];
+    let thresholds = &fixture.metadata["thresholds"];
+    assert_eq!(thresholds["applies_to"], "held_out partition only");
+    assert!(
+        held_out["candidate_recall"].as_f64().unwrap()
+            >= thresholds["candidate_recall_min"].as_f64().unwrap()
+    );
+    assert!(
+        held_out["false_merges"].as_u64().unwrap()
+            <= thresholds["false_merges_max"].as_u64().unwrap()
+    );
+    assert!(
+        held_out["missed_matches"].as_u64().unwrap()
+            <= thresholds["missed_matches_max"].as_u64().unwrap()
+    );
+    assert!(
+        held_out["cluster_errors"].as_u64().unwrap()
+            <= thresholds["cluster_errors_max"].as_u64().unwrap()
+    );
+    assert!(
+        held_out["review_count"].as_u64().unwrap()
+            <= thresholds["review_count_max"].as_u64().unwrap()
+    );
 
     let mut safety_report = Vec::new();
     let mut safety_false_merges = 0usize;
@@ -454,14 +478,16 @@ fn organization_fixture_report_uses_production_candidate_and_resolution_paths() 
     let report = json!({
         "format_version": fixture.format_version,
         "fixture_sha256": fixture_digest,
-        "thresholds_frozen": false,
+        "label_metadata": fixture.metadata,
+        "thresholds_frozen": true,
+        "thresholds": thresholds,
         "partitions": partition_reports,
         "safety_cases": safety_report,
         "safety_false_merges": safety_false_merges,
         "lifecycle_checks": lifecycle_report
     });
     println!(
-        "organization fixture report: {}",
-        serde_json::to_string_pretty(&report).unwrap()
+        "ORGANIZATION_FIXTURE_REPORT={}",
+        serde_json::to_string(&report).unwrap()
     );
 }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
@@ -104,6 +105,8 @@ struct RefreshResult {
     active_records: usize,
     identities: usize,
     open_reviews: usize,
+    stage_timings_ms: Value,
+    component_checks: usize,
 }
 
 fn normalized_state(value: &str) -> Result<NormalizedState, MdmError> {
@@ -1092,7 +1095,7 @@ fn complete_operation(
     operation_id: &str,
     result: &RefreshResult,
 ) -> Result<(), MdmError> {
-    client.update("UPDATE mdm_internal.operations SET status = 'succeeded', result_code = 'MDM_OK', outcome = $2, completed_at = pg_catalog.statement_timestamp() WHERE operation_id = $1::pg_catalog.uuid AND status = 'running'", Some(1), &[operation_id.into(), JsonB(serde_json::to_value(result).map_err(|error| MdmError::OperationState(error.to_string()))?).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+    client.update("UPDATE mdm_internal.operations SET status = 'succeeded', result_code = 'MDM_OK', outcome = $2, completed_at = pg_catalog.clock_timestamp() WHERE operation_id = $1::pg_catalog.uuid AND status = 'running'", Some(1), &[operation_id.into(), JsonB(serde_json::to_value(result).map_err(|error| MdmError::OperationState(error.to_string()))?).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
     Ok(())
 }
 
@@ -1370,6 +1373,7 @@ fn persist_refresh_inner(
     session: &catalog::Role,
     selected: &catalog::Role,
 ) -> Result<RefreshResult, MdmError> {
+    let operation_started = Instant::now();
     Spi::connect_mut(|client| {
         let context = load_context(client, &request.entity_name, selected, true)?;
         client
@@ -1391,7 +1395,10 @@ fn persist_refresh_inner(
             session,
         )?;
         sync_source_records(client, &context, &request.source_snapshots)?;
+        let graph_refresh_started = Instant::now();
         let graph = refresh_graph(client, &context, &request.full_policy)?;
+        let graph_refresh_ms = graph_refresh_started.elapsed().as_millis() as u64;
+        let resolution_started = Instant::now();
         let limits = load_limits(&context);
         limits.validate()?;
         let sources = load_sources(client, &context, limits.max_active_records)?;
@@ -1443,11 +1450,13 @@ fn persist_refresh_inner(
             overrides: &overrides,
             allocator: &mut allocator,
         })?;
+        let mdm_resolution_ms = resolution_started.elapsed().as_millis() as u64;
         let resolution = &evaluation.resolution;
         let next_identity = &evaluation.identity;
         let next_golden = &evaluation.golden;
         let next_reviews = &evaluation.reviews;
         let changed = evaluation.changed;
+        let publication_started = Instant::now();
         let fields = ensure_output(client, &context)?;
         let publication_revision = if changed {
             revision
@@ -1500,6 +1509,7 @@ fn persist_refresh_inner(
             client.update("UPDATE mdm_internal.entities SET active_version = desired_version, publication_revision = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into(), revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
         client.update("INSERT INTO mdm_internal.publication_observations (entity_id, publication_revision, decision_epoch, artifact_id, operation_id, graph_refresh_id, source_boundary, source_boundary_digest, node_results) VALUES ($1::pg_catalog.uuid, $2, $3, $4::pg_catalog.uuid, $5::pg_catalog.uuid, $6, $7, $8, $9)", None, &[context.entity_id.clone().into(), publication_revision.into(), context.decision_epoch.into(), context.artifact_id.clone().into(), operation_id.clone().into(), graph.id.into(), JsonB(graph.boundary.clone()).into(), graph.boundary_digest.clone().into(), JsonB(graph.node_results.clone()).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+        let publication_ms = publication_started.elapsed().as_millis() as u64;
         let result = RefreshResult {
             operation_id: operation_id.clone(),
             entity_name: context.entity.name.clone(),
@@ -1519,6 +1529,13 @@ fn persist_refresh_inner(
                 .iter()
                 .filter(|row| row.status == ReviewStatus::Open)
                 .count(),
+            stage_timings_ms: json!({
+                "graph_refresh": graph_refresh_ms,
+                "mdm_resolution": mdm_resolution_ms,
+                "publication": publication_ms,
+                "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
+            }),
+            component_checks: resolution.accepted.len() + resolution.rejected.len(),
         };
         complete_operation(client, &operation_id, &result)?;
         Ok(result)

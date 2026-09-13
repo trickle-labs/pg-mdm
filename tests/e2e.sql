@@ -1129,7 +1129,18 @@ BEGIN
        OR (first_refresh->>'publication_revision')::bigint <> 1
        OR (first_refresh->>'graph_refresh_id')::bigint <= 0
        OR first_refresh->'source_boundary'->>'completeness' <> 'PROVEN'
-       OR length(first_refresh->>'source_boundary_digest') <> 64 THEN
+       OR length(first_refresh->>'source_boundary_digest') <> 64
+       OR jsonb_typeof(first_refresh->'stage_timings_ms') <> 'object'
+       OR first_refresh->'stage_timings_ms'->>'graph_refresh' IS NULL
+       OR first_refresh->'stage_timings_ms'->>'mdm_resolution' IS NULL
+       OR first_refresh->'stage_timings_ms'->>'publication' IS NULL
+       OR first_refresh->'stage_timings_ms'->>'elapsed_before_operation_completion' IS NULL
+       OR (first_refresh->'stage_timings_ms'->>'graph_refresh')::bigint < 0
+       OR (first_refresh->'stage_timings_ms'->>'mdm_resolution')::bigint < 0
+       OR (first_refresh->'stage_timings_ms'->>'publication')::bigint < 0
+       OR (first_refresh->'stage_timings_ms'->>'elapsed_before_operation_completion')::bigint < 0
+       OR first_refresh->>'component_checks' IS NULL
+       OR (first_refresh->>'component_checks')::bigint < 0 THEN
         RAISE EXCEPTION 'initial v0.9 refresh is invalid: %', first_refresh;
     END IF;
     second_refresh := mdm.refresh('customer', 'ALLOW');
