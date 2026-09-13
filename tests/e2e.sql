@@ -918,7 +918,7 @@ BEGIN
        OR summary #>> '{candidate_plan,warning_block_records}' IS NULL
        OR summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_block_records}' IS NULL
        OR summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_candidate_pairs}' IS NULL
-       OR summary #>> '{candidate_semantics,evidence,absolute_max_comparator_work}' IS NULL
+       OR summary #>> '{evidence_semantics,absolute_max_comparator_work}' IS NULL
        OR summary #>> '{candidate_semantics,decisions,absolute_max_decision_closure}' IS NULL
        OR summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_active_records}' IS NULL
        OR summary->'resolver_limits' IS NULL
