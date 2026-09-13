@@ -1,0 +1,76 @@
+{
+  "contract": "MDM-STEWARDSHIP/1",
+  "revision": 1,
+  "basis_vector": {
+    "body": {
+      "approved_metadata": {},
+      "artifact_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "canonical_encoding_version": 1,
+      "definition_version": 3,
+      "entity_name": "customer",
+      "issue_key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "observed_decision_epoch": 8,
+      "occurrence": 1,
+      "reason_code": "POSSIBLE_DUPLICATE",
+      "semantic_versions": {"candidate": 1, "clustering": 1, "normalization": 1},
+      "source_boundary_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "status": "open",
+      "subjects": [
+        {"id": "40000000-0000-4000-8000-000000000001", "kind": "source_record"},
+        {"id": "40000000-0000-4000-8000-000000000002", "kind": "source_record"}
+      ]
+    },
+    "canonical_json_utf8": "{\"approved_metadata\":{},\"artifact_digest\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"canonical_encoding_version\":1,\"definition_version\":3,\"entity_name\":\"customer\",\"issue_key\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"observed_decision_epoch\":8,\"occurrence\":1,\"reason_code\":\"POSSIBLE_DUPLICATE\",\"semantic_versions\":{\"candidate\":1,\"clustering\":1,\"normalization\":1},\"source_boundary_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"status\":\"open\",\"subjects\":[{\"id\":\"40000000-0000-4000-8000-000000000001\",\"kind\":\"source_record\"},{\"id\":\"40000000-0000-4000-8000-000000000002\",\"kind\":\"source_record\"}]}",
+    "sha256": "2b73c392653f05c5706f315fb0ec635037a342acd5ff2df374e0edcf7836280e"
+  },
+  "intent_vector": {
+    "body": {
+      "action": "ASSIGN_QUEUE",
+      "arguments": {"queue": "priority"},
+      "binding_id": "30000000-0000-4000-8000-000000000001",
+      "case_key": 7,
+      "expected_action_revision": 2,
+      "expected_definition_version": 3,
+      "expected_evidence_basis_digest": "abababababababababababababababababababababababababababababababab",
+      "expected_policy_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "expected_publication_revision": 5,
+      "expected_review_version": 4,
+      "expected_stewardship_epoch": 8,
+      "evaluation_ref": "eval-1",
+      "policy_revision": "policy-1",
+      "work_ref": "work-1"
+    },
+    "request_key": "3ebd5539467befabbc0492e51e49fe2dc866a225cc73a36256d0a95a06b06d4e",
+    "canonical_json_utf8": "{\"action\":\"ASSIGN_QUEUE\",\"arguments\":{\"queue\":\"priority\"},\"binding_id\":\"30000000-0000-4000-8000-000000000001\",\"case_key\":7,\"evaluation_ref\":\"eval-1\",\"expected_action_revision\":2,\"expected_definition_version\":3,\"expected_evidence_basis_digest\":\"abababababababababababababababababababababababababababababababab\",\"expected_policy_digest\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"expected_publication_revision\":5,\"expected_review_version\":4,\"expected_stewardship_epoch\":8,\"policy_revision\":\"policy-1\",\"work_ref\":\"work-1\"}",
+    "sha256": "9f741d05ca8af964fb9fb87c073556abaac87e99af9e6307fee2e111473f643d"
+  },
+  "request_key_vector": {
+    "body": {
+      "action_revision": 2,
+      "binding_id": "30000000-0000-4000-8000-000000000001",
+      "canonical_encoding_version": 1,
+      "case_key": 7,
+      "consequence_identity": "assign_priority",
+      "escalation_level": 0,
+      "lifecycle_generation": 1,
+      "policy_revision": "policy-1"
+    },
+    "canonical_json_utf8": "{\"action_revision\":2,\"binding_id\":\"30000000-0000-4000-8000-000000000001\",\"canonical_encoding_version\":1,\"case_key\":7,\"consequence_identity\":\"assign_priority\",\"escalation_level\":0,\"lifecycle_generation\":1,\"policy_revision\":\"policy-1\"}",
+    "sha256": "3ebd5539467befabbc0492e51e49fe2dc866a225cc73a36256d0a95a06b06d4e"
+  },
+  "shared_conformance_cases": [
+    "React derives the same request key when it retries the same persisted work.",
+    "The same binding, request key, and body return the original immutable receipt.",
+    "A changed body with the same binding and request key returns IDEMPOTENCY_CONFLICT with a null receipt_id; it leaves the stored receipt unchanged and creates no row.",
+    "Concurrent submissions with the same key return the original receipt for an equal body and the conflict response for a different body.",
+    "The receipt actor is the authenticated effective database role captured by MDM; the caller cannot provide it.",
+    "Stale review, definition, publication basis, stewardship epoch, evidence digest, action revision, or policy digest cannot apply a control.",
+    "A newer unrelated publication does not stale an unchanged case basis.",
+    "Manual assignment protection denies automatic queue replacement.",
+    "Unknown opening time denies SET_DUE_AT.",
+    "Pause, binding replacement, and policy mismatch create the specified terminal outcome.",
+    "Receipt and control change commit atomically or both roll back.",
+    "Resolved occurrences remain readable and recurrence gets a new case key.",
+    "Restore preserves case keys, request bodies, and receipts."
+  ]
+}
