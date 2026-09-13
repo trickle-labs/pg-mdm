@@ -705,17 +705,20 @@ pub fn compile(entity: &Entity) -> Value {
         .unwrap_or_else(|| "pg_catalog.pg_class".into());
     for channel in &plan.channels {
         nodes.push(match_node(channel));
-        nodes.push(node(
+        // ponytail: keep stats and guards FULL under forced-FULL parents; use AUTO after 0.105.2 proves downstream CDC for every history.
+        nodes.push(node_with_refresh_mode(
             format!("block-stats/{}", channel.channel_id),
             vec![format!("blocks/{}", channel.channel_id)],
             candidate_block_stats_sql(channel),
             json!({"channel_id":"text","block_key":"bytea","block_records":"bigint"}),
+            "FULL",
         ));
-        nodes.push(node(
+        nodes.push(node_with_refresh_mode(
             format!("block-overflow/{}", channel.channel_id),
             vec![format!("block-stats/{}", channel.channel_id)],
             candidate_block_overflow_sql(channel, &limits),
             json!({"channel_id":"text","block_key":"bytea","block_records":"bigint","max_block_records":"bigint"}),
+            "FULL",
         ));
     }
     let mut blocks: Vec<String> = plan
@@ -774,11 +777,12 @@ pub fn compile(entity: &Entity) -> Value {
         json!({"candidate_pairs":"bigint"}),
         pair_refresh_mode,
     ));
-    nodes.push(node(
+    nodes.push(node_with_refresh_mode(
         format!("pair-overflow/{}", entity.name),
         vec![format!("pair-stats/{}", entity.name)],
         candidate_pair_overflow_sql(&entity.name, &limits),
         json!({"candidate_pairs":"bigint","max_candidate_pairs":"bigint"}),
+        pair_refresh_mode,
     ));
     let evidence_dependencies = plan
         .channels
@@ -892,7 +896,14 @@ mod tests {
                 "cleaner_options": {},
                 "display": "masked"
             }],
-            "matches": [],
+            "matches": [{
+                "name": "same_email",
+                "fields": ["email"],
+                "comparison": "exact",
+                "strength": "identity",
+                "evidence_group": "email",
+                "candidate": {"kind": "exact", "field": "email"}
+            }],
             "golden_values": [],
             "preset": null,
             "limits": {},
@@ -935,5 +946,20 @@ mod tests {
                 .unwrap()
                 .contains("FROM @{records/crm}")
         );
+
+        for logical_id in [
+            "blocks/same_email",
+            "block-stats/same_email",
+            "block-overflow/same_email",
+            "pairs/customer",
+            "pair-stats/customer",
+            "pair-overflow/customer",
+        ] {
+            let node = nodes
+                .iter()
+                .find(|node| node["logical_id"] == logical_id)
+                .unwrap();
+            assert_eq!(node["refresh_mode"], "FULL", "{logical_id}");
+        }
     }
 }
