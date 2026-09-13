@@ -1,5 +1,5 @@
 $ cargo test --test organization_quality_tests --features pg18 -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
      Running tests/organization_quality_tests.rs (target/debug/deps/organization_quality_tests-6c0c49c4551ef3bd)
 
 running 1 test
