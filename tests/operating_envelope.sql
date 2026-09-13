@@ -2,7 +2,7 @@ CREATE TEMP TABLE e2e_operating_envelope (report jsonb NOT NULL);
 
 DO $envelope$
 DECLARE
-    entity_id uuid;
+    v_entity_id uuid;
     member record;
     output_relation record;
     relation regclass;
@@ -27,23 +27,23 @@ DECLARE
     last_outcome jsonb;
 BEGIN
     SELECT e.entity_id
-      INTO entity_id
+      INTO v_entity_id
       FROM mdm_internal.entities e
      WHERE e.entity_name = 'customer';
-    IF entity_id IS NULL THEN
+    IF v_entity_id IS NULL THEN
         RAISE EXCEPTION 'customer entity missing from E2E database';
     END IF;
 
     SELECT count(*)
       INTO active_source_rows
       FROM mdm_internal.source_records r
-     WHERE r.entity_id = entity_id AND r.active;
+     WHERE r.entity_id = v_entity_id AND r.active;
 
     FOR member IN
         SELECT DISTINCT ON (m.logical_id) m.logical_id, m.relation_name
           FROM mdm_internal.graph_bindings b
           JOIN mdm_internal.graph_members m USING (graph_binding_id)
-         WHERE b.entity_id = entity_id
+         WHERE b.entity_id = v_entity_id
          ORDER BY m.logical_id, b.graph_generation DESC
     LOOP
         relation := pg_catalog.to_regclass(member.relation_name);
@@ -100,11 +100,11 @@ BEGIN
          + pg_catalog.pg_total_relation_size('mdm_internal.resolution_facts'::regclass)
       INTO history_rows, history_bytes
       FROM mdm_internal.publications p
-     WHERE p.entity_id = entity_id;
+     WHERE p.entity_id = v_entity_id;
     history_rows := history_rows
-        + (SELECT count(*) FROM mdm_internal.publication_observations o WHERE o.entity_id = entity_id)
-        + (SELECT count(*) FROM mdm_internal.reviews r WHERE r.entity_id = entity_id)
-        + (SELECT count(*) FROM mdm_internal.resolution_facts f WHERE f.entity_id = entity_id);
+        + (SELECT count(*) FROM mdm_internal.publication_observations o WHERE o.entity_id = v_entity_id)
+        + (SELECT count(*) FROM mdm_internal.reviews r WHERE r.entity_id = v_entity_id)
+        + (SELECT count(*) FROM mdm_internal.resolution_facts f WHERE f.entity_id = v_entity_id);
 
     SELECT d.temp_bytes
       INTO temp_bytes
