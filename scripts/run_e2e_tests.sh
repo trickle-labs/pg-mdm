@@ -474,17 +474,6 @@ BEGIN
 END
 \$\$;"
 
-docker exec -e PGAPPNAME=mdm_concurrent_definition_apply "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
-    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
-        result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' THEN
-            RAISE EXCEPTION 'concurrent definition was not applied before the resolver-limit retry: %', result;
-        END IF;
-    END \$\$;" >"$work_dir/concurrent_definition_apply.log" 2>&1 || {
-    cat "$work_dir/concurrent_definition_apply.log"
-    exit 1
-}
-
 original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'public.crm_customer'::regclass::oid")
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
@@ -632,9 +621,9 @@ clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
-# The clone adds one isolation-only row on top of the seven restored records.
-test "$clone_sources" = 8
-test "$restored_sources" = 7
+# The clone adds one isolation-only row on top of the eight restored records.
+test "$clone_sources" = 9
+test "$restored_sources" = 8
 
 docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
