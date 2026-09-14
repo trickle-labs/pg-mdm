@@ -992,7 +992,7 @@ fn load_overrides(
     client: &mut SpiClient<'_>,
     context: &Context,
 ) -> Result<BTreeMap<String, Vec<GoldenOverride>>, MdmError> {
-    let rows = client.select("SELECT field_name::text, override_id, anchor_source_record_id, created_at, value FROM mdm_internal.golden_override_directives WHERE entity_id = $1::pg_catalog.uuid AND is_current AND action = 'SET' ORDER BY field_name, created_at, override_id", None, &[context.entity_id.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+    let rows = client.select("SELECT field_name::text, override_id, anchor_source_record_id, (extract(epoch FROM created_at) * 1000000)::bigint, value FROM mdm_internal.golden_override_directives WHERE entity_id = $1::pg_catalog.uuid AND is_current AND action = 'SET' ORDER BY field_name, created_at, override_id", None, &[context.entity_id.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
     let mut result: BTreeMap<String, Vec<GoldenOverride>> = BTreeMap::new();
     for row in rows {
         let field = row
