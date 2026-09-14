@@ -691,13 +691,22 @@ done
 docker exec "$physical_container" pg_isready -U postgres >/dev/null
 physical_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
-test "$physical_refresh" = "false|$physical_revision"
+if [[ $physical_refresh != "false|$physical_revision" ]]; then
+    echo "FAIL: intact physical recovery refresh returned '$physical_refresh', expected 'false|$physical_revision'" >&2
+    exit 1
+fi
 physical_recovered_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT md5(public.e2e_customer_publication_state()::text)")
-test "$physical_recovered_state" = "$physical_state"
+if [[ $physical_recovered_state != "$physical_state" ]]; then
+    echo "FAIL: intact physical recovery changed publication state: $physical_recovered_state != $physical_state" >&2
+    exit 1
+fi
 physical_graph_populated=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT COALESCE(pg_catalog.bool_or(row_count::bigint > 0), false) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
-test "$physical_graph_populated" = t
+if [[ $physical_graph_populated != t ]]; then
+    echo "FAIL: intact physical recovery graph members were empty: $physical_graph_populated" >&2
+    exit 1
+fi
 docker exec "$physical_container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$
         DECLARE result record;
@@ -710,7 +719,10 @@ docker exec "$physical_container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -
         END \$\$;"
 missing_graph_empty=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT count(*) > 0 AND pg_catalog.bool_and(row_count::bigint = 0) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
-test "$missing_graph_empty" = t
+if [[ $missing_graph_empty != t ]]; then
+    echo "FAIL: pending physical graph members were not empty: $missing_graph_empty" >&2
+    exit 1
+fi
 mkdir -p "$missing_graph_data"
 docker exec -u postgres "$physical_container" mkdir -p /tmp/pg-mdm-missing-graph-backup
 docker exec -u postgres -e PGPASSWORD=postgres "$physical_container" \
@@ -728,13 +740,22 @@ done
 docker exec "$physical_container" pg_isready -U postgres >/dev/null
 missing_graph_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT md5(public.e2e_customer_publication_state()::text)")
-test "$missing_graph_state" = "$physical_state"
+if [[ $missing_graph_state != "$physical_state" ]]; then
+    echo "FAIL: pending physical graph recovery changed publication state: $missing_graph_state != $physical_state" >&2
+    exit 1
+fi
 physical_rebuild_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
-test "$physical_rebuild_refresh" = "false|$physical_revision"
+if [[ $physical_rebuild_refresh != "false|$physical_revision" ]]; then
+    echo "FAIL: pending physical graph rebuild returned '$physical_rebuild_refresh', expected 'false|$physical_revision'" >&2
+    exit 1
+fi
 rebuilt_graph_populated=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT COALESCE(pg_catalog.bool_or(row_count::bigint > 0), false) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
-test "$rebuilt_graph_populated" = t
+if [[ $rebuilt_graph_populated != t ]]; then
+    echo "FAIL: physical recovery did not populate desired graph members: $rebuilt_graph_populated" >&2
+    exit 1
+fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
