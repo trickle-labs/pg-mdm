@@ -231,6 +231,22 @@ DROP FUNCTION public.delay_release_output();"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "GRANT EXECUTE ON FUNCTION mdm_steward.override_golden(text, uuid, text, jsonb, bigint, text) TO mdm_administrator;
+        CREATE FUNCTION public.e2e_source_records(ids bigint[])
+        RETURNS TABLE(source_record_id uuid, source_record_key bytea)
+        LANGUAGE sql SECURITY DEFINER
+        SET search_path = pg_catalog, mdm_internal, public
+        AS \$\$
+            SELECT r.source_record_id, r.source_record_key
+            FROM mdm_internal.source_records r
+            JOIN mdm_internal.source_identities s
+              ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
+            JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
+            JOIN public.crm_customer c
+              ON r.source_record_key = pgtrickle.encode_row_id_v2(
+                  'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id))
+            WHERE e.entity_name = 'customer' AND c.id = ANY (ids)
+        \$\$;
+        GRANT EXECUTE ON FUNCTION public.e2e_source_records(bigint[]) TO mdm_administrator;
         INSERT INTO public.crm_customer VALUES (6, 'Directive race', 'directive-race@example.test', statement_timestamp());
         CREATE FUNCTION public.delay_release_output()
         RETURNS trigger LANGUAGE plpgsql AS \$\$
@@ -353,7 +369,8 @@ BEGIN
 END
 \$\$;
 DROP TRIGGER delay_directive_race_output ON mdm_out.customer;
-DROP FUNCTION public.delay_release_output();"
+DROP FUNCTION public.delay_release_output();
+DROP FUNCTION public.e2e_source_records(bigint[]);"
 
 docker exec -e PGAPPNAME=mdm_writer_one "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; BEGIN;
