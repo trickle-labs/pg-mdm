@@ -311,10 +311,10 @@ fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "DO \$\$
 DECLARE state jsonb;
+DECLARE anchor_id uuid;
 BEGIN
-    WITH anchor AS (
-        SELECT source_record_id FROM public.e2e_source_records(ARRAY[9001]::bigint[])
-    )
+    SELECT source_record_id INTO STRICT anchor_id
+      FROM public.e2e_source_records(ARRAY[9001]::bigint[]);
     SELECT pg_catalog.jsonb_build_object(
         'directives', (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
             'action', d.action, 'value', d.value, 'value_type_name', d.value_type_name,
@@ -325,8 +325,7 @@ BEGIN
             'operation_id', d.operation_id) ORDER BY d.override_version), '[]'::jsonb)
             FROM mdm_internal.golden_override_directives d
             JOIN mdm_internal.entities e ON e.entity_name = 'customer' AND e.entity_id = d.entity_id
-            JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
-            WHERE d.field_name = 'name' AND d.anchor_source_record_id = a.source_record_id),
+            WHERE d.field_name = 'name' AND d.anchor_source_record_id = anchor_id),
         'operations', (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
             'operation_kind', o.operation_kind, 'status', o.status, 'result_code', o.result_code,
             'outcome', o.outcome, 'actor_name', o.actor_name, 'actor_role_name', o.actor_role_name)
@@ -334,8 +333,8 @@ BEGIN
             FROM mdm_internal.operations o
             WHERE o.operation_id IN (SELECT d.operation_id FROM mdm_internal.golden_override_directives d
                 JOIN mdm_internal.entities e USING (entity_id)
-                JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
-                WHERE e.entity_name = 'customer' AND d.field_name = 'name')),
+                WHERE e.entity_name = 'customer' AND d.field_name = 'name'
+                  AND d.anchor_source_record_id = anchor_id)),
         'publication_revision', (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'),
         'race_output_count', (SELECT count(*) FROM mdm_out.customer c
             JOIN mdm_out.customer_members m USING (mdm_id)
@@ -350,8 +349,8 @@ BEGIN
             'base_publication_revision', 9, 'decision_epoch', 4, 'supersedes', NULL, 'is_current', true,
             'operation_id', (SELECT d.operation_id FROM mdm_internal.golden_override_directives d
                 JOIN mdm_internal.entities e USING (entity_id)
-                JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
-                WHERE e.entity_name = 'customer' AND d.field_name = 'name'))),
+                WHERE e.entity_name = 'customer' AND d.field_name = 'name'
+                  AND d.anchor_source_record_id = anchor_id))),
         'operations', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
             'operation_kind', 'golden_override', 'status', 'succeeded', 'result_code', 'MDM_OK',
             'outcome', (SELECT pg_catalog.jsonb_build_object(
@@ -360,8 +359,8 @@ BEGIN
                 FROM mdm_internal.operations o
                 JOIN mdm_internal.golden_override_directives d USING (operation_id)
                 JOIN mdm_internal.entities e USING (entity_id)
-                JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
-                WHERE e.entity_name = 'customer' AND d.field_name = 'name'),
+                WHERE e.entity_name = 'customer' AND d.field_name = 'name'
+                  AND d.anchor_source_record_id = anchor_id),
             'actor_name', 'mdm_test_login', 'actor_role_name', 'mdm_administrator')),
         'publication_revision', 9, 'race_output_count', 1) THEN
         RAISE EXCEPTION 'golden override/publication race left unexpected durable history or output: %', state;
