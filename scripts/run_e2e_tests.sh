@@ -430,7 +430,8 @@ clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
-test "$clone_sources" = 7
+# The clone adds one isolation-only row on top of the seven restored records.
+test "$clone_sources" = 8
 test "$restored_sources" = 7
 
 docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
