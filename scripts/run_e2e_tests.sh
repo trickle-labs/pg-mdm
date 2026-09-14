@@ -474,6 +474,17 @@ BEGIN
 END
 \$\$;"
 
+docker exec -e PGAPPNAME=mdm_concurrent_definition_apply "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+        result := mdm.refresh('customer', 'ALLOW');
+        IF result->>'changed' <> 'true' THEN
+            RAISE EXCEPTION 'concurrent definition was not applied before the resolver-limit retry: %', result;
+        END IF;
+    END \$\$;" >"$work_dir/concurrent_definition_apply.log" 2>&1 || {
+    cat "$work_dir/concurrent_definition_apply.log"
+    exit 1
+}
+
 original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'public.crm_customer'::regclass::oid")
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
