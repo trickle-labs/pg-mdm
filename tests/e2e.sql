@@ -910,7 +910,10 @@ BEGIN
     summary := mdm.describe('customer', 'summary');
     IF summary->>'active_version' IS NOT NULL
        OR summary->>'graph_state' <> 'ready'
+       OR summary->>'graph_generation' <> '1'
        OR (summary->>'member_count')::integer <= 0
+       OR length(summary->>'graph_binding_digest') <> 64
+       OR length(summary->>'graph_digest') <> 64
        OR summary #>> '{candidate_plan,channels,0,channel_id}' <> 'same_email'
        OR summary #>> '{candidate_plan,channels,0,fields,0}' <> 'email'
        OR summary #>> '{candidate_plan,max_block_records}' IS NULL
@@ -968,6 +971,13 @@ $$;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SELECT summary->>'graph_binding_digest' AS binding_digest,
+       summary->>'graph_digest' AS graph_digest,
+       summary->>'graph_generation' AS graph_generation,
+       summary->>'member_count' AS member_count,
+       summary->'publication'->>'publication_revision' AS publication_revision
+FROM (SELECT mdm.describe('customer', 'summary') AS summary) before_create
+\gset v08_
 WITH proposed AS (
     SELECT mdm.entity(
         name => 'customer',
@@ -987,13 +997,22 @@ WITH proposed AS (
             field => 'name', policy => 'prefer_source', sources => ARRAY['crm'])]
     ) AS definition
 )
-SELECT NOT changed AND desired_version = 1 AS v02_noop_ok
+SELECT NOT changed AND desired_version = 1
+   AND mdm.describe('customer', 'summary')->>'graph_state' = 'ready'
+   AND mdm.describe('customer', 'summary')->>'active_version' IS NULL
+   AND mdm.describe('customer', 'summary')->>'graph_binding_digest' IS NOT DISTINCT FROM :'v08_binding_digest'
+   AND mdm.describe('customer', 'summary')->>'graph_digest' IS NOT DISTINCT FROM :'v08_graph_digest'
+   AND mdm.describe('customer', 'summary')->>'graph_generation' IS NOT DISTINCT FROM :'v08_graph_generation'
+   AND mdm.describe('customer', 'summary')->>'member_count' IS NOT DISTINCT FROM :'v08_member_count'
+   AND mdm.describe('customer', 'summary')->'publication'->>'publication_revision' = '0'
+   AND :'v08_publication_revision' = '0' AS v02_noop_ok
 FROM mdm.create((SELECT definition FROM proposed), 1, NULL)
 \gset
 \if :v02_noop_ok
 \else
 \quit 1
 \endif
+
 
 DO $$
 DECLARE
@@ -1575,6 +1594,8 @@ DECLARE
     normalized_relation text;
     pair_rows jsonb;
     evidence_rows jsonb;
+    expected_pair_rows jsonb;
+    expected_evidence_rows jsonb;
     normalized_rows jsonb;
     member_rows jsonb;
 BEGIN
@@ -1594,13 +1615,37 @@ BEGIN
     FROM mdm_internal.graph_members
     WHERE graph_binding_id = binding_id AND logical_id = 'normalized/email';
     EXECUTE pg_catalog.format(
-        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t',
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
         pair_relation
     ) INTO pair_rows;
     EXECUTE pg_catalog.format(
-        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t',
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) ORDER BY t.left_sort_key, t.right_sort_key, t.rule), ''[]''::jsonb) FROM %s t',
         evidence_relation
     ) INTO evidence_rows;
+    EXECUTE pg_catalog.format(
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            ''left_source_record_id'', l.source_record_id,
+            ''right_source_record_id'', r.source_record_id,
+            ''left_sort_key'', l.source_sort_key,
+            ''right_sort_key'', r.source_sort_key
+        ) ORDER BY l.source_sort_key, r.source_sort_key), ''[]''::jsonb)
+         FROM %s l JOIN %s r
+           ON l.field_name = ''email'' AND r.field_name = ''email''
+          AND l.state = ''value'' AND r.state = ''value''
+          AND l.canonical_bytes IS NOT NULL AND l.canonical_bytes = r.canonical_bytes
+          AND l.source_sort_key < r.source_sort_key',
+        normalized_relation, normalized_relation
+    ) INTO expected_pair_rows;
+    expected_evidence_rows := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+        'left_source_record_id', expected_pair_rows->0->'left_source_record_id',
+        'right_source_record_id', expected_pair_rows->0->'right_source_record_id',
+        'left_sort_key', expected_pair_rows->0->'left_sort_key',
+        'right_sort_key', expected_pair_rows->0->'right_sort_key',
+        'rule', 'same_email', 'evidence_group', 'email', 'class', 'agree',
+        'score', NULL, 'comparator', 'exact_v1', 'comparator_version', 1,
+        'left_value_digest', pg_catalog.decode('60ad19203e7805d9f109a44e991b02a1362e03115f39f995d9f40f56ee175c8c', 'hex'),
+        'right_value_digest', pg_catalog.decode('60ad19203e7805d9f109a44e991b02a1362e03115f39f995d9f40f56ee175c8c', 'hex')
+    ));
     EXECUTE pg_catalog.format(
         'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t WHERE t.field_name = ''email'' AND t.source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))',
         normalized_relation
@@ -1614,14 +1659,26 @@ BEGIN
       AND source_record_id IN (
           SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[])
       );
-    IF (SELECT count(*) FROM mdm_out.customer_members
+    IF pg_catalog.jsonb_array_length(expected_pair_rows) <> 1
+       OR pair_rows IS DISTINCT FROM expected_pair_rows
+       OR evidence_rows IS DISTINCT FROM expected_evidence_rows
+       OR (SELECT count(*) FROM mdm_internal.resolution_facts f
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer' AND f.publication_revision = 2
+             AND f.subject_kind = 'pair'
+             AND f.subject_key = pg_catalog.convert_to(
+                 (expected_pair_rows->0->>'left_source_record_id') || ':' ||
+                 (expected_pair_rows->0->>'right_source_record_id'), 'UTF8')
+             AND f.fact_kind = 'accepted'
+             AND f.fact = '{"reason_code":"AUTOMATIC_IDENTITY","evidence_groups":["email"]}'::jsonb) <> 1
+       OR (SELECT count(*) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
           AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2
        OR (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
           AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 1 THEN
-        RAISE EXCEPTION 'insert reference result did not merge the duplicate email: members %, pairs %, evidence %, normalized %',
-            member_rows, pair_rows, evidence_rows, normalized_rows;
+        RAISE EXCEPTION 'insert terminal output or production reader differs from the independent email expectation: pairs %, expected %, evidence %, expected %, members %, normalized %',
+            pair_rows, expected_pair_rows, evidence_rows, expected_evidence_rows, member_rows, normalized_rows;
     END IF;
 END
 $$;
