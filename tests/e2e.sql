@@ -1142,7 +1142,7 @@ CREATE FUNCTION public.e2e_customer_members()
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, mdm_out
+SET search_path = pg_catalog
 AS $$
 DECLARE members jsonb;
 BEGIN
@@ -2287,7 +2287,7 @@ CREATE FUNCTION public.e2e_composite_source_records()
 RETURNS TABLE(tenant_id bigint, customer_id bigint, source_record_id uuid, source_record_key bytea, member jsonb)
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, mdm_internal, mdm_out, public
+SET search_path = pg_catalog
 AS $$
 BEGIN
     RETURN QUERY
