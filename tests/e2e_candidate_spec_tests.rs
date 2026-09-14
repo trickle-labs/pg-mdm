@@ -41,7 +41,7 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
     assert_eq!(pair["output_schema"]["left_sort_key"], "bytea");
     assert_eq!(pair["output_schema"]["right_sort_key"], "bytea");
     assert!(!pair_sql.contains("COLLATE"));
-    let channel_pairs = pair_sql.split("\nUNION\n").collect::<Vec<_>>();
+    let channel_pairs = pair_sql.split("\nUNION ALL\n").collect::<Vec<_>>();
     assert!(
         channel_pairs
             .iter()
@@ -96,7 +96,7 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         &candidate_limits(),
     );
     assert!(pair_sql.contains("GROUP BY l.source_record_id, r.source_record_id"));
-    assert!(pair_sql.contains("\nUNION\n"));
+    assert!(pair_sql.contains("\nUNION ALL\n"));
 }
 
 #[test]

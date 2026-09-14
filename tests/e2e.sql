@@ -751,6 +751,59 @@ BEGIN
     END IF;
 END
 $$;
+DO $$
+DECLARE
+    query_text text := $query$
+        WITH blocks AS (
+            SELECT 'email'::text AS channel_id, canonical_bytes AS block_key,
+                   source_record_id, source_sort_key
+              FROM public.mdm_candidate_source
+             WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
+        ), stats AS (
+            SELECT channel_id, block_key, count(*)::bigint AS block_records
+              FROM blocks
+             GROUP BY channel_id, block_key
+        ), candidate_pairs AS (
+            SELECT DISTINCT l.source_record_id AS left_source_record_id,
+                   r.source_record_id AS right_source_record_id,
+                   l.source_sort_key AS left_sort_key,
+                   r.source_sort_key AS right_sort_key
+              FROM blocks l
+              JOIN stats s ON s.channel_id = l.channel_id AND s.block_key = l.block_key
+              JOIN blocks r ON r.channel_id = l.channel_id AND r.block_key = l.block_key
+                           AND l.source_sort_key < r.source_sort_key
+             WHERE s.block_records <= 100
+        )
+        SELECT COALESCE(pg_catalog.jsonb_agg(
+                   pg_catalog.jsonb_build_array(left_source_record_id::text,
+                       right_source_record_id::text, left_sort_key, right_sort_key)
+                   ORDER BY left_sort_key, right_sort_key), '[]'::jsonb)
+          FROM candidate_pairs
+    $query$;
+    nested_plan json;
+    hash_plan json;
+    nested_result jsonb;
+    hash_result jsonb;
+BEGIN
+    PERFORM pg_catalog.set_config('enable_nestloop', 'on', true);
+    PERFORM pg_catalog.set_config('enable_hashjoin', 'off', true);
+    PERFORM pg_catalog.set_config('enable_mergejoin', 'off', true);
+    EXECUTE 'EXPLAIN (FORMAT JSON) ' || query_text INTO nested_plan;
+    EXECUTE query_text INTO nested_result;
+
+    PERFORM pg_catalog.set_config('enable_nestloop', 'off', true);
+    PERFORM pg_catalog.set_config('enable_hashjoin', 'on', true);
+    EXECUTE 'EXPLAIN (FORMAT JSON) ' || query_text INTO hash_plan;
+    EXECUTE query_text INTO hash_result;
+    IF nested_plan::jsonb IS NOT DISTINCT FROM hash_plan::jsonb THEN
+        RAISE EXCEPTION 'planner settings did not produce distinct PostgreSQL plans: %', nested_plan;
+    END IF;
+    IF nested_result IS DISTINCT FROM hash_result THEN
+        RAISE EXCEPTION 'candidate query plan changed serialized rows: nested %, hash %',
+            nested_result, hash_result;
+    END IF;
+END
+$$;
 DROP FUNCTION public.mdm_graph_action(jsonb, text);
 DROP FUNCTION public.check_mdm_candidate_probes(text);
 DROP FUNCTION public.refresh_mdm_graph(regclass[]);
@@ -1511,7 +1564,7 @@ BEGIN
     END IF;
 END
 $$;
-ALTER EXTENSION pg_trickle UPDATE TO '0.105.2';
+ALTER EXTENSION pg_trickle UPDATE TO '0.105.3';
 DO $$
 DECLARE
     snapshot record;
@@ -1535,7 +1588,7 @@ BEGIN
     INTO STRICT current_state
     FROM mdm_internal.entities e
     WHERE e.entity_name = 'customer';
-    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.105.2'
+    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.105.3'
        OR snapshot.publication_revision IS DISTINCT FROM current_state.publication_revision
        OR snapshot.bindings IS DISTINCT FROM current_state.bindings
        OR snapshot.graph_members IS DISTINCT FROM current_state.graph_members
@@ -2852,6 +2905,12 @@ DECLARE
     actual jsonb;
     earliest bigint;
     latest bigint;
+    source_record_id uuid;
+    review_id uuid;
+    subject jsonb;
+    entity record;
+    identity_row record;
+    statuses text[] := '{}';
 BEGIN
     SELECT e.entity_id INTO STRICT resolved_entity_id
       FROM mdm_internal.entities e
@@ -2930,6 +2989,86 @@ BEGIN
     IF actual IS DISTINCT FROM expected THEN
         RAISE EXCEPTION 'pair explanation differs from its bounded non-sensitive fact projection: %, expected %', actual, expected;
     END IF;
+
+    SELECT r.source_record_id INTO STRICT source_record_id
+      FROM mdm_internal.source_records r
+     WHERE r.entity_id = resolved_entity_id
+     ORDER BY r.source_record_id
+     LIMIT 1;
+    SELECT r.review_id INTO review_id
+      FROM mdm_internal.reviews r
+     WHERE r.entity_id = resolved_entity_id
+     ORDER BY r.review_id
+     LIMIT 1;
+    FOREACH subject IN ARRAY ARRAY[
+        jsonb_build_object('kind', 'source_record', 'id', source_record_id::text),
+        jsonb_build_object('kind', 'golden', 'mdm_id', mdm_id::text, 'field', 'name'),
+        jsonb_build_object('kind', 'review', 'id', coalesce(review_id, mdm_id)::text),
+        jsonb_build_object('kind', 'publication', 'revision', latest)
+    ] LOOP
+        SET SESSION AUTHORIZATION mdm_test_login;
+        SET ROLE mdm_administrator;
+        actual := mdm.explain('composite_customer', subject, NULL, 1);
+        RESET ROLE;
+        RESET SESSION AUTHORIZATION;
+        expected := jsonb_build_object(
+            'facts', '[]'::jsonb,
+            'truncated', false,
+            'identity', NULL::jsonb,
+            'retained_revision_range', jsonb_build_object('earliest', earliest, 'latest', latest)
+        );
+        IF actual IS DISTINCT FROM expected THEN
+            RAISE EXCEPTION '% explanation differs from its exact bounded output: %, expected %',
+                subject->>'kind', actual, expected;
+        END IF;
+    END LOOP;
+
+    FOR entity IN
+        SELECT e.entity_name, e.entity_id,
+               min(f.publication_revision) AS earliest,
+               max(f.publication_revision) AS latest
+          FROM mdm_internal.entities e
+          JOIN mdm_internal.resolution_facts f USING (entity_id)
+         WHERE e.entity_name IN ('customer', 'composite_customer')
+         GROUP BY e.entity_name, e.entity_id
+         ORDER BY e.entity_name
+    LOOP
+        FOR identity_row IN
+            SELECT i.mdm_id, i.status
+              FROM mdm_internal.identity_registry i
+             WHERE i.entity_id = entity.entity_id
+             ORDER BY i.mdm_id
+        LOOP
+            SET SESSION AUTHORIZATION mdm_test_login;
+            SET ROLE mdm_administrator;
+            actual := mdm.explain(
+                entity.entity_name,
+                jsonb_build_object('kind', 'mdm_id', 'id', identity_row.mdm_id::text),
+                NULL,
+                1
+            );
+            RESET ROLE;
+            RESET SESSION AUTHORIZATION;
+            expected := jsonb_build_object(
+                'facts', '[]'::jsonb,
+                'truncated', false,
+                'identity', jsonb_build_object('scope', 'current', 'status', identity_row.status),
+                'retained_revision_range', jsonb_build_object(
+                    'earliest', entity.earliest,
+                    'latest', entity.latest
+                )
+            );
+            IF actual IS DISTINCT FROM expected THEN
+                RAISE EXCEPTION '% identity state explanation differs for %: %, expected %',
+                    entity.entity_name, identity_row.mdm_id, actual, expected;
+            END IF;
+            statuses := array_append(statuses, identity_row.status);
+        END LOOP;
+    END LOOP;
+    IF NOT (ARRAY['active', 'merged', 'retired'] <@ statuses) THEN
+        RAISE EXCEPTION 'identity explanation fixtures did not cover active, merged, and retired states: %', statuses;
+    END IF;
+
     SET SESSION AUTHORIZATION mdm_test_login;
     SET ROLE mdm_administrator;
     PERFORM mdm_admin.drop_entity('composite_customer', 'composite_customer');

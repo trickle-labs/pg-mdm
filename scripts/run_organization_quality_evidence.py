@@ -67,7 +67,7 @@ report = {
         "cargo_lock_sha256": sha256(ROOT / "Cargo.lock"),
     },
     "release_context": {
-        "pg_trickle_artifact_sha256": "bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416",
+        "pg_trickle_artifact_sha256": "c59da1ea543ea23c207f12294f40fbff41d58b5554ced81408e5f3efde7d84c6",
         "postgres_image_digest": "sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
     },
     "environment": {

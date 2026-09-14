@@ -3,8 +3,8 @@
 ## Advanced source contracts, stewardship, history, integration, and operations on PostgreSQL
 
 **Status:** Post-v0.11 design with a recommended delivery scope; optional capabilities remain proposals
-**Reviewed:** 12 September 2026
-**Baseline:** Released `pg_mdm` v0.11.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). Upstream v0.105.2 is available; pg-mdm still pins v0.105.1.
+**Reviewed:** 14 September 2026
+**Baseline:** Released `pg_mdm` v0.12.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). The v0.12 tag admitted pg-trickle v0.105.2; main is qualifying v0.105.3.
 **Foundation:** [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) remains the incremental relational engine
 **Goal:** Add deeper source, matching, stewardship, history, integration, and operational capabilities without changing the small product model established by V1  
 **Product contract:** The same five nouns, five actions, and three primary public outputs
@@ -34,12 +34,12 @@ The released code and upstream contracts establish the following boundary:
 | Item | State after the releases | Consequence for V2 |
 |---|---|---|
 | pg-mdm v0.11.0 | Synchronous strict graph refresh, full MDM resolution, identity history, and atomic publication | Reuse the compiler, resolver, and publication code |
-| pg-mdm dependency | [Build lock](DEPENDENCIES.md), `tests/Dockerfile.e2e`, and `src/version.rs` still select pg-trickle v0.105.1 | Admit and pin v0.105.2 in a separate implementation change |
+| pg-mdm dependency | v0.12.0 pins pg-trickle v0.105.2; main updates the build lock, E2E package, and runtime version to v0.105.3 | Admit v0.105.3 only after its exact-package cumulative and populated-upgrade checks pass |
 | Graph V1 and Delta V1 | Upstream v0.105.2 advertises `external_graph_refresh` 1.0 and `output_delta_consumer` 1.0 as stable and enabled | Graph V1 is sufficient for the first scope. Delta consumption still needs MDM implementation and equivalence proof |
 | Prepared generations and prepared delta binding | Neither capability appears in the v0.105.2 manifest. The upstream design remains a post-1.0 proposal | Sections 3 and 4 specify a future contract, not callable released APIs |
 | Capture | Upstream advertises trigger and WAL capture as stable | Keep MDM on trigger capture until its own WAL admission suite passes |
 | Preview | `preview_entity()` currently returns metadata and counts. It labels `scoped` as exact without resolving the requested subproblem | Repair the existing claim, then implement shared resolution and exact impact comparison |
-| Graph strategy | Candidate blocks and candidate-pair joins explicitly use `FULL` in `src/graph_spec.rs` to avoid dropped inserts on v0.105.1 | Keep these fallbacks until the exact graph regressions pass on an admitted artifact |
+| Graph strategy | Candidate blocks and candidate-pair joins explicitly use `FULL` in `src/graph_spec.rs` to avoid dropped inserts previously seen on v0.105.1 | Keep these fallbacks until the exact graph regressions pass on an admitted artifact |
 | Release qualification | The [v0.11 plan](plans/v0.11.md) covers paired AUTO/FULL probes, compiled MDM histories, rollback, and cumulative operational checks | Audit the broader V1 criteria and record missing quality and workload evidence before declaring v1.0 |
 
 Upstream facts come from the [v0.105.2 capability manifest](https://github.com/trickle-labs/pg-trickle/blob/v0.105.2/docs/capability-manifest.json), [release notes](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.105.2), and [prepared-generation proposal](https://github.com/trickle-labs/pg-trickle/blob/v0.105.2/plans/PROPOSAL_V2_PREPARED_GRAPH_GENERATIONS.md). The release qualifies packages, upgrades, runtime behavior, and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred. Package qualification does not prove MDM-specific semantics or make prepared execution available.
@@ -499,13 +499,13 @@ Public-schema changes remain conservative. Additive metadata and new optional ta
 
 ### 23.1 Admit the new baseline and close V1 gaps
 
-First qualify pg-trickle v0.105.2 against pg-mdm's compiled graphs, authorization rules, and publication transaction. Change the artifact pins only with that evidence. Reproduce the bytea candidate-block and multi-row candidate-pair insert failures before considering removal of `FULL`. A passing simple scan probe does not qualify those joins.
+Qualify the main branch's pg-trickle v0.105.3 pin against pg-mdm's compiled graphs, authorization rules, and publication transaction. The populated upgrade and cumulative E2E must pass before calling the artifact admitted. Reproduce the bytea candidate-block and multi-row candidate-pair insert histories before considering removal of `FULL`. A passing simple scan probe does not qualify those joins.
 
 Audit the V1 acceptance criteria against executable tests and retained release results. Correct the current scoped-preview exactness claim and complete its promised subproblem behavior. Connect the organization corpus to runnable quality checks, add held-out cases, and measure the synchronous operating envelope. These are baseline obligations; a V2 feature cannot substitute for them.
 
 #### Policy routing before exact preview
 
-Complete the M0 shared-contract work alongside upstream admission. Then deliver M1's review projection, M2's typed routing controls and receipts, and M4 joint qualification with React R0–R3 and R5. The roadmap assigns these to MDM v0.12–v0.15. This is now a named deployment requirement, so assignment and escalation move out of the deferred catalogue. Preserve MDM's human authority and test exact policy rows, request bodies, receipts, worker outcomes, time-only escalation, publication rollback, and recovery on the real shared stack.
+M0 is complete: MDM-STEWARDSHIP/1 and its shared fixture are frozen with both owner approvals in [`contracts/MDM-STEWARDSHIP-1-review.md`](contracts/MDM-STEWARDSHIP-1-review.md). Deliver M1's review projection, M2's typed routing controls and receipts, and M4 joint qualification with React R0–R3 and R5. The roadmap assigns these to MDM v0.13–v0.15. Preserve MDM's human authority and test exact policy rows, request bodies, receipts, worker outcomes, time-only escalation, publication rollback, and recovery on the real shared stack.
 
 M3 approval requirements remain independently gated before React R4 at 0.51.0. A definition preview does not implement approval of an exact action. Identity-changing commands retain their stronger impact-preview and constraint requirements below.
 

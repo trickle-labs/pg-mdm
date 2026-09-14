@@ -229,6 +229,132 @@ END
 DROP TRIGGER delay_concurrent_output ON mdm_out.customer;
 DROP FUNCTION public.delay_release_output();"
 
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "GRANT EXECUTE ON FUNCTION mdm_steward.override_golden(text, uuid, text, jsonb, bigint, text) TO mdm_administrator;
+        INSERT INTO public.crm_customer VALUES (6, 'Directive race', 'directive-race@example.test', statement_timestamp());
+        CREATE FUNCTION public.delay_release_output()
+        RETURNS trigger LANGUAGE plpgsql AS \$\$
+        BEGIN
+            IF pg_catalog.current_setting('mdm.e2e_release_waited', true) IS DISTINCT FROM 'on' THEN
+                PERFORM pg_catalog.set_config('mdm.e2e_release_waited', 'on', true);
+                PERFORM pg_catalog.pg_advisory_xact_lock(718110, 110972);
+                PERFORM pg_catalog.pg_sleep(5);
+            END IF;
+            RETURN NEW;
+        END
+        \$\$;
+        CREATE TRIGGER delay_directive_race_output
+        BEFORE INSERT OR UPDATE ON mdm_out.customer
+        FOR EACH ROW WHEN (NEW.name = 'Directive race')
+        EXECUTE FUNCTION public.delay_release_output();"
+docker exec -e PGAPPNAME=mdm_directive_race_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+        result := mdm.refresh('customer', 'ALLOW');
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 9 THEN
+            RAISE EXCEPTION 'directive-race publication failed: %', result;
+        END IF;
+    END \$\$;" >"$work_dir/directive_race_refresh.log" 2>&1 &
+directive_race_refresh=$!
+directive_race_paused=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND classid = 718110::oid AND objid = 110972::oid AND objsubid = 2 AND granted)") == t ]]; then
+        directive_race_paused=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $directive_race_paused != true ]]; then
+    kill "$directive_race_refresh" 2>/dev/null || true
+    wait "$directive_race_refresh" || true
+    cat "$work_dir/directive_race_refresh.log"
+    echo 'FAIL: directive-race refresh did not reach publication' >&2
+    exit 1
+fi
+docker exec -e PGAPPNAME=mdm_directive_race_override "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; SELECT * FROM mdm_steward.override_golden(
+        'customer', (SELECT source_record_id FROM public.e2e_source_records(ARRAY[9001]::bigint[])),
+        'name', '\"Race override\"'::jsonb, 0, 'publication race');" \
+    >"$work_dir/directive_race_override.log" 2>&1 &
+directive_race_override=$!
+directive_race_blocked=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_stat_activity a, pg_catalog.pg_stat_activity b WHERE a.application_name = 'mdm_directive_race_refresh' AND b.application_name = 'mdm_directive_race_override' AND a.pid = ANY(pg_catalog.pg_blocking_pids(b.pid)))") == t ]]; then
+        directive_race_blocked=true
+        break
+    fi
+    sleep 0.1
+done
+if ! wait "$directive_race_refresh"; then cat "$work_dir/directive_race_refresh.log"; exit 1; fi
+if ! wait "$directive_race_override"; then cat "$work_dir/directive_race_override.log"; exit 1; fi
+if [[ $directive_race_blocked != true ]]; then
+    echo 'FAIL: golden override did not contend with publication on the entity lock' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$
+DECLARE state jsonb;
+BEGIN
+    WITH anchor AS (
+        SELECT source_record_id FROM public.e2e_source_records(ARRAY[9001]::bigint[])
+    )
+    SELECT pg_catalog.jsonb_build_object(
+        'directives', (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'action', d.action, 'value', d.value, 'value_type_name', d.value_type_name,
+            'override_version', d.override_version, 'reason', d.reason,
+            'created_by_name', d.created_by_name, 'created_as_role_name', d.created_as_role_name,
+            'base_publication_revision', d.base_publication_revision, 'decision_epoch', d.decision_epoch,
+            'supersedes', d.supersedes, 'is_current', d.is_current,
+            'operation_id', d.operation_id) ORDER BY d.override_version), '[]'::jsonb)
+            FROM mdm_internal.golden_override_directives d
+            JOIN mdm_internal.entities e ON e.entity_name = 'customer' AND e.entity_id = d.entity_id
+            JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
+            WHERE d.field_name = 'name' AND d.anchor_source_record_id = a.source_record_id),
+        'operations', (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'operation_kind', o.operation_kind, 'status', o.status, 'result_code', o.result_code,
+            'outcome', o.outcome, 'actor_name', o.actor_name, 'actor_role_name', o.actor_role_name)
+            ORDER BY o.started_at), '[]'::jsonb)
+            FROM mdm_internal.operations o
+            WHERE o.operation_id IN (SELECT d.operation_id FROM mdm_internal.golden_override_directives d
+                JOIN mdm_internal.entities e USING (entity_id)
+                JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
+                WHERE e.entity_name = 'customer' AND d.field_name = 'name')),
+        'publication_revision', (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'),
+        'race_output_count', (SELECT count(*) FROM mdm_out.customer c
+            JOIN mdm_out.customer_members m USING (mdm_id)
+            JOIN public.e2e_source_records(ARRAY[6]::bigint[]) r USING (source_record_id)
+            WHERE c.name = 'Directive race' AND m.source_name = 'crm' AND m.active))
+      INTO state;
+    IF state IS DISTINCT FROM pg_catalog.jsonb_build_object(
+        'directives', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'action', 'SET', 'value', '\"Race override\"'::jsonb, 'value_type_name', 'text',
+            'override_version', 1, 'reason', 'publication race',
+            'created_by_name', 'mdm_test_login', 'created_as_role_name', 'mdm_administrator',
+            'base_publication_revision', 9, 'decision_epoch', 4, 'supersedes', NULL, 'is_current', true,
+            'operation_id', (SELECT d.operation_id FROM mdm_internal.golden_override_directives d
+                JOIN mdm_internal.entities e USING (entity_id)
+                JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
+                WHERE e.entity_name = 'customer' AND d.field_name = 'name'))),
+        'operations', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'operation_kind', 'golden_override', 'status', 'succeeded', 'result_code', 'MDM_OK',
+            'outcome', (SELECT pg_catalog.jsonb_build_object(
+                    'field', 'name', 'action', 'SET', 'base_publication_revision', 9,
+                    'override_id', d.override_id, 'decision_epoch', 4)
+                FROM mdm_internal.operations o
+                JOIN mdm_internal.golden_override_directives d USING (operation_id)
+                JOIN mdm_internal.entities e USING (entity_id)
+                JOIN anchor a ON a.source_record_id = d.anchor_source_record_id
+                WHERE e.entity_name = 'customer' AND d.field_name = 'name'),
+            'actor_name', 'mdm_test_login', 'actor_role_name', 'mdm_administrator')),
+        'publication_revision', 9, 'race_output_count', 1) THEN
+        RAISE EXCEPTION 'golden override/publication race left unexpected durable history or output: %', state;
+    END IF;
+END
+\$\$;
+DROP TRIGGER delay_directive_race_output ON mdm_out.customer;
+DROP FUNCTION public.delay_release_output();"
+
 docker exec -e PGAPPNAME=mdm_writer_one "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; BEGIN;
         DO \$\$ DECLARE result record; BEGIN

@@ -2,7 +2,7 @@
 
 ## Status after v0.11
 
-Reviewed 12 September 2026. pg-mdm v0.1 through v0.11 are released. The next work is to admit pg-trickle v0.105.2, close the remaining V1 implementation and evidence gaps, and enable the pg-react stewardship integration before exact preview, merge/split stewardship, and semantic events from [DESIGN_V2.md](DESIGN_V2.md).
+Reviewed 14 September 2026. pg-mdm v0.1 through v0.12 are released. MDM-STEWARDSHIP/1 and both owner approvals are frozen in the [joint sign-off record](contracts/MDM-STEWARDSHIP-1-review.md). The current main branch is updating its pg-trickle pin from v0.105.2 to v0.105.3 and qualifying the exact package; keep that candidate unadmitted until the cumulative checks pass. Remaining V1 evidence gaps and the v0.13 M1 implementation are tracked below and in [DESIGN_V2.md](DESIGN_V2.md).
 
 The [V1 design](DESIGN_V1.md) controls existing semantics. The [V2 design](DESIGN_V2.md#23-recommended-delivery-scope-and-dependencies) defines the proposed additions and their prerequisites. This roadmap controls sequencing. V2 is a design generation, not a package-version commitment. The v1.0 compatibility gate remains separate from delivery of optional V2 capabilities.
 
@@ -19,16 +19,20 @@ The release numbers below are recommendations, not scheduled commitments. Write 
 | v0.8–v0.9 | Private Graph V1 installation, strict refresh, and atomic publication | [v0.8 plan](plans/v0.8.md); v0.9 has no separate `plans/v0.9.md`, see the [changelog entry](CHANGELOG.md#090), `src/api/refresh.rs` |
 | v0.10–v0.11 | Operational checks, package upgrades, AUTO/FULL probes, and publication rollback/retry qualification | [v0.10 plan](plans/v0.10.md), [v0.11 plan](plans/v0.11.md), `tests/e2e.sql`, `scripts/run_e2e_tests.sh` |
 
-pg-mdm v0.11.0 is tagged at `97b78c8`. Its current dependency remains pg-trickle v0.105.1, as recorded in [DEPENDENCIES.md](DEPENDENCIES.md), `tests/Dockerfile.e2e`, and `src/version.rs`. Versions v0.1 through v0.7 used v0.98.0. Released code and test coverage do not establish that every original V1 acceptance criterion has passed.
+pg-mdm v0.11.0 is tagged at `97b78c8` with pg-trickle v0.105.1. The v0.12.0 sign-off admitted v0.105.2; main now updates the lock and tests to v0.105.3. Versions v0.1 through v0.7 used v0.98.0. Released code and test coverage do not establish that every original V1 acceptance criterion has passed.
 
 Known baseline limitations must remain visible:
 
-- Candidate blocks and candidate-pair joins use explicit `FULL` refresh in `src/graph_spec.rs` because v0.105.1 can drop inserts for those shapes. The supported AUTO scan probe is not proof that all compiled MDM stages are differential.
+- Candidate blocks and candidate-pair joins use explicit `FULL` refresh in `src/graph_spec.rs` because v0.105.1 could drop inserts for those shapes. The v0.105.3 release includes a stream-table repair path; keep `FULL` until the exact MDM insert/update/delete/rollback/retry histories pass on that package.
 - `preview_entity()` returns metadata and counts for validation, sampled, and scoped modes. Its scoped `exact` flag currently lacks subproblem resolution behind it. Repair that claim and complete the V1 preview contract before using preview to authorize V2 actions.
 - The committed organization corpus is a four-record seed. The repository does not yet provide the held-out quality report and combined operating-envelope evidence required below.
 - MDM uses trigger capture and full terminal scans followed by full-entity resolution. Delta consumption, affected-set resolution, prepared runs, and V2 semantic events remain unimplemented.
 
-## Upstream v0.105.2 admission
+## Current pg-trickle v0.105.3 qualification
+
+The [pg-trickle v0.105.3 release](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.105.3) is tagged at commit `7b7ecf16e320c6a38b3433f8470c6cbe2b305b8d`. Its PostgreSQL 18 Linux artifact is `pg_trickle-0.105.3-pg18-linux-amd64.tar.gz`, SHA-256 `c59da1ea543ea23c207f12294f40fbff41d58b5554ced81408e5f3efde7d84c6`. The package lock and E2E upgrade target are updated; exact-package admission still requires the cumulative run and populated 0.105.1-to-0.105.3 state comparison.
+
+## v0.105.2 admission (v0.12 historical record)
 
 The [pg-trickle v0.105.2 release](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.105.2) is available at commit `33df4cc91fda4fbadba79470347a714c8509703a`. The release publishes `pg_trickle-0.105.2-pg18-linux-amd64.tar.gz` with SHA-256 `bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416`. Treat it as the next admission candidate; this document does not change the build lock.
 
@@ -36,7 +40,7 @@ The [tagged capability manifest](https://github.com/trickle-labs/pg-trickle/blob
 
 | Risk | Owner | Next required evidence |
 |---|---|---|
-| `RISK-PGT-GRAPH-V1` | pg-mdm release owner | Re-run public capability, canonical contract, durable `EXTERNAL`, delegated authorization/revocation, RLS, complete boundary, rollback/frontier, concurrency, lifecycle, clone, restore, upgrade, and private-API denial tests on the exact v0.105.2 package |
+| `RISK-PGT-GRAPH-V1` | pg-mdm release owner | Re-run public capability, canonical contract, durable `EXTERNAL`, delegated authorization/revocation, RLS, complete boundary, rollback/frontier, concurrency, lifecycle, clone, restore, upgrade, and private-API denial tests on the exact v0.105.3 package |
 | Candidate insert loss | Graph compiler maintainer | Reproduce bytea block-membership and multi-row pair-insert cases against complete SQL expectations and FULL reference. Preserve `FULL` until each affected AUTO shape passes |
 | Prepared execution unavailable | pg-mdm integration owner with upstream maintainer | Agree public SQL signatures, capability versions, leases, crash/restore behavior, and shared conformance; wait for a released enabled capability before MDM integration |
 | Incomplete qualification evidence | pg-mdm release owner | Map the V1 criteria to actual commands and retained results, record gaps, and complete the quality and operating evidence below |
@@ -59,7 +63,7 @@ Keep `MDM-STEWARDSHIP/1` owned by MDM. Section 4 of the MDM companion is the pro
 
 Deliver M0 → M1 → M2 → M4 for the initial integration. R5 intentionally precedes optional R4. Estimate the MDM packages independently; React's release budgets do not include them. M1/M2 implementation needs the admitted stack and frozen contract, but has no dependency on full exact preview, direct merge/split commands, semantic events, Delta V1, prepared execution, Tide, or a reviewer UI.
 
-The initial joint profile is one administrative scope in one PostgreSQL 18 database, trigger CDC, scheduler off, and `READ COMMITTED`. Keep MDM's EXTERNAL graphs independently owned and retain React's explicit coordinator and differential-refresh safeguard. React must update its 0.98.0 admission assumptions and packaging to the same qualified 0.105.2 artifact; verify effective PostgreSQL runtime identity rather than assuming the two image manifests agree.
+The initial joint profile is one administrative scope in one PostgreSQL 18 database, trigger CDC, scheduler off, and `READ COMMITTED`. Keep MDM's EXTERNAL graphs independently owned and retain React's explicit coordinator and differential-refresh safeguard. React must update its 0.98.0 admission assumptions and packaging to the same qualified artifact before the shared runtime is called jointly qualified; verify effective PostgreSQL runtime identity rather than assuming the two image manifests agree.
 
 React currently rejects RLS-protected evaluated sources. M1 therefore supplies an authorized non-RLS policy table containing only approved metadata. Keep sensitive evidence under MDM permissions. Reject unsupported scopes; never hide an RLS source behind a view or grant `BYPASSRLS` to make it eligible. Human stewardship remains usable with the adapter absent or paused.
 

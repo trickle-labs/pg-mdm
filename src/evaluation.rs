@@ -570,4 +570,104 @@ mod tests {
             baseline
         );
     }
+
+    #[test]
+    fn semantic_projection_and_result_digest_are_stable_under_replay_order() {
+        let id = |value| Uuid::from_bytes([value; 16]);
+        let mut identity = IdentityState {
+            registry: vec![
+                IdentityRecord {
+                    mdm_id: id(1),
+                    created_revision: 1,
+                    retired_revision: None,
+                    status: IdentityStatus::Active,
+                },
+                IdentityRecord {
+                    mdm_id: id(4),
+                    created_revision: 1,
+                    retired_revision: None,
+                    status: IdentityStatus::Active,
+                },
+            ],
+            memberships: vec![
+                IdentityMembership {
+                    source_record_id: id(2),
+                    source_sort_key: vec![1],
+                    mdm_id: id(1),
+                    active: true,
+                    first_membership_revision: 1,
+                    last_membership_revision: 1,
+                    membership_reason: "new".into(),
+                    last_change_revision: 1,
+                },
+                IdentityMembership {
+                    source_record_id: id(5),
+                    source_sort_key: vec![2],
+                    mdm_id: id(4),
+                    active: true,
+                    first_membership_revision: 1,
+                    last_membership_revision: 1,
+                    membership_reason: "new".into(),
+                    last_change_revision: 1,
+                },
+            ],
+            ..IdentityState::default()
+        };
+        let golden = |source_record_id, value: &str| GoldenSelection {
+            value: Some(json!(value)),
+            normalized: Some(value.to_lowercase()),
+            canonical_bytes: Some(value.to_lowercase().into_bytes()),
+            status: GoldenStatus::Selected,
+            winning_source_record_id: Some(source_record_id),
+            policy: "priority".into(),
+            policy_version: 1,
+            tie_break: "source_priority".into(),
+            contributors: vec![source_record_id],
+            issues: Vec::new(),
+        };
+        let golden = BTreeMap::from([
+            ((id(1), "name".into()), golden(id(2), "Acme")),
+            ((id(4), "name".into()), golden(id(5), "Beta")),
+        ]);
+        let review = |value| Review {
+            review_id: id(value),
+            issue_key: [value; 32],
+            occurrence: 1,
+            status: ReviewStatus::Open,
+            severity: "warning".into(),
+            reason_code: "CANNOT_LINK".into(),
+            subjects: json!([value]),
+            masked_summary: json!({"reason": value}),
+            opened_revision: 1,
+            resolved_revision: None,
+            last_change_revision: 1,
+            concurrency_version: 1,
+        };
+        let reviews = vec![review(6), review(7)];
+        let resolution = Resolution {
+            memberships: Vec::new(),
+            accepted: vec![
+                fact(1, 2, UnionOutcome::Accepted, "ALREADY_CONNECTED"),
+                fact(3, 4, UnionOutcome::Accepted, "STRONG_EVIDENCE"),
+            ],
+            rejected: vec![fact(5, 6, UnionOutcome::Rejected, "CANNOT_LINK")],
+        };
+        let first = semantic_projection(&identity, &golden, &reviews, &resolution);
+        identity.registry.reverse();
+        identity.memberships.reverse();
+        let mut replay_resolution = resolution;
+        replay_resolution.accepted.reverse();
+        replay_resolution.rejected.reverse();
+        let replay_reviews = reviews.into_iter().rev().collect::<Vec<_>>();
+        let replay = semantic_projection(&identity, &golden, &replay_reviews, &replay_resolution);
+        let first_bytes = crate::definition::canonical::json_bytes(&first);
+        let replay_bytes = crate::definition::canonical::json_bytes(&replay);
+        let first_digest =
+            crate::definition::canonical::digest("pg_mdm/publication/v1", &[&first_bytes]);
+        let replay_digest =
+            crate::definition::canonical::digest("pg_mdm/publication/v1", &[&replay_bytes]);
+        assert_eq!(replay, first);
+        assert_eq!(replay_bytes, first_bytes);
+        assert_eq!(replay_digest, first_digest);
+    }
 }

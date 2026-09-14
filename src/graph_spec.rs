@@ -614,7 +614,7 @@ pub fn candidate_pair_overflow_sql(
 }
 
 fn match_node(channel: &CandidateChannel) -> Value {
-    // ponytail: FULL until the admitted 0.105.2 bytea regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
+    // ponytail: FULL until the 0.105.3 bytea regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
     node_with_refresh_mode(
         format!("blocks/{}", channel.channel_id),
         channel
@@ -696,7 +696,7 @@ pub fn compile(entity: &Entity) -> Value {
     let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
         channels: Vec::new(),
     });
-    // ponytail: FULL until the admitted 0.105.2 pair-join regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
+    // ponytail: FULL until the 0.105.3 pair-join regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
     let pair_refresh_mode = "FULL";
     let fallback_logical_id = entity
         .sources
@@ -708,7 +708,7 @@ pub fn compile(entity: &Entity) -> Value {
         .unwrap_or_else(|| "pg_catalog.pg_class".into());
     for channel in &plan.channels {
         nodes.push(match_node(channel));
-        // ponytail: keep stats and guards FULL under forced-FULL parents; use AUTO after 0.105.2 proves downstream CDC for every history.
+        // ponytail: keep stats and guards FULL under forced-FULL parents; use AUTO after 0.105.3 proves downstream CDC for every history.
         nodes.push(node_with_refresh_mode(
             format!("block-stats/{}", channel.channel_id),
             vec![format!("blocks/{}", channel.channel_id)],
