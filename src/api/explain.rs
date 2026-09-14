@@ -183,7 +183,7 @@ pub(crate) fn explain_entity(request: Internal) -> JsonB {
         let (_, selected) = catalog::validate_caller(&helper_owner)?;
         Spi::connect(|client| {
             let entity = client.select(
-                "SELECT e.entity_id::text, e.execution_role_name FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE e.entity_name = $1::pg_catalog.name AND e.execution_role_name = $2 AND b.role_oid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = pg_catalog.current_user)",
+                "SELECT e.entity_id::text, e.execution_role_name FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE e.entity_name = $1::pg_catalog.name AND e.execution_role_name = $2 AND b.role_oid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)",
                 Some(1), &[request.entity_name.clone().into(), selected.name.clone().into()]
             ).map_err(|e| MdmError::Spi(e.to_string()))?;
             if entity.is_empty() {
