@@ -746,14 +746,29 @@ if [[ $missing_graph_state != "$physical_state" ]]; then
 fi
 physical_rebuild_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
-if [[ $physical_rebuild_refresh != "false|$physical_revision" ]]; then
-    echo "FAIL: pending physical graph rebuild returned '$physical_rebuild_refresh', expected 'false|$physical_revision'" >&2
+expected_rebuilt_revision=$((physical_revision + 1))
+if [[ $physical_rebuild_refresh != "true|$expected_rebuilt_revision" ]]; then
+    echo "FAIL: pending physical graph rebuild returned '$physical_rebuild_refresh', expected 'true|$expected_rebuilt_revision'" >&2
     exit 1
 fi
 rebuilt_graph_populated=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT COALESCE(pg_catalog.bool_or(row_count::bigint > 0), false) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
 if [[ $rebuilt_graph_populated != t ]]; then
     echo "FAIL: physical recovery did not populate desired graph members: $rebuilt_graph_populated" >&2
+    exit 1
+fi
+rebuilt_publication_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT md5(public.e2e_customer_publication_state()::text)")
+stable_rebuild_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
+if [[ $stable_rebuild_refresh != "false|$expected_rebuilt_revision" ]]; then
+    echo "FAIL: recovered graph retry returned '$stable_rebuild_refresh', expected 'false|$expected_rebuilt_revision'" >&2
+    exit 1
+fi
+stable_rebuild_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT md5(public.e2e_customer_publication_state()::text)")
+if [[ $stable_rebuild_state != "$rebuilt_publication_state" ]]; then
+    echo "FAIL: retry changed recovered publication state: $stable_rebuild_state != $rebuilt_publication_state" >&2
     exit 1
 fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
