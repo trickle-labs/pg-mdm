@@ -2866,11 +2866,13 @@ BEGIN
      WHERE i.entity_id = resolved_entity_id AND i.status = 'active'
      ORDER BY i.mdm_id
      LIMIT 1;
+    SET SESSION AUTHORIZATION mdm_test_login;
     SET ROLE mdm_administrator;
     actual := mdm.explain(
         'composite_customer', jsonb_build_object('kind', 'mdm_id', 'id', mdm_id::text), NULL, 1
     );
     RESET ROLE;
+    RESET SESSION AUTHORIZATION;
     expected := jsonb_build_object(
         'facts', '[]'::jsonb,
         'truncated', false,
@@ -2909,6 +2911,7 @@ BEGIN
     IF pg_catalog.jsonb_array_length(expected_facts) > 500 THEN
         RAISE EXCEPTION 'pair explanation fixture exceeds the API fact bound';
     END IF;
+    SET SESSION AUTHORIZATION mdm_test_login;
     SET ROLE mdm_administrator;
     actual := mdm.explain(
         'composite_customer',
@@ -2917,6 +2920,7 @@ BEGIN
         500
     );
     RESET ROLE;
+    RESET SESSION AUTHORIZATION;
     expected := jsonb_build_object(
         'facts', expected_facts,
         'truncated', false,
@@ -2926,9 +2930,11 @@ BEGIN
     IF actual IS DISTINCT FROM expected THEN
         RAISE EXCEPTION 'pair explanation differs from its bounded non-sensitive fact projection: %, expected %', actual, expected;
     END IF;
+    SET SESSION AUTHORIZATION mdm_test_login;
     SET ROLE mdm_administrator;
     PERFORM mdm_admin.drop_entity('composite_customer', 'composite_customer');
     RESET ROLE;
+    RESET SESSION AUTHORIZATION;
 END
 $$;
 
