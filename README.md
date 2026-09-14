@@ -77,6 +77,9 @@ Run `sql/configure_helper.sql` again after an extension upgrade or a clean logic
 | `MDM_OPERATION_STATE` | A running operation could not commit as succeeded. |
 | `MDM_INTERNAL` | PostgreSQL SPI returned an unexpected error. |
 
+For a guided example with sample data and expected results, follow the
+[30-minute customer tutorial](TUTORIAL.md).
+
 ## Define and refresh an entity
 
 The selected execution role needs schema `USAGE` and table `SELECT, MAINTAIN` on each source. The source owner grants these privileges. `pg-mdm` does not grant access to source tables.
