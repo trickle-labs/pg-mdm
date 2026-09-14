@@ -1138,6 +1138,22 @@ INSERT INTO public.crm_customer VALUES
     (9001, 'Steward One', 'steward-one@example.test', statement_timestamp()),
     (9002, 'Steward Two', 'steward-two@example.test', statement_timestamp()),
     (9003, 'Steward Three', 'steward-three@example.test', statement_timestamp());
+CREATE FUNCTION public.e2e_customer_members()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, mdm_out
+AS $$
+DECLARE members jsonb;
+BEGIN
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_id::text), '[]'::jsonb)
+      INTO members
+      FROM mdm_out.customer_members m;
+    RETURN members;
+END
+$$;
+REVOKE ALL ON FUNCTION public.e2e_customer_members() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_customer_members() TO mdm_administrator;
 DO $$
 DECLARE
     norm mdm_internal.normalized_value;
@@ -1189,13 +1205,9 @@ BEGIN
        OR (second_refresh->>'publication_revision')::bigint <> 1 THEN
         RAISE EXCEPTION 'refresh no-op is invalid: %', second_refresh;
     END IF;
-    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_id::text), '[]'::jsonb)
-      INTO members_before
-      FROM mdm_out.customer_members m;
+    members_before := public.e2e_customer_members();
     rebuilt := mdm_admin.rebuild('customer', 'ALLOW');
-    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_id::text), '[]'::jsonb)
-      INTO members_after
-      FROM mdm_out.customer_members m;
+    members_after := public.e2e_customer_members();
     IF rebuilt->>'entity_name' <> 'customer'
        OR (rebuilt->>'publication_revision')::bigint <> 1
        OR members_after IS DISTINCT FROM members_before THEN
@@ -2272,20 +2284,25 @@ INSERT INTO public.crm_customer_composite VALUES
     (101, 1001, 'Composite One', 'composite-one@example.test', statement_timestamp()),
     (202, 2002, 'Composite Two', 'composite-two@example.test', statement_timestamp());
 CREATE FUNCTION public.e2e_composite_source_records()
-RETURNS TABLE(tenant_id bigint, customer_id bigint, source_record_id uuid, source_record_key bytea)
-LANGUAGE sql
+RETURNS TABLE(tenant_id bigint, customer_id bigint, source_record_id uuid, source_record_key bytea, member jsonb)
+LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, mdm_internal, public
+SET search_path = pg_catalog, mdm_internal, mdm_out, public
 AS $$
-    SELECT c.tenant_id, c.customer_id, r.source_record_id, r.source_record_key
-    FROM mdm_internal.source_records r
+BEGIN
+    RETURN QUERY
+    SELECT c.tenant_id, c.customer_id, r.source_record_id, r.source_record_key, pg_catalog.to_jsonb(m)
+    FROM mdm_out.composite_customer_members m
+    JOIN mdm_internal.source_records r ON r.source_record_id = m.source_record_id
     JOIN mdm_internal.source_identities s
       ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
     JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
-    JOIN public.crm_customer_composite c
+    LEFT JOIN public.crm_customer_composite c
       ON r.source_record_key = pgtrickle.encode_row_id_v2(
           'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.tenant_id, c.customer_id))
-    WHERE e.entity_name = 'composite_customer'
+    WHERE e.entity_name = 'composite_customer';
+    RETURN;
+END
 $$;
 REVOKE ALL ON FUNCTION public.e2e_composite_source_records() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.e2e_composite_source_records() TO mdm_administrator;
@@ -2341,29 +2358,25 @@ BEGIN
         'customer_id', r.customer_id
     ) ORDER BY r.tenant_id, r.customer_id), '[]'::jsonb)
       INTO reader_sources
-      FROM mdm_out.composite_customer_members m
-      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+      FROM public.e2e_composite_source_records() r;
     SELECT COALESCE(pg_catalog.bool_and(
-        m.source_id = pg_catalog.jsonb_build_object(
+        r.member->'source_id' = pg_catalog.jsonb_build_object(
             'source_record_key', pg_catalog.encode(r.source_record_key, 'hex'))), false)
       INTO member_keys_match
-      FROM mdm_out.composite_customer_members m
-      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+      FROM public.e2e_composite_source_records() r;
     SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
         'source_record_key', pg_catalog.encode(r.source_record_key, 'hex'),
-        'member', pg_catalog.to_jsonb(m)
+        'member', r.member
     ) ORDER BY r.tenant_id, r.customer_id), '[]'::jsonb)
       INTO members_before
-      FROM mdm_out.composite_customer_members m
-      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+      FROM public.e2e_composite_source_records() r;
     rebuilt := mdm_admin.rebuild('composite_customer', 'ALLOW');
     SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
         'source_record_key', pg_catalog.encode(r.source_record_key, 'hex'),
-        'member', pg_catalog.to_jsonb(m)
+        'member', r.member
     ) ORDER BY r.tenant_id, r.customer_id), '[]'::jsonb)
       INTO members_after
-      FROM mdm_out.composite_customer_members m
-      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+      FROM public.e2e_composite_source_records() r;
     IF created.desired_version <> 1 OR NOT created.changed
        OR refreshed->>'changed' IS DISTINCT FROM 'true'
        OR pg_catalog.jsonb_array_length(encoded_sources) <> 2
