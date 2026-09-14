@@ -2574,7 +2574,7 @@ CREATE TABLE public.crm_customer_composite (
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (tenant_id, customer_id)
 );
-GRANT SELECT, INSERT, DELETE, MAINTAIN ON public.crm_customer_composite TO mdm_administrator;
+GRANT SELECT, INSERT, UPDATE, DELETE, MAINTAIN ON public.crm_customer_composite TO mdm_administrator;
 INSERT INTO public.crm_customer_composite VALUES
     (101, 1001, 'Composite One', 'shared@example.test', 'Same', 'Person', statement_timestamp()),
     (202, 2002, 'Composite Two', 'shared@example.test', 'Same', 'Person', statement_timestamp());
