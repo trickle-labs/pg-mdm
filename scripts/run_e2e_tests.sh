@@ -503,8 +503,13 @@ DECLARE
     failed boolean := false;
     create_result record;
     result jsonb;
-    revision_before bigint;
+    retry_result jsonb;
+    before_state jsonb;
+    failed_state jsonb;
+    retry_state jsonb;
+    final_state jsonb;
 BEGIN
+    before_state := public.e2e_customer_state();
     SELECT * INTO STRICT create_result
     FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
         '{limits,max_active_records}', '2'), 4);
@@ -519,7 +524,16 @@ BEGIN
     IF NOT failed THEN
         RAISE EXCEPTION 'resolver limit did not fail closed';
     END IF;
-    revision_before := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint;
+    failed_state := public.e2e_customer_state();
+    IF failed_state->'publication_revision' IS DISTINCT FROM before_state->'publication_revision'
+       OR failed_state->'publication_count' IS DISTINCT FROM before_state->'publication_count'
+       OR failed_state->'members' IS DISTINCT FROM before_state->'members'
+       OR failed_state->'entities' IS DISTINCT FROM before_state->'entities'
+       OR failed_state->'reviews' IS DISTINCT FROM before_state->'reviews'
+       OR failed_state->'internal_changed' IS DISTINCT FROM '[]'::jsonb THEN
+        RAISE EXCEPTION 'resolver-limit failure changed the published state: before %, after %',
+            before_state, failed_state;
+    END IF;
 
     SELECT * INTO STRICT create_result
     FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
@@ -528,20 +542,29 @@ BEGIN
         RAISE EXCEPTION 'resolver-limit retry did not create version 6';
     END IF;
     result := mdm.refresh('customer', 'ALLOW');
-    IF result->>'changed' <> 'false'
-       OR (result->>'publication_revision')::bigint <> revision_before THEN
-        RAISE EXCEPTION 'resolver-limit retry changed the publication: %', result;
+    retry_state := public.e2e_customer_state();
+    IF (result->>'publication_revision')::bigint <> (retry_state->>'publication_revision')::bigint THEN
+        RAISE EXCEPTION 'resolver-limit retry returned a stale publication revision: %, state %',
+            result, retry_state;
+    END IF;
+
+    retry_result := mdm.refresh('customer', 'ALLOW');
+    final_state := public.e2e_customer_state();
+    IF retry_result->>'changed' <> 'false'
+       OR (retry_result->>'publication_revision')::bigint <> (retry_state->>'publication_revision')::bigint
+       OR final_state->'publication_revision' IS DISTINCT FROM retry_state->'publication_revision'
+       OR final_state->'publication_count' IS DISTINCT FROM retry_state->'publication_count'
+       OR final_state->'members' IS DISTINCT FROM retry_state->'members'
+       OR final_state->'entities' IS DISTINCT FROM retry_state->'entities'
+       OR final_state->'reviews' IS DISTINCT FROM retry_state->'reviews'
+       OR final_state->'internal_changed' IS DISTINCT FROM '[]'::jsonb THEN
+        RAISE EXCEPTION 'resolver-limit retry was not stable: result %, before %, after %',
+            retry_result, retry_state, final_state;
     END IF;
 END
 $$;
 RESET ROLE;
 SQL
-after_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
-    -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
-after_output_rows=$(docker exec "$container" psql -X -At -U postgres -d foundation \
-    -c "SELECT count(*) FROM mdm_out.customer")
-test "$after_revision" = "$before_revision"
-test "$after_output_rows" = "$before_output_rows"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
