@@ -154,12 +154,12 @@
     },
     "thresholds_frozen": true
   },
-  "recorded_at_utc": "2026-09-13T17:54:15.045365+00:00",
+  "recorded_at_utc": "2026-09-14T05:13:14.777610+00:00",
   "release_context": {
     "pg_trickle_artifact_sha256": "bf8d8dcff728a5cf9e09458b70f2c3ce2c92cc109f4e7c79ae2933ac8bb03416",
     "postgres_image_digest": "sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf"
   },
   "result": "passed",
   "retained_log": "evidence/v0.12/organization-quality.log",
-  "source_commit": "360e2b2448709e9574c0c318a60e27ef4ef8f73e"
+  "source_commit": "d7eee9cd7fe4730a952fbade36e20a0c409460fa"
 }
