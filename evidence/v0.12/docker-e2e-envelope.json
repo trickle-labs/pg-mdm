@@ -7,15 +7,15 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:44ff2aae9e52a40b59798f0e776e836b5e55c3192e954fe14ba46f2479e518e5",
+    "docker_image_id": "sha256:3236efbd22af2a50daf039fea834fea0751394d5cceb99dee8a06e85ccd7099b",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 452526080,
-      "visible_available_bytes": 4919500800,
+      "cgroup_peak_bytes": 454606848,
+      "visible_available_bytes": 7035936768,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 119263571968 808882708480  13% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 56272736256 871873544192   7% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
@@ -37,18 +37,18 @@
   ],
   "metrics": {
     "block_memberships": 0,
-    "component_checks": 0,
+    "component_checks": 1,
     "evidence_comparisons": 0,
     "last_customer_refresh": {
-      "active_records": 8,
-      "component_checks": 0,
-      "elapsed_ms": 1772,
-      "publication_revision": 11,
+      "active_records": 9,
+      "component_checks": 1,
+      "elapsed_ms": 2408,
+      "publication_revision": 12,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 388,
-        "graph_refresh": 384,
-        "mdm_resolution": 1,
-        "publication": 0
+        "elapsed_before_operation_completion": 548,
+        "graph_refresh": 542,
+        "mdm_resolution": 2,
+        "publication": 1
       }
     },
     "max_block_records": 0,
@@ -60,25 +60,25 @@
       },
       "members": {
         "bytes": 32768,
-        "rows": 9
+        "rows": 10
       },
       "reviews": {
         "bytes": 32768,
-        "rows": 14
+        "rows": 15
       }
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
     "repeated_pair_discoveries": 0,
-    "retained_history_rows_customer": 43,
+    "retained_history_rows_customer": 47,
     "retained_history_table_bytes_database_wide": 286720,
     "scope": "customer entity state after Docker E2E; temp_bytes is cumulative for foundation database",
-    "source_rows": 8,
+    "source_rows": 9,
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-14T19:51:49.227082+00:00",
+  "recorded_at_utc": "2026-09-14T20:02:18.816499+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including boundary, restore, and clone assertions, returned successfully.",
-  "source_commit": "eae7623684b381f5605853b1fe21ed12c37c369b"
+  "source_commit": "32b4c4c06e08c57cd3697d92e5932a202d1a080c"
 }
