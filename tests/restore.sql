@@ -21,6 +21,7 @@ BEGIN
         'succeeded_operations', (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login'),
         'active_source_records', (SELECT count(*) FROM mdm_internal.source_records WHERE active)
     );
+    -- The publication-boundary fixture adds one active record and two successful operations.
     IF (SELECT count(*) FROM mdm_internal.entities WHERE entity_name = 'customer' AND desired_version = 4) <> 1
        OR (SELECT count(*) FROM mdm_internal.definitions) <> 4
        OR (SELECT count(*) FROM mdm_internal.definition_artifacts) <> 4
@@ -28,9 +29,9 @@ BEGIN
        OR (SELECT count(*) FROM mdm_internal.output_names) <> 3
        OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 3
        OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 3
-       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 7
-       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 21
-       OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 6 THEN
+       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 8
+       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 23
+       OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 7 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;
     IF (SELECT count(*) FROM mdm_internal.steward_decisions WHERE is_current) <> 2
