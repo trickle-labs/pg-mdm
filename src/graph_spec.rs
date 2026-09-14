@@ -860,6 +860,29 @@ pub fn compile(entity: &Entity) -> Value {
 mod tests {
     use super::*;
     use crate::definition::parse_entity;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn compiler_v5_fixture_is_exact_and_executable() {
+        let bytes = include_bytes!("../tests/fixtures/graph_compiler_v5_customer.json");
+        assert_eq!(
+            crate::definition::canonical::hex(&Sha256::digest(bytes)),
+            "8df1b622d391eac317cda276ef50cf77eaf657173c44ff8cd1d5632c05f90f01"
+        );
+        let artifact: Value = serde_json::from_slice(bytes).expect("fixture is valid JSON");
+        assert_eq!(artifact["format_version"], 1);
+        assert_eq!(artifact["compiler_version"], 5);
+        assert_eq!(artifact["executable"], true);
+        assert_eq!(artifact["roots"], json!(["golden/customer"]));
+        assert!(artifact["nodes"].as_array().unwrap().iter().all(|node| {
+            node["executable"] == true
+                && node["initialize"] == false
+                && node["orchestration_mode"] == "EXTERNAL"
+                && node["defining_sql"]
+                    .as_str()
+                    .is_some_and(|sql| !sql.is_empty())
+        }));
+    }
 
     #[test]
     fn development_graph_is_external_and_not_initialized() {
