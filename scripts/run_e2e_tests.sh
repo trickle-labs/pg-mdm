@@ -261,7 +261,7 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
         \$\$;
         CREATE TRIGGER delay_directive_race_output
         BEFORE INSERT OR UPDATE ON mdm_out.customer
-        FOR EACH ROW WHEN (NEW.name = 'Directive race')
+        FOR EACH ROW WHEN (NEW.name IN ('Directive race', 'Pair decision race'))
         EXECUTE FUNCTION public.delay_release_output();"
 docker exec -e PGAPPNAME=mdm_directive_race_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
@@ -386,6 +386,92 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
             RAISE EXCEPTION 'golden override was not visible in the published output';
         END IF;
     END \$\$;"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "INSERT INTO public.crm_customer VALUES (7, 'Pair decision race', 'pair-race@example.test', statement_timestamp())" >/dev/null
+docker exec -e PGAPPNAME=mdm_pair_decision_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+        result := mdm.refresh('customer', 'ALLOW');
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 11 THEN
+            RAISE EXCEPTION 'pair-decision publication failed: %', result;
+        END IF;
+    END \$\$;" >"$work_dir/pair_decision_refresh.log" 2>&1 &
+pair_decision_refresh=$!
+pair_decision_paused=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND classid = 718110::oid AND objid = 110972::oid AND objsubid = 2 AND granted)") == t ]]; then
+        pair_decision_paused=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $pair_decision_paused != true ]]; then
+    kill "$pair_decision_refresh" 2>/dev/null || true
+    wait "$pair_decision_refresh" || true
+    cat "$work_dir/pair_decision_refresh.log"
+    echo 'FAIL: pair-decision refresh did not reach publication' >&2
+    exit 1
+fi
+docker exec -e PGAPPNAME=mdm_pair_decision_write "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$
+        DECLARE left_id uuid; right_id uuid; result record;
+        BEGIN
+            SELECT source_record_id INTO STRICT left_id FROM public.e2e_source_records(ARRAY[4]::bigint[]);
+            SELECT source_record_id INTO STRICT right_id FROM public.e2e_source_records(ARRAY[6]::bigint[]);
+            SELECT * INTO STRICT result FROM mdm_steward.decide(
+                'customer', left_id, right_id, 'MATCH', 0, 'pair decision publication race');
+            IF result.decision_version <> 1 OR result.decision_epoch <> 5 THEN
+                RAISE EXCEPTION 'pair decision was not serialized after publication: %', result;
+            END IF;
+        END \$\$;" >"$work_dir/pair_decision_write.log" 2>&1 &
+pair_decision_write=$!
+pair_decision_blocked=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_stat_activity a, pg_catalog.pg_stat_activity b WHERE a.application_name = 'mdm_pair_decision_refresh' AND b.application_name = 'mdm_pair_decision_write' AND a.pid = ANY(pg_catalog.pg_blocking_pids(b.pid)))") == t ]]; then
+        pair_decision_blocked=true
+        break
+    fi
+    sleep 0.1
+done
+if ! wait "$pair_decision_refresh"; then cat "$work_dir/pair_decision_refresh.log"; exit 1; fi
+if ! wait "$pair_decision_write"; then cat "$work_dir/pair_decision_write.log"; exit 1; fi
+if [[ $pair_decision_blocked != true ]]; then
+    echo 'FAIL: pair decision did not contend with publication on the entity lock' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$
+        DECLARE state jsonb;
+        BEGIN
+            SELECT pg_catalog.jsonb_build_object(
+                'row_count', (SELECT count(*) FROM mdm_internal.steward_decisions d
+                    JOIN mdm_internal.entities e USING (entity_id)
+                    WHERE e.entity_name = 'customer' AND d.reason = 'pair decision publication race'),
+                'decision', d.decision, 'decision_version', d.decision_version,
+                'decision_epoch', d.decision_epoch, 'base_publication_revision', d.base_publication_revision,
+                'reason', d.reason, 'created_by_name', d.created_by_name,
+                'created_as_role_name', d.created_as_role_name, 'is_current', d.is_current,
+                'operation_kind', o.operation_kind, 'status', o.status, 'result_code', o.result_code,
+                'actor_name', o.actor_name, 'actor_role_name', o.actor_role_name,
+                'decision_id_matches', o.outcome->>'decision_id' = d.decision_id::text,
+                'outcome_epoch', (o.outcome->>'decision_epoch')::bigint)
+              INTO state
+              FROM mdm_internal.steward_decisions d
+              JOIN mdm_internal.entities e USING (entity_id)
+              JOIN mdm_internal.operations o USING (operation_id)
+             WHERE e.entity_name = 'customer' AND d.reason = 'pair decision publication race';
+            IF state IS DISTINCT FROM pg_catalog.jsonb_build_object(
+                'row_count', 1, 'decision', 'MATCH', 'decision_version', 1,
+                'decision_epoch', 5, 'base_publication_revision', 11,
+                'reason', 'pair decision publication race', 'created_by_name', 'mdm_test_login',
+                'created_as_role_name', 'mdm_administrator', 'is_current', true,
+                'operation_kind', 'steward_decide', 'status', 'succeeded', 'result_code', 'MDM_OK',
+                'actor_name', 'mdm_test_login', 'actor_role_name', 'mdm_administrator',
+                'decision_id_matches', true, 'outcome_epoch', 5) THEN
+                RAISE EXCEPTION 'pair-decision publication race left unexpected durable audit: %', state;
+            END IF;
+        END \$\$;"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "DROP TRIGGER delay_directive_race_output ON mdm_out.customer;
         DROP FUNCTION public.delay_release_output();
@@ -621,9 +707,9 @@ clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
-# The clone adds one isolation-only row on top of the eight restored records.
-test "$clone_sources" = 9
-test "$restored_sources" = 8
+# The clone adds one isolation-only row on top of the nine restored records.
+test "$clone_sources" = 10
+test "$restored_sources" = 9
 
 docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"

@@ -21,20 +21,20 @@ BEGIN
         'succeeded_operations', (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login'),
         'active_source_records', (SELECT count(*) FROM mdm_internal.source_records WHERE active)
     );
-    -- The directive-race fixture adds one active record and three successful operations.
+    -- The directive and pair-decision races add two active records and five successful operations.
     IF (SELECT count(*) FROM mdm_internal.entities WHERE entity_name = 'customer' AND desired_version = 4) <> 1
        OR (SELECT count(*) FROM mdm_internal.definitions) <> 4
        OR (SELECT count(*) FROM mdm_internal.definition_artifacts) <> 4
        OR (SELECT count(*) FROM mdm_internal.source_identities) <> 1
        OR (SELECT count(*) FROM mdm_internal.output_names) <> 3
-       OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 3
-       OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 4
-       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 10
-       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 26
-       OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 8 THEN
+       OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 4
+       OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 5
+       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 11
+       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 28
+       OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 9 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;
-    IF (SELECT count(*) FROM mdm_internal.steward_decisions WHERE is_current) <> 2
+    IF (SELECT count(*) FROM mdm_internal.steward_decisions WHERE is_current) <> 3
        OR (SELECT count(*) FROM mdm_internal.steward_decisions WHERE NOT is_current) <> 1
        OR NOT EXISTS (
             SELECT 1
@@ -56,7 +56,7 @@ BEGIN
             WHERE created_by_name <> 'mdm_test_login'
                OR created_as_role_name <> 'mdm_administrator'
                OR operation_id IS NULL
-               OR decision_epoch NOT BETWEEN 1 AND 4
+               OR decision_epoch NOT BETWEEN 1 AND 5
        ) THEN
         RAISE EXCEPTION 'current and superseded steward decisions lost their durable meaning';
     END IF;
@@ -82,6 +82,30 @@ BEGIN
           AND o.actor_role_name = 'mdm_administrator'
     ) THEN
         RAISE EXCEPTION 'golden override or actor audit did not survive restore';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mdm_internal.steward_decisions d
+        JOIN mdm_internal.entities e USING (entity_id)
+        JOIN mdm_internal.operations o USING (operation_id)
+        WHERE e.entity_name = 'customer'
+          AND d.decision = 'MATCH'
+          AND d.reason = 'pair decision publication race'
+          AND d.decision_version = 1
+          AND d.base_publication_revision = 11
+          AND d.decision_epoch = 5
+          AND d.created_by_name = 'mdm_test_login'
+          AND d.created_as_role_name = 'mdm_administrator'
+          AND d.is_current
+          AND o.operation_kind = 'steward_decide'
+          AND o.status = 'succeeded'
+          AND o.result_code = 'MDM_OK'
+          AND o.actor_name = 'mdm_test_login'
+          AND o.actor_role_name = 'mdm_administrator'
+          AND o.outcome->>'decision_id' = d.decision_id::text
+          AND (o.outcome->>'decision_epoch')::bigint = d.decision_epoch
+    ) THEN
+        RAISE EXCEPTION 'pair decision or actor audit did not survive restore';
     END IF;
     IF EXISTS (SELECT FROM mdm_internal.source_bindings)
        OR EXISTS (SELECT FROM mdm_internal.execution_role_bindings) THEN
