@@ -2890,6 +2890,32 @@ END
 $$;
 
 RESET ROLE;
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    before_revision bigint;
+    refreshed jsonb;
+BEGIN
+    SELECT (mdm.describe('composite_customer', 'summary')->>'publication_revision')::bigint
+      INTO STRICT before_revision;
+    INSERT INTO public.crm_customer_composite VALUES
+        (303, 3003, 'New Person', 'new@example.test', 'New', 'Person', statement_timestamp());
+    refreshed := mdm.refresh('composite_customer', 'ALLOW');
+    IF refreshed->>'changed' <> 'true'
+       OR (refreshed->>'publication_revision')::bigint <> before_revision + 1 THEN
+        RAISE EXCEPTION 'composite explanation fixture did not publish its new identity: %', refreshed;
+    END IF;
+    UPDATE public.crm_customer_composite
+       SET email_address = 'shared@example.test', updated_at = statement_timestamp()
+     WHERE tenant_id = 303 AND customer_id = 3003;
+    refreshed := mdm.refresh('composite_customer', 'ALLOW');
+    IF refreshed->>'changed' <> 'true'
+       OR (refreshed->>'publication_revision')::bigint <> before_revision + 2 THEN
+        RAISE EXCEPTION 'composite explanation fixture did not publish a merged identity: %', refreshed;
+    END IF;
+END
+$$;
+RESET ROLE;
 \connect foundation postgres
 DO $$
 DECLARE
