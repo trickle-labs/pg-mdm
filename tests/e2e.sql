@@ -1598,6 +1598,9 @@ DECLARE
     expected_evidence_rows jsonb;
     normalized_rows jsonb;
     member_rows jsonb;
+    accepted_fact_count bigint;
+    active_member_count bigint;
+    active_mdm_count bigint;
 BEGIN
     SELECT gb.graph_binding_id INTO STRICT binding_id
     FROM mdm_internal.graph_bindings gb
@@ -1659,26 +1662,34 @@ BEGIN
       AND source_record_id IN (
           SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[])
       );
+    SELECT count(*) INTO accepted_fact_count
+    FROM mdm_internal.resolution_facts f
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'customer' AND f.publication_revision = 2
+      AND f.subject_kind = 'pair'
+      AND f.subject_key = pg_catalog.convert_to(
+          (expected_pair_rows->0->>'left_source_record_id') || ':' ||
+          (expected_pair_rows->0->>'right_source_record_id'), 'UTF8')
+      AND f.fact_kind = 'accepted'
+      AND f.fact = '{"reason_code":"AUTOMATIC_IDENTITY","evidence_groups":["email"]}'::jsonb;
+    SELECT count(*) INTO active_member_count
+    FROM mdm_out.customer_members
+    WHERE source_name = 'crm' AND active
+      AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]));
+    SELECT count(DISTINCT mdm_id) INTO active_mdm_count
+    FROM mdm_out.customer_members
+    WHERE source_name = 'crm' AND active
+      AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]));
     IF pg_catalog.jsonb_array_length(expected_pair_rows) <> 1
        OR pair_rows IS DISTINCT FROM expected_pair_rows
        OR evidence_rows IS DISTINCT FROM expected_evidence_rows
-       OR (SELECT count(*) FROM mdm_internal.resolution_facts f
-           JOIN mdm_internal.entities e USING (entity_id)
-           WHERE e.entity_name = 'customer' AND f.publication_revision = 2
-             AND f.subject_kind = 'pair'
-             AND f.subject_key = pg_catalog.convert_to(
-                 (expected_pair_rows->0->>'left_source_record_id') || ':' ||
-                 (expected_pair_rows->0->>'right_source_record_id'), 'UTF8')
-             AND f.fact_kind = 'accepted'
-             AND f.fact = '{"reason_code":"AUTOMATIC_IDENTITY","evidence_groups":["email"]}'::jsonb) <> 1
-       OR (SELECT count(*) FROM mdm_out.customer_members
-        WHERE source_name = 'crm' AND active
-          AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2
-       OR (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
-        WHERE source_name = 'crm' AND active
-          AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 1 THEN
-        RAISE EXCEPTION 'insert terminal output or production reader differs from the independent email expectation: pairs %, expected %, evidence %, expected %, members %, normalized %',
-            pair_rows, expected_pair_rows, evidence_rows, expected_evidence_rows, member_rows, normalized_rows;
+       OR accepted_fact_count <> 1
+       OR active_member_count <> 2
+       OR active_mdm_count <> 1 THEN
+        RAISE EXCEPTION 'insert terminal output or production reader differs from the independent email expectation: expected pairs %, pair match %, evidence match %, accepted reader facts %, active members %, distinct identities %',
+            expected_pair_rows, pair_rows IS NOT DISTINCT FROM expected_pair_rows,
+            evidence_rows IS NOT DISTINCT FROM expected_evidence_rows, accepted_fact_count,
+            active_member_count, active_mdm_count;
     END IF;
 END
 $$;
