@@ -3,15 +3,18 @@ set -euo pipefail
 
 image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.12.0-e2e}
 container="pg-mdm-e2e-$$"
+physical_container="pg-mdm-physical-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")
 dump_file="$work_dir/foundation.dump"
+physical_data="$work_dir/physical-data"
+missing_graph_data="$work_dir/missing-graph-data"
 missing_log="$work_dir/missing.log"
 e2e_log="$work_dir/e2e-postgres.log"
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 source_revision=$(git -C "$repo_root" rev-parse HEAD)
 
 cleanup() {
-    docker rm -fv "$container" >/dev/null 2>&1 || true
+    docker rm -fv "$container" "$physical_container" >/dev/null 2>&1 || true
     rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -646,6 +649,97 @@ END
 $$;
 RESET ROLE;
 SQL
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "CREATE FUNCTION public.e2e_graph_member_row_counts() RETURNS jsonb
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS \$e2e\$
+        DECLARE member record; row_count bigint; counts jsonb := '{}'::jsonb;
+        BEGIN
+            FOR member IN
+                SELECT gm.logical_id, gm.relation_oid
+                FROM mdm_internal.graph_members gm
+                JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+                JOIN mdm_internal.entities e USING (entity_id)
+                WHERE e.entity_name = 'customer' AND b.definition_version = e.active_version
+                ORDER BY gm.topological_ordinal
+            LOOP
+                EXECUTE pg_catalog.format('SELECT count(*) FROM %s', member.relation_oid::regclass)
+                    INTO row_count;
+                counts := counts || pg_catalog.jsonb_build_object(member.logical_id, row_count);
+            END LOOP;
+            RETURN counts;
+        END
+        \$e2e\$;
+        GRANT EXECUTE ON FUNCTION public.e2e_graph_member_row_counts() TO mdm_administrator"
+physical_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
+physical_state=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT md5(public.e2e_customer_publication_state()::text)")
+physical_pgdata=$(docker exec "$container" psql -X -At -U postgres -d foundation -c 'SHOW data_directory')
+mkdir -p "$physical_data"
+docker exec -u postgres "$container" mkdir -p /tmp/pg-mdm-physical-backup
+docker exec -u postgres -e PGPASSWORD=postgres "$container" \
+    pg_basebackup -h 127.0.0.1 -U postgres -D /tmp/pg-mdm-physical-backup -Fp -Xs >/dev/null
+docker cp "$container:/tmp/pg-mdm-physical-backup/." "$physical_data/" >/dev/null
+docker run --detach --name "$physical_container" -e POSTGRES_PASSWORD=postgres -e PGDATA="$physical_pgdata" \
+    -v "$physical_data:$physical_pgdata" "$image" >/dev/null
+for _ in $(seq 1 60); do
+    if docker exec "$physical_container" pg_isready -U postgres >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+docker exec "$physical_container" pg_isready -U postgres >/dev/null
+physical_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
+test "$physical_refresh" = "false|$physical_revision"
+physical_recovered_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT md5(public.e2e_customer_publication_state()::text)")
+test "$physical_recovered_state" = "$physical_state"
+physical_graph_counts=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT public.e2e_graph_member_row_counts()::text")
+docker exec "$physical_container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$ DECLARE member record; BEGIN
+        FOR member IN
+            SELECT gm.relation_oid
+            FROM mdm_internal.graph_members gm
+            JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+            JOIN mdm_internal.entities e USING (entity_id)
+            WHERE e.entity_name = 'customer' AND b.definition_version = e.active_version
+            ORDER BY gm.topological_ordinal
+        LOOP
+            EXECUTE pg_catalog.format('TRUNCATE TABLE %s', member.relation_oid::regclass);
+        END LOOP;
+    END \$\$;"
+missing_graph_counts=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT public.e2e_graph_member_row_counts()::text")
+if [[ $missing_graph_counts == "$physical_graph_counts" ]]; then
+    echo 'FAIL: physical recovery fixture did not remove derived graph rows' >&2
+    exit 1
+fi
+mkdir -p "$missing_graph_data"
+docker exec -u postgres "$physical_container" mkdir -p /tmp/pg-mdm-missing-graph-backup
+docker exec -u postgres -e PGPASSWORD=postgres "$physical_container" \
+    pg_basebackup -h 127.0.0.1 -U postgres -D /tmp/pg-mdm-missing-graph-backup -Fp -Xs >/dev/null
+docker cp "$physical_container:/tmp/pg-mdm-missing-graph-backup/." "$missing_graph_data/" >/dev/null
+docker rm -fv "$physical_container" >/dev/null
+docker run --detach --name "$physical_container" -e POSTGRES_PASSWORD=postgres -e PGDATA="$physical_pgdata" \
+    -v "$missing_graph_data:$physical_pgdata" "$image" >/dev/null
+for _ in $(seq 1 60); do
+    if docker exec "$physical_container" pg_isready -U postgres >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+docker exec "$physical_container" pg_isready -U postgres >/dev/null
+missing_graph_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT md5(public.e2e_customer_publication_state()::text)")
+test "$missing_graph_state" = "$physical_state"
+physical_rebuild_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
+test "$physical_rebuild_refresh" = "false|$physical_revision"
+rebuilt_graph_counts=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT public.e2e_graph_member_row_counts()::text")
+test "$rebuilt_graph_counts" = "$physical_graph_counts"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
