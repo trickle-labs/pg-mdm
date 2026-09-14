@@ -140,6 +140,9 @@ fn sql_literal(value: &Value, type_name: &str) -> String {
 
 fn stable_graph_contract(contract: &Value) -> Value {
     let mut stable = contract.clone();
+    if let Some(object) = stable.as_object_mut() {
+        object.remove("graph_digest");
+    }
     if let Some(members) = stable.get_mut("members").and_then(Value::as_array_mut) {
         for member in members {
             if let Some(member) = member.as_object_mut() {
@@ -2436,6 +2439,7 @@ mod tests {
     fn stable_graph_contract_ignores_only_provider_generation_counters() {
         let installed = json!({
             "contract_version": 1,
+            "graph_digest": "installed",
             "members": [{
                 "oid": 42,
                 "identity": "mdm_graph.member",
@@ -2446,6 +2450,7 @@ mod tests {
         });
         let refreshed = json!({
             "contract_version": 1,
+            "graph_digest": "refreshed",
             "members": [{
                 "oid": 42,
                 "identity": "mdm_graph.member",
