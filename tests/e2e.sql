@@ -1618,11 +1618,11 @@ BEGIN
     FROM mdm_internal.graph_members
     WHERE graph_binding_id = binding_id AND logical_id = 'normalized/email';
     EXECUTE pg_catalog.format(
-        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
         pair_relation
     ) INTO pair_rows;
     EXECUTE pg_catalog.format(
-        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) ORDER BY t.left_sort_key, t.right_sort_key, t.rule), ''[]''::jsonb) FROM %s t',
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' ORDER BY t.left_sort_key, t.right_sort_key, t.rule), ''[]''::jsonb) FROM %s t',
         evidence_relation
     ) INTO evidence_rows;
     EXECUTE pg_catalog.format(
