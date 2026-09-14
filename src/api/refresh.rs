@@ -70,6 +70,7 @@ struct Context {
     publication_revision: i64,
     artifact_id: String,
     graph_digest: Vec<u8>,
+    graph_contract: Value,
     graph_root: String,
     evidence_relation: String,
     golden_relation: String,
@@ -137,6 +138,18 @@ fn sql_literal(value: &Value, type_name: &str) -> String {
     format!("{value}::{type_name}")
 }
 
+fn stable_graph_contract(contract: &Value) -> Value {
+    let mut stable = contract.clone();
+    if let Some(members) = stable.get_mut("members").and_then(Value::as_array_mut) {
+        for member in members {
+            if let Some(member) = member.as_object_mut() {
+                member.remove("contract_generation");
+            }
+        }
+    }
+    stable
+}
+
 fn load_context(
     client: &SpiClient<'_>,
     entity_name: &str,
@@ -195,7 +208,7 @@ fn load_context(
         .ok_or_else(|| MdmError::Spi("artifact ID is NULL".into()))?;
     let binding = client
         .select(
-            "SELECT b.graph_binding_id::text, b.graph_digest, gm.relation_name FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 AND b.artifact_id = $4::pg_catalog.uuid ORDER BY b.graph_generation DESC LIMIT 1",
+            "SELECT b.graph_binding_id::text, b.graph_digest, gm.relation_name, b.graph_contract FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 AND b.artifact_id = $4::pg_catalog.uuid ORDER BY b.graph_generation DESC LIMIT 1",
             Some(1),
             &[
                 entity_id.clone().into(),
@@ -223,6 +236,11 @@ fn load_context(
         .get::<String>(3)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Spi("graph root relation is NULL".into()))?;
+    let graph_contract = binding_row
+        .get::<JsonB>(4)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("graph contract is NULL".into()))?
+        .0;
     let members = client
         .select(
             "SELECT m.logical_id, m.relation_name, m.relation_oid, pg_catalog.to_regclass(m.relation_name)::pg_catalog.oid, c.relowner FROM mdm_internal.graph_members m LEFT JOIN pg_catalog.pg_class c ON c.oid = m.relation_oid WHERE m.graph_binding_id = $1::pg_catalog.uuid ORDER BY m.topological_ordinal",
@@ -265,6 +283,7 @@ fn load_context(
         publication_revision,
         artifact_id,
         graph_digest,
+        graph_contract,
         graph_root,
         evidence_relation: relations
             .remove(&format!("evidence/{entity_name}"))
@@ -505,7 +524,7 @@ fn refresh_graph(
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
     let rows = client
         .select(
-            "SELECT contract_version, graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+            "SELECT contract_version, graph_digest, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
             Some(1),
             &[context.graph_root.clone().into()],
         )
@@ -520,11 +539,20 @@ fn refresh_graph(
         .get::<i16>(1)
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?
         .ok_or_else(|| MdmError::RefreshFailed("graph contract version is NULL".into()))?;
-    let digest = contract
+    let current_digest = contract
         .get::<Vec<u8>>(2)
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?
         .ok_or_else(|| MdmError::RefreshFailed("graph contract digest is NULL".into()))?;
-    if version != 1 || digest != context.graph_digest {
+    let current_contract = contract
+        .get::<JsonB>(3)
+        .map_err(|error| MdmError::RefreshFailed(error.to_string()))?
+        .ok_or_else(|| MdmError::RefreshFailed("graph contract is NULL".into()))?
+        .0;
+    if version != 1
+        || current_digest.len() != 32
+        || stable_graph_contract(&current_contract)
+            != stable_graph_contract(&context.graph_contract)
+    {
         return Err(MdmError::GraphContract(
             "graph contract changed since installation".into(),
         ));
@@ -535,7 +563,7 @@ fn refresh_graph(
             Some(1),
             &[
                 context.graph_root.clone().into(),
-                context.graph_digest.clone().into(),
+                current_digest.clone().into(),
                 full_policy.into(),
             ],
         )
@@ -554,7 +582,7 @@ fn refresh_graph(
         .get::<i64>(2)
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?
         .ok_or_else(|| MdmError::RefreshFailed("graph refresh ID is NULL".into()))?;
-    let digest = row
+    let refresh_digest = row
         .get::<Vec<u8>>(3)
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?
         .ok_or_else(|| MdmError::RefreshFailed("refresh graph digest is NULL".into()))?;
@@ -570,7 +598,7 @@ fn refresh_graph(
         .get::<JsonB>(6)
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?
         .ok_or_else(|| MdmError::RefreshFailed("node results are NULL".into()))?;
-    if version != 1 || digest != context.graph_digest || boundary_digest.len() != 32 {
+    if version != 1 || refresh_digest != current_digest || boundary_digest.len() != 32 {
         return Err(MdmError::RefreshBoundary(
             "strict graph refresh returned invalid metadata".into(),
         ));
@@ -1828,7 +1856,7 @@ fn validate_preview_contract(
 ) -> Result<(), MdmError> {
     let contract = client
         .select(
-            "SELECT contract_version, graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+            "SELECT contract_version, graph_digest, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
             Some(1),
             &[context.graph_root.clone().into()],
         )
@@ -1843,7 +1871,15 @@ fn validate_preview_contract(
     let digest = contract
         .get::<Vec<u8>>(2)
         .map_err(|error| MdmError::Spi(error.to_string()))?;
-    if version != Some(1) || digest.as_deref() != Some(context.graph_digest.as_slice()) {
+    let current_contract = contract
+        .get::<JsonB>(3)
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if version != Some(1)
+        || digest.as_ref().is_none_or(|value| value.len() != 32)
+        || current_contract.as_ref().is_none_or(|value| {
+            stable_graph_contract(&value.0) != stable_graph_contract(&context.graph_contract)
+        })
+    {
         return Err(MdmError::GraphContract(
             "graph contract changed since installation".into(),
         ));
@@ -2397,6 +2433,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stable_graph_contract_ignores_only_provider_generation_counters() {
+        let installed = json!({
+            "contract_version": 1,
+            "members": [{
+                "oid": 42,
+                "identity": "mdm_graph.member",
+                "contract_digest": "stable",
+                "contract_generation": 12,
+                "orchestration_mode": "EXTERNAL"
+            }]
+        });
+        let refreshed = json!({
+            "contract_version": 1,
+            "members": [{
+                "oid": 42,
+                "identity": "mdm_graph.member",
+                "contract_digest": "stable",
+                "contract_generation": 22,
+                "orchestration_mode": "EXTERNAL"
+            }]
+        });
+        assert_eq!(
+            stable_graph_contract(&refreshed),
+            json!({
+                "contract_version": 1,
+                "members": [{
+                    "oid": 42,
+                    "identity": "mdm_graph.member",
+                    "contract_digest": "stable",
+                    "orchestration_mode": "EXTERNAL"
+                }]
+            })
+        );
+        let changed = json!({
+            "contract_version": 1,
+            "members": [{
+                "oid": 42,
+                "identity": "mdm_graph.member",
+                "contract_digest": "changed",
+                "contract_generation": 22,
+                "orchestration_mode": "EXTERNAL"
+            }]
+        });
+        assert_ne!(
+            stable_graph_contract(&installed),
+            stable_graph_contract(&changed)
+        );
+    }
+
+    #[test]
     fn evidence_reader_fetches_at_most_one_row_past_its_candidate_ceiling() {
         assert_eq!(pair_evidence_fetch_limit(10, 3).unwrap(), (30, 31));
         assert_eq!(pair_evidence_fetch_limit(10, 0).unwrap(), (10, 11));
@@ -2594,6 +2680,7 @@ mod tests {
             publication_revision: 0,
             artifact_id: String::new(),
             graph_digest: Vec::new(),
+            graph_contract: Value::Null,
             graph_root: String::new(),
             evidence_relation: String::new(),
             golden_relation: String::new(),
