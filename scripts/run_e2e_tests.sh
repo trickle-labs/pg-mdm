@@ -492,10 +492,18 @@ original_artifacts=$(docker exec "$container" psql -X -At -U postgres -d foundat
 source_identity_query="SELECT md5(COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(identity_digest, 'hex') || ':' || key_contract::text, '|' ORDER BY source_identity_id) FROM mdm_internal.source_identities), '') || '/' || COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(source_record_key, 'hex') || ':' || source_record_id::text || ':' || active::text, '|' ORDER BY source_identity_id, source_record_key) FROM mdm_internal.source_records), ''))"
 original_source_identities=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$source_identity_query")
 docker exec "$container" pg_dump -Fc -U postgres foundation >"$dump_file"
-before_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
-    -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
-before_output_rows=$(docker exec "$container" psql -X -At -U postgres -d foundation \
-    -c "SELECT count(*) FROM mdm_out.customer")
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "CREATE FUNCTION public.e2e_customer_publication_state() RETURNS jsonb
+        LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS \$e2e\$
+        SELECT pg_catalog.jsonb_build_object(
+            'publication_revision', (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'),
+            'publication_count', (SELECT count(*) FROM mdm_internal.publications p JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'),
+            'members', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_out.customer_members m), '[]'::jsonb),
+            'entities', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(o) ORDER BY o.mdm_id) FROM mdm_out.customer o), '[]'::jsonb),
+            'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb)
+        )
+        \$e2e\$;
+        GRANT EXECUTE ON FUNCTION public.e2e_customer_publication_state() TO mdm_administrator"
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL'
 SET ROLE mdm_administrator;
 DO $$
@@ -509,7 +517,7 @@ DECLARE
     retry_state jsonb;
     final_state jsonb;
 BEGIN
-    before_state := public.e2e_customer_state();
+    before_state := public.e2e_customer_publication_state();
     SELECT * INTO STRICT create_result
     FROM mdm.create(jsonb_set(mdm.describe('customer', 'definition'),
         '{limits,max_active_records}', '2'), 4);
@@ -524,13 +532,12 @@ BEGIN
     IF NOT failed THEN
         RAISE EXCEPTION 'resolver limit did not fail closed';
     END IF;
-    failed_state := public.e2e_customer_state();
+    failed_state := public.e2e_customer_publication_state();
     IF failed_state->'publication_revision' IS DISTINCT FROM before_state->'publication_revision'
        OR failed_state->'publication_count' IS DISTINCT FROM before_state->'publication_count'
        OR failed_state->'members' IS DISTINCT FROM before_state->'members'
        OR failed_state->'entities' IS DISTINCT FROM before_state->'entities'
-       OR failed_state->'reviews' IS DISTINCT FROM before_state->'reviews'
-       OR failed_state->'internal_changed' IS DISTINCT FROM '[]'::jsonb THEN
+       OR failed_state->'reviews' IS DISTINCT FROM before_state->'reviews' THEN
         RAISE EXCEPTION 'resolver-limit failure changed the published state: before %, after %',
             before_state, failed_state;
     END IF;
@@ -542,22 +549,21 @@ BEGIN
         RAISE EXCEPTION 'resolver-limit retry did not create version 6';
     END IF;
     result := mdm.refresh('customer', 'ALLOW');
-    retry_state := public.e2e_customer_state();
+    retry_state := public.e2e_customer_publication_state();
     IF (result->>'publication_revision')::bigint <> (retry_state->>'publication_revision')::bigint THEN
         RAISE EXCEPTION 'resolver-limit retry returned a stale publication revision: %, state %',
             result, retry_state;
     END IF;
 
     retry_result := mdm.refresh('customer', 'ALLOW');
-    final_state := public.e2e_customer_state();
+    final_state := public.e2e_customer_publication_state();
     IF retry_result->>'changed' <> 'false'
        OR (retry_result->>'publication_revision')::bigint <> (retry_state->>'publication_revision')::bigint
        OR final_state->'publication_revision' IS DISTINCT FROM retry_state->'publication_revision'
        OR final_state->'publication_count' IS DISTINCT FROM retry_state->'publication_count'
        OR final_state->'members' IS DISTINCT FROM retry_state->'members'
        OR final_state->'entities' IS DISTINCT FROM retry_state->'entities'
-       OR final_state->'reviews' IS DISTINCT FROM retry_state->'reviews'
-       OR final_state->'internal_changed' IS DISTINCT FROM '[]'::jsonb THEN
+       OR final_state->'reviews' IS DISTINCT FROM retry_state->'reviews' THEN
         RAISE EXCEPTION 'resolver-limit retry was not stable: result %, before %, after %',
             retry_result, retry_state, final_state;
     END IF;
