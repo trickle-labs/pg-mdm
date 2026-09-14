@@ -244,7 +244,7 @@ fn revoke_graph_create(client: &mut SpiClient<'_>, role: &str) -> Result<(), Mdm
 fn member_contract(
     client: &mut SpiClient<'_>,
     relation_name: &str,
-    expected_query: &str,
+    expected_query: Option<&str>,
     role: &str,
 ) -> Result<InstalledMember, MdmError> {
     let relation_oid = client
@@ -315,10 +315,11 @@ fn member_contract(
             "member contract for {relation_name} does not match its binding"
         )));
     }
-    if let Some(actual_query) = contract
-        .get("defining_query")
-        .or_else(|| contract.get("query"))
-        .and_then(Value::as_str)
+    if let Some(expected_query) = expected_query
+        && let Some(actual_query) = contract
+            .get("defining_query")
+            .or_else(|| contract.get("query"))
+            .and_then(Value::as_str)
         && (actual_query.trim().is_empty() || expected_query.trim().is_empty())
     {
         return Err(MdmError::GraphContract(format!(
@@ -460,7 +461,7 @@ fn install_graph(
             .map_err(|error| {
                 MdmError::GraphInstallation(format!("{}: {}", node.logical_id, error))
             })?;
-        let mut member = member_contract(client, &qualified, &query, role)?;
+        let mut member = member_contract(client, &qualified, Some(&query), role)?;
         member.logical_id = node.logical_id.clone();
         member.ordinal = ordinal as i32;
         relations.insert(node.logical_id.clone(), qualified);
@@ -514,6 +515,14 @@ fn install_graph(
         return Err(MdmError::GraphContract(
             "graph contract does not match installed members".into(),
         ));
+    }
+
+    // Adding downstream nodes can advance an upstream member's contract generation.
+    for member in &mut members {
+        let current = member_contract(client, &member.relation_name, None, role)?;
+        member.contract_generation = current.contract_generation;
+        member.contract_digest = current.contract_digest;
+        member.contract = current.contract;
     }
 
     let binding_input = json!({

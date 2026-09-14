@@ -517,7 +517,7 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
             length = channel.prefix_length.expect("validated prefix length")
         ),
         ChannelKind::Token => format!(
-            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.convert_to(token, 'UTF8') AS block_key, source_record_id, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY token, source_record_id, source_sort_key",
+            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.convert_to(token, 'UTF8') AS block_key, source_record_id, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token(token)\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY token, source_record_id, source_sort_key",
             channel_id = channel.channel_id.replace('\'', "''"),
             min_length = channel.token_min_length.expect("validated token length")
         ),

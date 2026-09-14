@@ -877,4 +877,58 @@ mod tests {
             assert_ne!(left.component_key, right.component_key);
         }
     }
+
+    #[test]
+    fn generated_edge_additions_and_removals_match_clean_resolution() {
+        let records = (1..=4)
+            .map(|value| ResolverRecord {
+                source_record_id: id(value),
+                source_sort_key: vec![value],
+                authority: BTreeMap::new(),
+            })
+            .collect::<Vec<_>>();
+        let edges = [
+            (1, 2, "g1", 1),
+            (2, 3, "g2", 2),
+            (3, 4, "g3", 3),
+            (1, 4, "g4", 4),
+            (1, 3, "g5", 5),
+            (2, 4, "g6", 6),
+        ];
+        let mutations = [
+            (true, 0),
+            (true, 1),
+            (true, 2),
+            (true, 3),
+            (false, 1),
+            (false, 0),
+            (true, 4),
+            (false, 2),
+            (true, 5),
+        ];
+        let mut decisions = Vec::new();
+        for (step, (add, index)) in mutations.into_iter().enumerate() {
+            let (left, right, group, sort) = edges[index];
+            if add {
+                decisions.push(edge(left, right, group, sort));
+            } else {
+                decisions.retain(|decision: &PairDecision| {
+                    decision.pair.left_source_record_id != id(left)
+                        || decision.pair.right_source_record_id != id(right)
+                });
+            }
+            let input = ResolverInput {
+                records: records.clone(),
+                manual_matches: Vec::new(),
+                cannot_links: Vec::new(),
+                pair_decisions: decisions.clone(),
+                limits: ResolverLimits::default(),
+            };
+            assert_eq!(
+                resolve(input.clone()).unwrap(),
+                oracle::resolve(input).unwrap(),
+                "edge mutation step {step}"
+            );
+        }
+    }
 }

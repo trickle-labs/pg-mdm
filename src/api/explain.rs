@@ -1,4 +1,5 @@
 use pgrx::prelude::*;
+use pgrx::spi::SpiClient;
 use pgrx::{Internal, JsonB};
 use serde_json::{Map, Value, json};
 
@@ -55,6 +56,87 @@ fn validate_subject(subject: &Value) -> Result<&Map<String, Value>, MdmError> {
         ));
     }
     Ok(object)
+}
+
+fn identity_state(
+    client: &SpiClient<'_>,
+    entity_id: &str,
+    mdm_id: &str,
+) -> Result<Value, MdmError> {
+    let rows = client
+        .select(
+            "SELECT status FROM mdm_internal.identity_registry WHERE entity_id = $1::pg_catalog.uuid AND mdm_id = $2::pg_catalog.uuid",
+            Some(1),
+            &[entity_id.to_owned().into(), mdm_id.to_owned().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let status = rows
+        .first()
+        .get::<String>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    Ok(json!({"scope": "current", "status": status}))
+}
+
+fn pair_facts(
+    client: &SpiClient<'_>,
+    entity_id: &str,
+    subject: &Map<String, Value>,
+    publication_revision: Option<i64>,
+    max_facts: i32,
+) -> Result<(Vec<Value>, bool), MdmError> {
+    let left_id = subject
+        .get("left_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| MdmError::ExplanationInvalid("pair.left_id must be a UUID string".into()))?;
+    let right_id = subject
+        .get("right_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            MdmError::ExplanationInvalid("pair.right_id must be a UUID string".into())
+        })?;
+    let rows = client
+        .select(
+            "SELECT publication_revision, fact_kind, fact->>'reason_code', fact->'evidence_groups' FROM mdm_internal.resolution_facts WHERE entity_id = $1::pg_catalog.uuid AND subject_kind = 'pair' AND subject_key IN (pg_catalog.convert_to(($2::pg_catalog.uuid)::text || ':' || ($3::pg_catalog.uuid)::text, 'UTF8'), pg_catalog.convert_to(($3::pg_catalog.uuid)::text || ':' || ($2::pg_catalog.uuid)::text, 'UTF8')) AND ($4::bigint IS NULL OR publication_revision = $4) ORDER BY publication_revision DESC, fact_number LIMIT $5",
+            None,
+            &[
+                entity_id.to_owned().into(),
+                left_id.to_owned().into(),
+                right_id.to_owned().into(),
+                publication_revision.into(),
+                (max_facts as i64 + 1).into(),
+            ],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let mut facts = rows
+        .into_iter()
+        .map(|row| {
+            let revision = row
+                .get::<i64>(1)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("resolution fact revision is NULL".into()))?;
+            let outcome = row
+                .get::<String>(2)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("resolution fact outcome is NULL".into()))?;
+            let reason_code = row
+                .get::<String>(3)
+                .map_err(|error| MdmError::Spi(error.to_string()))?;
+            let evidence_groups = row
+                .get::<JsonB>(4)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .map(|value| value.0)
+                .unwrap_or_else(|| json!([]));
+            Ok(json!({
+                "publication_revision": revision,
+                "outcome": outcome,
+                "reason_code": reason_code,
+                "evidence_groups": evidence_groups
+            }))
+        })
+        .collect::<Result<Vec<_>, MdmError>>()?;
+    let truncated = facts.len() > max_facts as usize;
+    facts.truncate(max_facts as usize);
+    Ok((facts, truncated))
 }
 
 #[pg_extern(
@@ -148,23 +230,39 @@ pub(crate) fn explain_entity(request: Internal) -> JsonB {
                         .and_then(Value::as_i64)
                         .map(|value| value.to_string())
                 });
-            let facts = if let Some(key) = subject_key {
-                client.select(
+            let (facts, truncated) = if kind == "pair" {
+                pair_facts(
+                    client,
+                    &entity_id,
+                    subject,
+                    request.publication_revision,
+                    request.max_facts,
+                )?
+            } else if let Some(key) = subject_key {
+                let facts = client.select(
                     "SELECT fact FROM mdm_internal.resolution_facts WHERE entity_id = $1::pg_catalog.uuid AND subject_kind = $2 AND subject_key = pg_catalog.convert_to($3, 'UTF8') ORDER BY publication_revision DESC, fact_number LIMIT $4",
                     Some(1), &[entity_id.clone().into(), kind.into(), key.into(), (request.max_facts as i64 + 1).into()]
-                ).map_err(|e| MdmError::Spi(e.to_string()))?.map(|row| row.get::<JsonB>(1).map(|value| value.map(|v| v.0)).map_err(|e| MdmError::Spi(e.to_string()))).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>()
+                ).map_err(|e| MdmError::Spi(e.to_string()))?.map(|row| row.get::<JsonB>(1).map(|value| value.map(|v| v.0)).map_err(|e| MdmError::Spi(e.to_string()))).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>();
+                let truncated = facts.len() > request.max_facts as usize;
+                (
+                    facts.into_iter().take(request.max_facts as usize).collect(),
+                    truncated,
+                )
             } else {
-                Vec::new()
+                (Vec::new(), false)
             };
-            let truncated = facts.len() > request.max_facts as usize;
-            let facts = facts
-                .into_iter()
-                .take(request.max_facts as usize)
-                .collect::<Vec<_>>();
+            let identity = if kind == "mdm_id" {
+                let mdm_id = subject.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    MdmError::ExplanationInvalid("mdm_id.id must be a UUID string".into())
+                })?;
+                identity_state(client, &entity_id, mdm_id)?
+            } else {
+                Value::Null
+            };
             Ok(JsonB(json!({
                 "facts": facts,
                 "truncated": truncated,
-                "identity": {"status": Value::Null},
+                "identity": identity,
                 "retained_revision_range": {"earliest": earliest, "latest": latest}
             })))
         })

@@ -46,48 +46,56 @@ fn test_all_fixture_cases() {
     assert_eq!(fixture.canonical_encoding_version, 1);
 
     for tc in &fixture.cases {
-        let result = if tc.logical_type == "date" {
-            let parts = tc.input.as_deref().and_then(|s| {
-                let p: Vec<&str> = s.trim().split('-').collect();
-                if p.len() == 3 {
-                    let y = p[0].parse::<i32>().ok()?;
-                    let m = p[1].parse::<u8>().ok()?;
-                    let d = p[2].parse::<u8>().ok()?;
-                    Some((y, m, d))
+        let normalize = || {
+            if tc.logical_type == "date" {
+                let parts = tc.input.as_deref().and_then(|s| {
+                    let p: Vec<&str> = s.trim().split('-').collect();
+                    if p.len() == 3 {
+                        let y = p[0].parse::<i32>().ok()?;
+                        let m = p[1].parse::<u8>().ok()?;
+                        let d = p[2].parse::<u8>().ok()?;
+                        Some((y, m, d))
+                    } else {
+                        None
+                    }
+                });
+                if tc.input.is_some() && parts.is_none() && tc.source_state == "present" {
+                    // If it's a date string that couldn't even parse into 3 integer parts, pure date returns Invalid
+                    Ok(pg_mdm::normalization::NormalizedValue {
+                        state: NormalizedState::Invalid,
+                        normalized: None,
+                        canonical_bytes: None,
+                    })
                 } else {
-                    None
+                    normalize_date_pure(
+                        parts,
+                        &tc.cleaner,
+                        tc.cleaner_version,
+                        &tc.source_state,
+                        &tc.options,
+                    )
                 }
-            });
-            if tc.input.is_some() && parts.is_none() && tc.source_state == "present" {
-                // If it's a date string that couldn't even parse into 3 integer parts, pure date returns Invalid
-                Ok(pg_mdm::normalization::NormalizedValue {
-                    state: NormalizedState::Invalid,
-                    normalized: None,
-                    canonical_bytes: None,
-                })
             } else {
-                normalize_date_pure(
-                    parts,
+                normalize_text_pure(
+                    tc.input.as_deref(),
                     &tc.cleaner,
                     tc.cleaner_version,
                     &tc.source_state,
                     &tc.options,
                 )
             }
-        } else {
-            normalize_text_pure(
-                tc.input.as_deref(),
-                &tc.cleaner,
-                tc.cleaner_version,
-                &tc.source_state,
-                &tc.options,
-            )
         };
 
-        let norm_val = match result {
+        let norm_val = match normalize() {
             Ok(v) => v,
             Err(e) => panic!("Case {} failed with error: {e}", tc.id),
         };
+        assert_eq!(
+            norm_val,
+            normalize().unwrap_or_else(|error| panic!("Case {} failed again: {error}", tc.id)),
+            "Cleaner output changed when repeated for case {}",
+            tc.id
+        );
 
         assert_eq!(
             norm_val.state.as_str(),
@@ -173,6 +181,20 @@ fn test_canonically_equivalent_unicode_forms() {
 
     assert_eq!(val_composed.normalized, val_decomposed.normalized);
     assert_eq!(val_composed.canonical_bytes, val_decomposed.canonical_bytes);
+}
+
+#[test]
+fn text_cleaner_is_repeatable_and_uses_locale_independent_case_mapping() {
+    let normalize = || {
+        normalize_text_pure(Some("I İ ı"), "text", 1, "present", &serde_json::json!({})).unwrap()
+    };
+    let first = normalize();
+    assert_eq!(first, normalize());
+    assert_eq!(first.normalized.as_deref(), Some("i i\u{0307} ı"));
+    assert_eq!(
+        first.canonical_bytes.as_deref().map(to_hex).as_deref(),
+        Some("0101692069cc8720c4b1")
+    );
 }
 
 #[test]

@@ -1080,6 +1080,74 @@ fn load_current_golden(client: &SpiClient<'_>, context: &Context) -> Result<Valu
     Ok(Value::Array(values))
 }
 
+fn load_current_resolution_facts(
+    client: &SpiClient<'_>,
+    context: &Context,
+) -> Result<Value, MdmError> {
+    let rows = client
+        .select(
+            "SELECT pg_catalog.convert_from(subject_key, 'UTF8'), fact_kind, fact->>'reason_code', fact->'evidence_groups' FROM mdm_internal.resolution_facts WHERE entity_id = $1::pg_catalog.uuid AND publication_revision = $2 AND subject_kind = 'pair'",
+            None,
+            &[
+                context.entity_id.clone().into(),
+                context.publication_revision.into(),
+            ],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let mut facts = Vec::with_capacity(rows.len());
+    for row in rows {
+        let subject_key = row
+            .get::<String>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("resolution fact subject is NULL".into()))?;
+        let kind = row
+            .get::<String>(2)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("resolution fact kind is NULL".into()))?;
+        let reason = row
+            .get::<String>(3)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("resolution fact reason is NULL".into()))?;
+        let groups = row
+            .get::<JsonB>(4)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("resolution fact evidence groups are NULL".into()))?
+            .0
+            .as_array()
+            .ok_or_else(|| MdmError::Spi("resolution fact evidence groups are invalid".into()))?
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    MdmError::Spi("resolution fact evidence group is not text".into())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        facts.push((subject_key, kind, reason, groups));
+    }
+    facts.sort();
+    Ok(json!(facts))
+}
+
+fn scope_resolution_facts(facts: &Value, source_record_ids: &BTreeSet<Uuid>) -> Value {
+    let selected = source_record_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let rows = facts
+        .as_array()
+        .expect("resolution fact projection is an array")
+        .iter()
+        .filter(|row| {
+            row.get(0)
+                .and_then(Value::as_str)
+                .and_then(|key| key.split_once(':'))
+                .is_some_and(|(left, right)| selected.contains(left) && selected.contains(right))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    Value::Array(rows)
+}
+
 fn start_operation(
     client: &mut SpiClient<'_>,
     context: &Context,
@@ -1420,6 +1488,7 @@ fn persist_refresh_inner(
         let old_identity = load_old_identity(client, &context)?;
         let old_reviews = load_reviews(client, &context)?;
         let old_golden = load_current_golden(client, &context)?;
+        let old_resolution_facts = load_current_resolution_facts(client, &context)?;
         let golden_rows = load_golden_rows(client, &context)?;
         let overrides = load_overrides(client, &context)?;
         let revision = context
@@ -1446,6 +1515,7 @@ fn persist_refresh_inner(
             old_identity: &old_identity,
             old_reviews: &old_reviews,
             old_golden: &old_golden,
+            old_resolution_facts: &old_resolution_facts,
             golden_rows: &golden_rows,
             overrides: &overrides,
             allocator: &mut allocator,
@@ -1466,9 +1536,12 @@ fn persist_refresh_inner(
         if changed {
             let result_digest = digest(
                 "pg_mdm/publication/v1",
-                &[&json_bytes(
-                    &json!({"identity": evaluation::semantic_identity(next_identity), "golden": evaluation::semantic_golden(next_golden), "reviews": evaluation::semantic_reviews(next_reviews)}),
-                )],
+                &[&json_bytes(&evaluation::semantic_projection(
+                    next_identity,
+                    next_golden,
+                    next_reviews,
+                    &evaluation.resolution,
+                ))],
             );
             client.update("INSERT INTO mdm_internal.publications (entity_id, publication_revision, definition_version, decision_epoch, operation_id, result_digest) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5::pg_catalog.uuid, $6)", None, &[context.entity_id.clone().into(), revision.into(), context.definition_version.into(), context.decision_epoch.into(), operation_id.clone().into(), result_digest.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             for row in &next_identity.registry {
@@ -2163,6 +2236,10 @@ fn preview_run(
         &selected_mdm_ids,
     );
     let old_golden = scope_current_golden(load_current_golden(client, context)?, &selected_mdm_ids);
+    let old_resolution_facts = scope_resolution_facts(
+        &load_current_resolution_facts(client, context)?,
+        &selected_ids,
+    );
     let golden_rows = load_golden_rows(client, context)?
         .into_iter()
         .filter(|row| selected_ids.contains(&row.source_record_id))
@@ -2247,6 +2324,7 @@ fn preview_run(
         old_identity: &old_identity,
         old_reviews: &old_reviews,
         old_golden: &old_golden,
+        old_resolution_facts: &old_resolution_facts,
         golden_rows: &golden_rows,
         overrides: &overrides,
         allocator: &mut allocator,
@@ -2332,6 +2410,34 @@ mod tests {
             NormalizedState::Value
         );
         assert!(normalized_state("partial").is_err());
+    }
+
+    #[test]
+    fn scoped_resolution_facts_keep_only_pairs_within_scope() {
+        let id = |value| Uuid::from_bytes([value; 16]);
+        let facts = json!([
+            [
+                "01010101-0101-0101-0101-010101010101:02020202-0202-0202-0202-020202020202",
+                "accepted",
+                "ALREADY_CONNECTED",
+                ["name"]
+            ],
+            [
+                "02020202-0202-0202-0202-020202020202:03030303-0303-0303-0303-030303030303",
+                "rejected",
+                "CANNOT_LINK",
+                ["name"]
+            ]
+        ]);
+        assert_eq!(
+            scope_resolution_facts(&facts, &BTreeSet::from([id(1), id(2)])),
+            json!([[
+                "01010101-0101-0101-0101-010101010101:02020202-0202-0202-0202-020202020202",
+                "accepted",
+                "ALREADY_CONNECTED",
+                ["name"]
+            ]])
+        );
     }
 
     #[test]

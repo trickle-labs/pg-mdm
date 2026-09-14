@@ -17,6 +17,7 @@ jobs:
       - run: docker run --rm pg_mdm:test cargo fmt -- --check
       - run: docker run --rm pg_mdm:test cargo clippy --all-targets --features pg18 -- -D warnings
       - run: docker run --rm pg_mdm:test cargo test --lib --features pg18
+      - run: docker run --rm -e LC_ALL=C pg_mdm:test cargo test --test normalization_tests --test e2e_candidate_spec_tests --features pg18
       - run: docker run --rm pg_mdm:test cargo test --test organization_quality_tests --features pg18 -- --nocapture | tee organization-quality.log
       - run: docker run --rm pg_mdm:test cargo test --test stewardship_contract_tests --features pg18
       - run: docker run --rm pg_mdm:test cargo pgrx test pg18 --features pg_test

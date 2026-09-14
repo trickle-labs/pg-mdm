@@ -688,6 +688,57 @@ mod tests {
     }
 
     #[test]
+    fn candidate_bytes_follow_binary_sort_keys_not_uuid_or_plan_order() {
+        let plan = CandidatePlan {
+            channels: vec![
+                CandidateChannel {
+                    channel_id: "z_exact".into(),
+                    kind: ChannelKind::Exact,
+                    fields: vec!["email".into()],
+                    prefix_length: None,
+                    token_min_length: None,
+                    owners: vec!["z_exact".into()],
+                },
+                CandidateChannel {
+                    channel_id: "a_exact".into(),
+                    kind: ChannelKind::Exact,
+                    fields: vec!["email".into()],
+                    prefix_length: None,
+                    token_min_length: None,
+                    owners: vec!["a_exact".into()],
+                },
+            ],
+        };
+        let mut sort_key_first = record(2, "email", "same@example.test");
+        sort_key_first.source_sort_key = vec![1];
+        let mut uuid_first = record(1, "email", "same@example.test");
+        uuid_first.source_sort_key = vec![2];
+        let values = vec![uuid_first, sort_key_first];
+        let expected = vec![CandidatePair {
+            left_source_record_id: id(2),
+            right_source_record_id: id(1),
+            left_sort_key: vec![1],
+            right_sort_key: vec![2],
+            discovery_channels: vec!["a_exact".into(), "z_exact".into()],
+        }];
+
+        assert_eq!(all_pairs_oracle(&plan, &values), expected);
+        assert_eq!(
+            generate_candidates(&plan, &values, limits()).unwrap(),
+            expected
+        );
+
+        let mut reversed_plan = plan;
+        reversed_plan.channels.reverse();
+        let mut reversed_values = values;
+        reversed_values.reverse();
+        assert_eq!(
+            generate_candidates(&reversed_plan, &reversed_values, limits()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn composite_requires_every_value_and_prefix_counts_scalars() {
         let plan = CandidatePlan {
             channels: vec![

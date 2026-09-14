@@ -38,6 +38,9 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
     let pair_sql = pair["defining_sql"].as_str().unwrap();
     assert!(pair_sql.contains("@{block-stats/same_email}"));
     assert!(pair_sql.contains("source_sort_key < r.source_sort_key"));
+    assert_eq!(pair["output_schema"]["left_sort_key"], "bytea");
+    assert_eq!(pair["output_schema"]["right_sort_key"], "bytea");
+    assert!(!pair_sql.contains("COLLATE"));
     let channel_pairs = pair_sql.split("\nUNION\n").collect::<Vec<_>>();
     assert!(
         channel_pairs

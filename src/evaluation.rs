@@ -52,6 +52,7 @@ pub(crate) struct EvaluationInput<'a> {
     pub old_identity: &'a IdentityState,
     pub old_reviews: &'a [Review],
     pub old_golden: &'a Value,
+    pub old_resolution_facts: &'a Value,
     pub golden_rows: &'a [GoldenRow],
     pub overrides: &'a BTreeMap<String, Vec<GoldenOverride>>,
     pub allocator: &'a mut dyn IdAllocator,
@@ -273,6 +274,42 @@ pub(crate) fn semantic_golden(golden: &BTreeMap<(Uuid, String), GoldenSelection>
     )
 }
 
+pub(crate) fn semantic_resolution_facts(resolution: &Resolution) -> Value {
+    let mut facts = resolution
+        .accepted
+        .iter()
+        .map(|fact| (fact, "accepted"))
+        .chain(resolution.rejected.iter().map(|fact| (fact, "rejected")))
+        .map(|(fact, kind)| {
+            (
+                format!(
+                    "{}:{}",
+                    fact.edge.left_source_record_id, fact.edge.right_source_record_id
+                ),
+                kind.to_owned(),
+                fact.reason_code.clone(),
+                fact.evidence_groups.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    facts.sort();
+    json!(facts)
+}
+
+pub(crate) fn semantic_projection(
+    identity: &IdentityState,
+    golden: &BTreeMap<(Uuid, String), GoldenSelection>,
+    reviews: &[Review],
+    resolution: &Resolution,
+) -> Value {
+    json!({
+        "identity": semantic_identity(identity),
+        "golden": semantic_golden(golden),
+        "reviews": semantic_reviews(reviews),
+        "resolution_facts": semantic_resolution_facts(resolution)
+    })
+}
+
 pub(crate) fn resolve_and_compare(
     input: EvaluationInput<'_>,
 ) -> Result<EvaluationResult, MdmError> {
@@ -288,6 +325,7 @@ pub(crate) fn resolve_and_compare(
         old_identity,
         old_reviews,
         old_golden,
+        old_resolution_facts,
         golden_rows,
         overrides,
         allocator,
@@ -341,7 +379,8 @@ pub(crate) fn resolve_and_compare(
     let changed = publication_revision == 1
         || semantic_identity(old_identity) != semantic_identity(&next_identity)
         || semantic_reviews(old_reviews) != semantic_reviews(&next_reviews)
-        || semantic_golden(&next_golden) != *old_golden;
+        || semantic_golden(&next_golden) != *old_golden
+        || semantic_resolution_facts(&resolution) != *old_resolution_facts;
     Ok(EvaluationResult {
         resolution,
         identity: next_identity,
@@ -349,4 +388,186 @@ pub(crate) fn resolve_and_compare(
         reviews: next_reviews,
         changed,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::golden::GoldenStatus;
+    use crate::identity::{IdentityMembership, IdentityRecord, IdentityStatus};
+    use crate::resolver::{PairKey, UnionFact, UnionOutcome};
+
+    fn fact(left: u8, right: u8, outcome: UnionOutcome, reason: &str) -> UnionFact {
+        UnionFact {
+            left_component_key: vec![left],
+            right_component_key: vec![right],
+            edge: PairKey {
+                left_source_record_id: Uuid::from_bytes([left; 16]),
+                right_source_record_id: Uuid::from_bytes([right; 16]),
+                left_sort_key: vec![left],
+                right_sort_key: vec![right],
+            },
+            outcome,
+            reason_code: reason.into(),
+            evidence_groups: vec!["name".into()],
+        }
+    }
+
+    #[test]
+    fn resolution_fact_projection_is_canonical_and_explanation_sensitive() {
+        let accepted = fact(1, 2, UnionOutcome::Accepted, "ALREADY_CONNECTED");
+        let rejected = fact(2, 3, UnionOutcome::Rejected, "CANNOT_LINK");
+        let projected = semantic_resolution_facts(&Resolution {
+            memberships: Vec::new(),
+            accepted: vec![accepted.clone()],
+            rejected: vec![rejected.clone()],
+        });
+        assert_eq!(
+            projected,
+            json!([
+                [
+                    "01010101-0101-0101-0101-010101010101:02020202-0202-0202-0202-020202020202",
+                    "accepted",
+                    "ALREADY_CONNECTED",
+                    ["name"]
+                ],
+                [
+                    "02020202-0202-0202-0202-020202020202:03030303-0303-0303-0303-030303030303",
+                    "rejected",
+                    "CANNOT_LINK",
+                    ["name"]
+                ]
+            ])
+        );
+        assert_eq!(
+            semantic_resolution_facts(&Resolution {
+                memberships: Vec::new(),
+                accepted: vec![accepted],
+                rejected: vec![rejected],
+            }),
+            projected
+        );
+        assert_ne!(
+            semantic_resolution_facts(&Resolution {
+                memberships: Vec::new(),
+                accepted: Vec::new(),
+                rejected: vec![fact(2, 3, UnionOutcome::Rejected, "AUTHORITATIVE_CONFLICT")],
+            }),
+            json!([
+                [
+                    "01010101-0101-0101-0101-010101010101:02020202-0202-0202-0202-020202020202",
+                    "accepted",
+                    "ALREADY_CONNECTED",
+                    ["name"]
+                ],
+                [
+                    "02020202-0202-0202-0202-020202020202:03030303-0303-0303-0303-030303030303",
+                    "rejected",
+                    "CANNOT_LINK",
+                    ["name"]
+                ]
+            ])
+        );
+    }
+
+    #[test]
+    fn publication_projection_keeps_provenance_and_ignores_bookkeeping() {
+        let id = |value| Uuid::from_bytes([value; 16]);
+        let identity = IdentityState {
+            registry: vec![IdentityRecord {
+                mdm_id: id(1),
+                created_revision: 1,
+                retired_revision: None,
+                status: IdentityStatus::Active,
+            }],
+            memberships: vec![IdentityMembership {
+                source_record_id: id(2),
+                source_sort_key: vec![1],
+                mdm_id: id(1),
+                active: true,
+                first_membership_revision: 1,
+                last_membership_revision: 1,
+                membership_reason: "new".into(),
+                last_change_revision: 1,
+            }],
+            ..IdentityState::default()
+        };
+        let golden = |tie_break: &str| {
+            BTreeMap::from([(
+                (id(1), "name".into()),
+                GoldenSelection {
+                    value: Some(json!("Acme")),
+                    normalized: Some("acme".into()),
+                    canonical_bytes: Some(b"acme".to_vec()),
+                    status: GoldenStatus::Selected,
+                    winning_source_record_id: Some(id(2)),
+                    policy: "priority".into(),
+                    policy_version: 1,
+                    tie_break: tie_break.into(),
+                    contributors: vec![id(2)],
+                    issues: Vec::new(),
+                },
+            )])
+        };
+        let review = Review {
+            review_id: id(3),
+            issue_key: [3; 32],
+            occurrence: 1,
+            status: ReviewStatus::Open,
+            severity: "warning".into(),
+            reason_code: "CANNOT_LINK".into(),
+            subjects: json!([]),
+            masked_summary: json!({}),
+            opened_revision: 1,
+            resolved_revision: None,
+            last_change_revision: 1,
+            concurrency_version: 1,
+        };
+        let resolution = Resolution {
+            memberships: Vec::new(),
+            accepted: vec![fact(1, 2, UnionOutcome::Accepted, "ALREADY_CONNECTED")],
+            rejected: Vec::new(),
+        };
+        let expected_review_key = vec![3u8; 32];
+        let baseline = semantic_projection(
+            &identity,
+            &golden("source_priority"),
+            std::slice::from_ref(&review),
+            &resolution,
+        );
+        assert_eq!(
+            baseline,
+            json!({
+                "identity": {
+                    "registry": [["01010101-0101-0101-0101-010101010101", "active"]],
+                    "memberships": [["02020202-0202-0202-0202-020202020202", [1], "01010101-0101-0101-0101-010101010101", true, 1, 1, "new"]],
+                    "aliases": [],
+                    "splits": []
+                },
+                "golden": [["01010101-0101-0101-0101-010101010101", "name", "Acme", "acme", "selected", "02020202-0202-0202-0202-020202020202", "priority", 1, "source_priority", ["02020202-0202-0202-0202-020202020202"]]],
+                "reviews": [[expected_review_key, 1, "open", "warning", "CANNOT_LINK", [], {}]],
+                "resolution_facts": [["01010101-0101-0101-0101-010101010101:02020202-0202-0202-0202-020202020202", "accepted", "ALREADY_CONNECTED", ["name"]]]
+            })
+        );
+
+        let mut bookkeeping_identity = identity.clone();
+        bookkeeping_identity.registry[0].created_revision = 99;
+        bookkeeping_identity.memberships[0].last_change_revision = 99;
+        let mut bookkeeping_review = review.clone();
+        bookkeeping_review.last_change_revision = 99;
+        bookkeeping_review.concurrency_version = 99;
+        assert_eq!(
+            semantic_projection(
+                &bookkeeping_identity,
+                &golden("source_priority"),
+                &[bookkeeping_review],
+                &resolution,
+            ),
+            baseline
+        );
+        assert_ne!(
+            semantic_projection(&identity, &golden("record_key"), &[review], &resolution),
+            baseline
+        );
+    }
 }

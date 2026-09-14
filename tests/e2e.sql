@@ -856,7 +856,59 @@ CREATE TABLE public.crm_customer (
     email_address text,
     updated_at timestamptz NOT NULL
 );
-GRANT SELECT, MAINTAIN ON public.crm_customer TO mdm_administrator;
+CREATE TABLE public.crm_source_key_unique (
+    id bigint NOT NULL UNIQUE,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+CREATE TABLE public.crm_source_key_nnd (
+    id bigint,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL,
+    UNIQUE NULLS NOT DISTINCT (id)
+);
+CREATE TABLE public.crm_source_key_nullable (
+    id bigint UNIQUE,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+CREATE TABLE public.crm_source_key_partial (
+    id bigint NOT NULL,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX crm_source_key_partial_id_idx
+    ON public.crm_source_key_partial (id) WHERE id IS NOT NULL;
+CREATE TABLE public.crm_source_key_expression (
+    id bigint NOT NULL,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX crm_source_key_expression_id_idx
+    ON public.crm_source_key_expression ((id + 0));
+CREATE TABLE public.crm_source_key_deferred (
+    id bigint NOT NULL,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL,
+    CONSTRAINT crm_source_key_deferred_id_key UNIQUE (id) DEFERRABLE INITIALLY IMMEDIATE
+);
+CREATE TABLE public.crm_source_key_unindexed (
+    id bigint NOT NULL,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+GRANT SELECT, MAINTAIN ON public.crm_customer, public.crm_source_key_unique,
+    public.crm_source_key_nnd, public.crm_source_key_nullable,
+    public.crm_source_key_partial, public.crm_source_key_expression,
+    public.crm_source_key_deferred, public.crm_source_key_unindexed
+    TO mdm_administrator;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -902,6 +954,60 @@ FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer defin
 \else
 \quit 1
 \endif
+
+BEGIN;
+DO $$
+DECLARE
+    proposed jsonb;
+    result record;
+    relation_name text;
+    entity_name text;
+    rejected_relations text[] := ARRAY[
+        'crm_source_key_nullable',
+        'crm_source_key_partial',
+        'crm_source_key_expression',
+        'crm_source_key_deferred',
+        'crm_source_key_unindexed'
+    ];
+BEGIN
+    proposed := mdm.describe('customer', 'definition');
+    proposed := pg_catalog.jsonb_set(proposed, '{name}', '"unique_key"'::jsonb);
+    proposed := pg_catalog.jsonb_set(proposed, '{sources,0,relation}', '"public.crm_source_key_unique"'::jsonb);
+    SELECT * INTO STRICT result FROM mdm.create(proposed);
+    IF result.desired_version <> 1 OR NOT result.changed THEN
+        RAISE EXCEPTION 'valid immediate unique source key was rejected: %', result;
+    END IF;
+
+    proposed := pg_catalog.jsonb_set(proposed, '{name}', '"nnd_key"'::jsonb);
+    proposed := pg_catalog.jsonb_set(proposed, '{sources,0,relation}', '"public.crm_source_key_nnd"'::jsonb);
+    SELECT * INTO STRICT result FROM mdm.create(proposed);
+    IF result.desired_version <> 1 OR NOT result.changed THEN
+        RAISE EXCEPTION 'valid NULLS NOT DISTINCT source key was rejected: %', result;
+    END IF;
+
+    FOREACH relation_name IN ARRAY rejected_relations LOOP
+        entity_name := 'rejected_key_' || relation_name;
+        proposed := mdm.describe('customer', 'definition');
+        proposed := pg_catalog.jsonb_set(proposed, '{name}', pg_catalog.to_jsonb(entity_name));
+        proposed := pg_catalog.jsonb_set(
+            proposed, '{sources,0,relation}',
+            pg_catalog.to_jsonb('public.' || relation_name));
+        BEGIN
+            PERFORM mdm.create(proposed);
+            RAISE EXCEPTION 'unsupported source key shape was accepted: %', relation_name;
+        EXCEPTION WHEN OTHERS THEN
+            IF pg_catalog.strpos(SQLERRM, 'MDM_SOURCE_INVALID') = 0 THEN RAISE; END IF;
+        END;
+        BEGIN
+            PERFORM mdm.describe(entity_name, 'definition');
+            RAISE EXCEPTION 'rejected source key left a definition: %', entity_name;
+        EXCEPTION WHEN OTHERS THEN
+            IF pg_catalog.strpos(SQLERRM, 'MDM_DEFINITION_INVALID') = 0 THEN RAISE; END IF;
+        END;
+    END LOOP;
+END
+$$;
+ROLLBACK;
 
 DO $$
 DECLARE
@@ -957,24 +1063,81 @@ $$;
 DO $$
 DECLARE
     member record;
-    contract jsonb;
+    binding record;
+    contract_row record;
+    graph_contract_row record;
+    artifact jsonb;
     row_count bigint;
     member_count integer := 0;
 BEGIN
+    SELECT gb.graph_binding_id, gb.execution_role_oid, gb.source_binding_digest,
+           gb.root_relation_oids, gb.graph_contract_version, gb.graph_digest,
+           gb.graph_contract, gb.graph_binding_digest, a.artifact_bytes
+    INTO STRICT binding
+    FROM mdm_internal.graph_bindings gb
+    JOIN mdm_internal.definition_artifacts a USING (artifact_id)
+    JOIN mdm_internal.entities e ON e.entity_id = gb.entity_id
+    WHERE e.entity_name = 'customer' AND gb.definition_version = 1;
+    IF binding.execution_role_oid <> 'mdm_administrator'::regrole::oid
+       OR octet_length(binding.source_binding_digest) <> 32
+       OR octet_length(binding.graph_binding_digest) <> 32 THEN
+        RAISE EXCEPTION 'graph binding does not pin its source, role, and digest';
+    END IF;
+    SELECT * INTO STRICT graph_contract_row
+    FROM pgtrickle.graph_contract(binding.root_relation_oids::regclass[]);
+    IF graph_contract_row.contract_version <> binding.graph_contract_version
+       OR graph_contract_row.graph_digest IS DISTINCT FROM binding.graph_digest
+       OR graph_contract_row.contract IS DISTINCT FROM binding.graph_contract THEN
+        RAISE EXCEPTION 'stored graph contract differs from the public root contract';
+    END IF;
+    artifact := pg_catalog.convert_from(binding.artifact_bytes, 'UTF8')::jsonb;
+    IF pg_catalog.jsonb_array_length(artifact->'roots') <> pg_catalog.cardinality(binding.root_relation_oids)
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.jsonb_array_elements_text(artifact->'roots') AS root(logical_id)
+           WHERE NOT EXISTS (
+               SELECT 1 FROM mdm_internal.graph_members gm
+               WHERE gm.graph_binding_id = binding.graph_binding_id
+                 AND gm.logical_id = root.logical_id
+                 AND gm.relation_oid = ANY(binding.root_relation_oids)))
+       OR pg_catalog.jsonb_array_length(artifact->'nodes') <> (
+           SELECT count(*) FROM mdm_internal.graph_members gm
+           WHERE gm.graph_binding_id = binding.graph_binding_id)
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.jsonb_array_elements(artifact->'nodes') AS node(value)
+           WHERE NOT EXISTS (
+               SELECT 1 FROM mdm_internal.graph_members gm
+               WHERE gm.graph_binding_id = binding.graph_binding_id
+                 AND gm.logical_id = node.value->>'logical_id')) THEN
+        RAISE EXCEPTION 'stored members and roots do not match the executable artifact';
+    END IF;
     FOR member IN
-        SELECT gm.relation_oid, gm.relation_name
+        SELECT gm.graph_binding_id, gm.logical_id, gm.topological_ordinal,
+               gm.relation_oid, gm.relation_name, gm.contract_generation,
+               gm.contract_digest, gm.contract
         FROM mdm_internal.graph_members gm
-        JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
-        JOIN mdm_internal.entities e USING (entity_id)
-        WHERE e.entity_name = 'customer' AND gb.definition_version = 1
+        WHERE gm.graph_binding_id = binding.graph_binding_id
         ORDER BY gm.topological_ordinal
     LOOP
         member_count := member_count + 1;
-        SELECT c.contract INTO STRICT contract
+        SELECT c.contract_version, c.contract_generation, c.contract_digest, c.contract
+        INTO STRICT contract_row
         FROM pgtrickle.stream_table_contract(member.relation_oid::regclass) c;
-        IF contract->>'orchestration_mode' <> 'EXTERNAL'
-           OR contract #>> '{relation,owner}' <> 'mdm_administrator' THEN
-            RAISE EXCEPTION 'graph member contract is not externally owned: %', contract;
+        IF contract_row.contract_version <> 1
+           OR contract_row.contract_generation <> member.contract_generation
+           OR contract_row.contract_digest IS DISTINCT FROM member.contract_digest
+           OR contract_row.contract IS DISTINCT FROM member.contract
+           OR contract_row.contract->>'orchestration_mode' <> 'EXTERNAL'
+           OR contract_row.contract #>> '{relation,owner}' <> 'mdm_administrator' THEN
+            RAISE EXCEPTION 'stored member contract differs from its public contract: % (version %, generation_match %, digest_match %, contract_match %, mode %, owner %)',
+                member.logical_id,
+                contract_row.contract_version,
+                contract_row.contract_generation IS NOT DISTINCT FROM member.contract_generation,
+                contract_row.contract_digest IS NOT DISTINCT FROM member.contract_digest,
+                contract_row.contract IS NOT DISTINCT FROM member.contract,
+                contract_row.contract->>'orchestration_mode',
+                contract_row.contract #>> '{relation,owner}';
         END IF;
         EXECUTE pg_catalog.format('SELECT pg_catalog.count(*) FROM %s', member.relation_oid::regclass)
             INTO row_count;
@@ -988,6 +1151,14 @@ BEGIN
     END IF;
 END
 $$;
+
+\connect foundation postgres
+CREATE TABLE public.e2e_artifact_immutability_snapshot AS
+SELECT a.artifact_bytes, a.artifact_digest
+FROM mdm_internal.definition_artifacts a
+JOIN mdm_internal.entities e USING (entity_id)
+WHERE e.entity_name = 'customer' AND a.definition_version = 1;
+REVOKE ALL ON public.e2e_artifact_immutability_snapshot FROM PUBLIC;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -1108,8 +1279,19 @@ BEGIN
              AND actor_name = 'mdm_test_login' AND actor_role_name = 'mdm_administrator') <> 5 THEN
         RAISE EXCEPTION 'unexpected operation count after v0.2 create';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mdm_internal.definition_artifacts a
+        JOIN mdm_internal.entities e USING (entity_id)
+        JOIN public.e2e_artifact_immutability_snapshot snapshot
+          ON snapshot.artifact_bytes = a.artifact_bytes
+         AND snapshot.artifact_digest = a.artifact_digest
+        WHERE e.entity_name = 'customer' AND a.definition_version = 1) THEN
+        RAISE EXCEPTION 'adding later compiler artifacts changed version 1 bytes';
+    END IF;
 END
 $$;
+DROP TABLE public.e2e_artifact_immutability_snapshot;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -1170,6 +1352,64 @@ BEGIN
 
 END
 $$;
+
+CREATE TABLE public.e2e_install_rollback_snapshot AS
+SELECT (SELECT count(*)
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'mdm_graph' AND c.relkind IN ('r', 'p')) AS graph_relations,
+       pg_catalog.has_schema_privilege('mdm_administrator', 'mdm_graph', 'CREATE') AS can_create,
+       pg_catalog.has_table_privilege('mdm_administrator', 'mdm_graph.source_records', 'SELECT') AS can_select;
+REVOKE ALL ON public.e2e_install_rollback_snapshot FROM PUBLIC;
+CREATE FUNCTION public.e2e_fail_graph_member_insert()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'injected graph member failure';
+END
+$$;
+CREATE TRIGGER e2e_fail_graph_member_insert
+AFTER INSERT ON mdm_internal.graph_members
+FOR EACH ROW EXECUTE FUNCTION public.e2e_fail_graph_member_insert();
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE definition jsonb;
+BEGIN
+    definition := pg_catalog.jsonb_set(
+        mdm.describe('customer', 'definition'), '{name}', '"install_rollback_probe"');
+    BEGIN
+        PERFORM mdm.create(definition, NULL, 'injected graph installation rollback');
+        RAISE EXCEPTION 'graph install passed the injected member failure';
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'injected graph member failure') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DROP TRIGGER e2e_fail_graph_member_insert ON mdm_internal.graph_members;
+DROP FUNCTION public.e2e_fail_graph_member_insert();
+DO $$
+DECLARE snapshot record;
+BEGIN
+    SELECT * INTO STRICT snapshot FROM public.e2e_install_rollback_snapshot;
+    IF EXISTS (SELECT 1 FROM mdm_internal.entities WHERE entity_name = 'install_rollback_probe')
+       OR EXISTS (
+           SELECT 1 FROM mdm_graph.source_identity_map
+           WHERE entity_name = 'install_rollback_probe')
+       OR (SELECT count(*)
+           FROM pg_catalog.pg_class c
+           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'mdm_graph' AND c.relkind IN ('r', 'p')) <> snapshot.graph_relations
+       OR pg_catalog.has_schema_privilege('mdm_administrator', 'mdm_graph', 'CREATE') IS DISTINCT FROM snapshot.can_create
+       OR pg_catalog.has_table_privilege('mdm_administrator', 'mdm_graph.source_records', 'SELECT') IS DISTINCT FROM snapshot.can_select THEN
+        RAISE EXCEPTION 'failed graph installation left partial state or grants';
+    END IF;
+END
+$$;
+DROP TABLE public.e2e_install_rollback_snapshot;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -2274,32 +2514,36 @@ DROP DATABASE graph_conformance WITH (FORCE);
 CREATE TABLE public.crm_customer_composite (
     tenant_id bigint NOT NULL,
     customer_id bigint NOT NULL,
-    display_name text NOT NULL,
-    email_address text,
+    display_name text COLLATE "C" NOT NULL,
+    email_address text COLLATE "C",
+    first_name text COLLATE "C" NOT NULL,
+    last_name text COLLATE "C" NOT NULL,
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (tenant_id, customer_id)
 );
-GRANT SELECT, MAINTAIN ON public.crm_customer_composite TO mdm_administrator;
+GRANT SELECT, INSERT, DELETE, MAINTAIN ON public.crm_customer_composite TO mdm_administrator;
 INSERT INTO public.crm_customer_composite VALUES
-    (101, 1001, 'Composite One', 'composite-one@example.test', statement_timestamp()),
-    (202, 2002, 'Composite Two', 'composite-two@example.test', statement_timestamp());
+    (101, 1001, 'Composite One', 'shared@example.test', 'Same', 'Person', statement_timestamp()),
+    (202, 2002, 'Composite Two', 'shared@example.test', 'Same', 'Person', statement_timestamp());
 CREATE FUNCTION public.e2e_composite_source_records()
-RETURNS TABLE(tenant_id bigint, customer_id bigint, source_record_id uuid, source_record_key bytea, member jsonb)
+RETURNS TABLE(tenant_id bigint, customer_id bigint, source_record_id uuid, source_record_key bytea, active boolean, member jsonb)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 BEGIN
     RETURN QUERY
-    SELECT c.tenant_id, c.customer_id, r.source_record_id, r.source_record_key, pg_catalog.to_jsonb(m)
-    FROM mdm_out.composite_customer_members m
-    JOIN mdm_internal.source_records r ON r.source_record_id = m.source_record_id
+    SELECT c.tenant_id, c.customer_id, r.source_record_id, r.source_record_key,
+           r.active, pg_catalog.to_jsonb(m)
+    FROM mdm_internal.source_records r
     JOIN mdm_internal.source_identities s
       ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
     JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
     LEFT JOIN public.crm_customer_composite c
       ON r.source_record_key = pgtrickle.encode_row_id_v2(
           'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.tenant_id, c.customer_id))
+    LEFT JOIN mdm_out.composite_customer_members m
+      ON m.source_record_id = r.source_record_id
     WHERE e.entity_name = 'composite_customer';
     RETURN;
 END
@@ -2328,19 +2572,31 @@ BEGIN
             relation => 'public.crm_customer_composite'::regclass,
             source_id => ARRAY['tenant_id', 'customer_id'],
             mode => 'tracked',
-            fields => pg_catalog.jsonb_build_object('name', 'display_name', 'email', 'email_address'),
+            fields => pg_catalog.jsonb_build_object(
+                'name', 'display_name', 'email', 'email_address',
+                'first', 'first_name', 'last', 'last_name'),
             row_changed_at => 'updated_at')],
         fields => ARRAY[
             mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
-            mdm.field(name => 'email', type => 'text', cleaner => 'email')
+            mdm.field(name => 'email', type => 'text', cleaner => 'email'),
+            mdm.field(name => 'first', type => 'text', cleaner => 'text'),
+            mdm.field(name => 'last', type => 'text', cleaner => 'text')
         ],
-        matches => ARRAY[mdm.match(
-            name => 'same_email',
-            fields => ARRAY['email'],
-            comparison => 'exact',
-            strength => 'identity',
-            evidence_group => 'email',
-            candidate => pg_catalog.jsonb_build_object('kind', 'exact', 'field', 'email'))],
+        matches => ARRAY[
+            mdm.match(
+                name => 'same_email', fields => ARRAY['email'],
+                comparison => 'exact', strength => 'identity', evidence_group => 'email',
+                candidate => pg_catalog.jsonb_build_object('kind', 'exact', 'field', 'email')),
+            mdm.match(
+                name => 'same_person', fields => ARRAY['first', 'last'],
+                comparison => 'exact', strength => 'identity', evidence_group => 'person',
+                candidate => pg_catalog.jsonb_build_object(
+                    'kind', 'composite_exact', 'fields', ARRAY['first', 'last'])),
+            mdm.match(
+                name => 'name_prefix', fields => ARRAY['name'],
+                comparison => 'exact', strength => 'strong', evidence_group => 'name',
+                candidate => pg_catalog.jsonb_build_object('kind', 'prefix', 'field', 'name', 'length', 2))
+        ],
         golden_values => ARRAY[mdm.golden_value(
             field => 'name', policy => 'prefer_source', sources => ARRAY['crm_composite'])]);
     SELECT * INTO STRICT created FROM mdm.create(proposed);
@@ -2397,9 +2653,277 @@ BEGIN
         RAISE EXCEPTION 'composite-key row IDs, reader rows, or rebuild stability failed: create %, refresh %, encoded %, reader %, before %, rebuild %, after %',
             created, refreshed, encoded_sources, reader_sources, members_before, rebuilt, members_after;
     END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DO $$
+DECLARE
+    pair_relation regclass;
+    email_relation regclass;
+    name_relation regclass;
+    first_relation regclass;
+    last_relation regclass;
+    matches_oracle boolean;
+    actual_pairs bigint;
+    member record;
+    contract jsonb;
+    member_count integer := 0;
+BEGIN
+    FOR member IN
+        SELECT gm.relation_oid, gm.relation_name
+        FROM mdm_internal.graph_members gm
+        JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+        JOIN mdm_internal.entities e USING (entity_id)
+        WHERE e.entity_name = 'composite_customer'
+          AND gb.definition_version = 1
+        ORDER BY gm.topological_ordinal
+    LOOP
+        member_count := member_count + 1;
+        SELECT c.contract INTO STRICT contract
+        FROM pgtrickle.stream_table_contract(member.relation_oid::regclass) c;
+        IF contract->>'orchestration_mode' IS DISTINCT FROM 'EXTERNAL'
+           OR contract #>> '{relation,owner}' IS DISTINCT FROM 'mdm_administrator' THEN
+            RAISE EXCEPTION 'candidate graph member violated the production execution-role contract: %', contract;
+        END IF;
+    END LOOP;
+    IF member_count = 0 THEN
+        RAISE EXCEPTION 'candidate graph has no generated stages';
+    END IF;
+
+    SELECT gm.relation_oid::regclass
+      INTO STRICT pair_relation
+      FROM mdm_internal.graph_members gm
+      JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+      JOIN mdm_internal.entities e USING (entity_id)
+     WHERE e.entity_name = 'composite_customer'
+       AND gb.definition_version = 1
+       AND gm.logical_id = 'pairs/composite_customer';
+    SELECT gm.relation_oid::regclass
+      INTO STRICT email_relation
+      FROM mdm_internal.graph_members gm
+      JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+      JOIN mdm_internal.entities e USING (entity_id)
+     WHERE e.entity_name = 'composite_customer'
+       AND gb.definition_version = 1
+       AND gm.logical_id = 'normalized/email';
+    SELECT gm.relation_oid::regclass
+      INTO STRICT name_relation
+      FROM mdm_internal.graph_members gm
+      JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+      JOIN mdm_internal.entities e USING (entity_id)
+     WHERE e.entity_name = 'composite_customer'
+       AND gb.definition_version = 1
+       AND gm.logical_id = 'normalized/name';
+    SELECT gm.relation_oid::regclass
+      INTO STRICT first_relation
+      FROM mdm_internal.graph_members gm
+      JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+      JOIN mdm_internal.entities e USING (entity_id)
+     WHERE e.entity_name = 'composite_customer'
+       AND gb.definition_version = 1
+       AND gm.logical_id = 'normalized/first';
+    SELECT gm.relation_oid::regclass
+      INTO STRICT last_relation
+      FROM mdm_internal.graph_members gm
+      JOIN mdm_internal.graph_bindings gb USING (graph_binding_id)
+      JOIN mdm_internal.entities e USING (entity_id)
+     WHERE e.entity_name = 'composite_customer'
+       AND gb.definition_version = 1
+       AND gm.logical_id = 'normalized/last';
+    EXECUTE pg_catalog.format($query$
+        WITH actual AS (
+            SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
+            FROM %s
+        ), normalized AS (
+            SELECT source_record_id, source_sort_key, field_name, normalized, canonical_bytes
+            FROM %s
+            WHERE state = 'value'
+            UNION ALL
+            SELECT source_record_id, source_sort_key, field_name, normalized, canonical_bytes
+            FROM %s WHERE state = 'value'
+            UNION ALL
+            SELECT source_record_id, source_sort_key, field_name, normalized, canonical_bytes
+            FROM %s WHERE state = 'value'
+            UNION ALL
+            SELECT source_record_id, source_sort_key, field_name, normalized, canonical_bytes
+            FROM %s WHERE state = 'value'
+        ), records AS (
+            SELECT source_record_id, source_sort_key,
+                   pg_catalog.max(normalized) FILTER (WHERE field_name = 'name') AS name,
+                   pg_catalog.max(canonical_bytes) FILTER (WHERE field_name = 'email') AS email_bytes,
+                   pg_catalog.max(canonical_bytes) FILTER (WHERE field_name = 'first') AS first_bytes,
+                   pg_catalog.max(canonical_bytes) FILTER (WHERE field_name = 'last') AS last_bytes
+            FROM normalized
+            GROUP BY source_record_id, source_sort_key
+        ), expected AS (
+            SELECT DISTINCT l.source_record_id AS left_source_record_id,
+                   r.source_record_id AS right_source_record_id,
+                   l.source_sort_key AS left_sort_key,
+                   r.source_sort_key AS right_sort_key
+            FROM records l
+            JOIN records r ON l.source_sort_key < r.source_sort_key
+            WHERE l.email_bytes = r.email_bytes
+               OR (l.first_bytes = r.first_bytes AND l.last_bytes = r.last_bytes)
+               OR pg_catalog.left(l.name, 2) = pg_catalog.left(r.name, 2)
+               OR EXISTS (
+                    SELECT FROM pg_catalog.unnest(pg_catalog.string_to_array(l.name, ' ')) lt(token)
+                    JOIN pg_catalog.unnest(pg_catalog.string_to_array(r.name, ' ')) rt(token)
+                      USING (token)
+                    WHERE pg_catalog.char_length(lt.token) >= 4
+               )
+        )
+        SELECT NOT EXISTS (
+                   SELECT * FROM actual EXCEPT ALL SELECT * FROM expected
+               ) AND NOT EXISTS (
+                   SELECT * FROM expected EXCEPT ALL SELECT * FROM actual
+               )
+    $query$, pair_relation, email_relation, name_relation, first_relation, last_relation)
+    INTO matches_oracle;
+    EXECUTE pg_catalog.format('SELECT pg_catalog.count(*) FROM %s', pair_relation)
+       INTO actual_pairs;
+    IF NOT matches_oracle OR actual_pairs <> 1 THEN
+        RAISE EXCEPTION 'production-generated candidate pairs differ from the independent all-pairs oracle in % (pairs %, equal %)',
+            pair_relation, actual_pairs, matches_oracle;
+    END IF;
+END
+$$;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    source_id_before uuid;
+    source_key_before bytea;
+    source_id_after uuid;
+    source_key_after bytea;
+    source_active_after boolean;
+    deactivated jsonb;
+    reactivated jsonb;
+BEGIN
+    SELECT source_record_id, source_record_key
+      INTO STRICT source_id_before, source_key_before
+      FROM public.e2e_composite_source_records()
+     WHERE tenant_id = 101 AND customer_id = 1001;
+    DELETE FROM public.crm_customer_composite
+     WHERE tenant_id = 101 AND customer_id = 1001;
+    deactivated := mdm.refresh('composite_customer', 'ALLOW');
+    SELECT source_record_id, source_record_key, active
+      INTO source_id_after, source_key_after, source_active_after
+      FROM public.e2e_composite_source_records()
+     WHERE source_record_id = source_id_before;
+    IF source_id_after IS DISTINCT FROM source_id_before
+       OR source_key_after IS DISTINCT FROM source_key_before
+       OR source_active_after IS DISTINCT FROM false THEN
+        RAISE EXCEPTION 'deactivation did not preserve the inactive source identity: %, refresh %',
+            public.e2e_composite_source_records(), deactivated;
+    END IF;
+
+    INSERT INTO public.crm_customer_composite
+    VALUES (101, 1001, 'Composite One', 'shared@example.test', 'Same', 'Person', statement_timestamp());
+    reactivated := mdm.refresh('composite_customer', 'ALLOW');
+    SELECT source_record_id, source_record_key, active
+      INTO source_id_after, source_key_after, source_active_after
+      FROM public.e2e_composite_source_records()
+     WHERE tenant_id = 101 AND customer_id = 1001;
+    IF source_id_after IS DISTINCT FROM source_id_before
+       OR source_key_after IS DISTINCT FROM source_key_before
+       OR source_active_after IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'reactivation allocated a different source identity: %, refresh %',
+            public.e2e_composite_source_records(), reactivated;
+    END IF;
+END
+$$;
+
+DO $$
+DECLARE
+    resolved_entity_id uuid;
+    mdm_id uuid;
+    identity_status text;
+    pair_key text;
+    pair_left text;
+    pair_right text;
+    pair_revision bigint;
+    expected_facts jsonb;
+    expected jsonb;
+    actual jsonb;
+    earliest bigint;
+    latest bigint;
+BEGIN
+    SELECT e.entity_id INTO STRICT resolved_entity_id
+      FROM mdm_internal.entities e
+     WHERE e.entity_name = 'composite_customer';
+    SELECT min(publication_revision), max(publication_revision)
+      INTO earliest, latest
+      FROM mdm_internal.resolution_facts
+     WHERE mdm_internal.resolution_facts.entity_id = resolved_entity_id;
+
+    SELECT i.mdm_id, i.status INTO STRICT mdm_id, identity_status
+      FROM mdm_internal.identity_registry i
+     WHERE i.entity_id = resolved_entity_id AND i.status = 'active'
+     ORDER BY i.mdm_id
+     LIMIT 1;
+    actual := mdm.explain(
+        'composite_customer', jsonb_build_object('kind', 'mdm_id', 'id', mdm_id::text), NULL, 1
+    );
+    expected := jsonb_build_object(
+        'facts', '[]'::jsonb,
+        'truncated', false,
+        'identity', jsonb_build_object('scope', 'current', 'status', identity_status),
+        'retained_revision_range', jsonb_build_object('earliest', earliest, 'latest', latest)
+    );
+    IF actual IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION 'mdm_id explanation differs from its bounded machine-readable status: %, expected %', actual, expected;
+    END IF;
+
+    SELECT pg_catalog.convert_from(f.subject_key, 'UTF8'), f.publication_revision
+      INTO STRICT pair_key, pair_revision
+      FROM mdm_internal.resolution_facts f
+     WHERE f.entity_id = resolved_entity_id AND f.subject_kind = 'pair'
+     ORDER BY f.publication_revision DESC, f.fact_number
+     LIMIT 1;
+    pair_left := pg_catalog.split_part(pair_key, ':', 1);
+    pair_right := pg_catalog.split_part(pair_key, ':', 2);
+    SELECT coalesce(
+               pg_catalog.jsonb_agg(
+                   jsonb_build_object(
+                       'publication_revision', f.publication_revision,
+                       'outcome', f.fact_kind,
+                       'reason_code', f.fact->>'reason_code',
+                       'evidence_groups', f.fact->'evidence_groups'
+                   ) ORDER BY f.fact_number
+               ),
+               '[]'::jsonb
+           )
+      INTO expected_facts
+      FROM mdm_internal.resolution_facts f
+     WHERE f.entity_id = resolved_entity_id
+       AND f.publication_revision = pair_revision
+       AND f.subject_kind = 'pair'
+       AND f.subject_key = pg_catalog.convert_to(pair_key, 'UTF8');
+    IF pg_catalog.jsonb_array_length(expected_facts) > 500 THEN
+        RAISE EXCEPTION 'pair explanation fixture exceeds the API fact bound';
+    END IF;
+    actual := mdm.explain(
+        'composite_customer',
+        jsonb_build_object('kind', 'pair', 'left_id', pair_right, 'right_id', pair_left),
+        pair_revision,
+        500
+    );
+    expected := jsonb_build_object(
+        'facts', expected_facts,
+        'truncated', false,
+        'identity', NULL::jsonb,
+        'retained_revision_range', jsonb_build_object('earliest', earliest, 'latest', latest)
+    );
+    IF actual IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION 'pair explanation differs from its bounded non-sensitive fact projection: %, expected %', actual, expected;
+    END IF;
     PERFORM mdm_admin.drop_entity('composite_customer', 'composite_customer');
 END
 $$;
+
 RESET ROLE;
 
 \connect foundation postgres

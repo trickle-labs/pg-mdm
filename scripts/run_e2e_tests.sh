@@ -43,8 +43,11 @@ CREATE FUNCTION public.delay_release_output()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     -- Give the outer test a deterministic marker for the publication boundary.
-    PERFORM pg_catalog.pg_advisory_xact_lock(718110, 110972);
-    PERFORM pg_catalog.pg_sleep(5);
+    IF pg_catalog.current_setting('mdm.e2e_release_waited', true) IS DISTINCT FROM 'on' THEN
+        PERFORM pg_catalog.set_config('mdm.e2e_release_waited', 'on', true);
+        PERFORM pg_catalog.pg_advisory_xact_lock(718110, 110972);
+        PERFORM pg_catalog.pg_sleep(5);
+    END IF;
     RETURN NEW;
 END
 $$;
@@ -129,8 +132,102 @@ BEGIN
 END
 $$;
 DROP TRIGGER delay_release_output ON mdm_out.customer;
-DROP FUNCTION public.delay_release_output();
+INSERT INTO public.crm_customer VALUES (5, 'Concurrent refresh', 'concurrent@example.test', statement_timestamp());
+CREATE TRIGGER delay_concurrent_output
+BEFORE INSERT OR UPDATE ON mdm_out.customer
+FOR EACH ROW WHEN (NEW.name = 'Concurrent refresh')
+EXECUTE FUNCTION public.delay_release_output();
 SQL
+docker exec -e PGAPPNAME=mdm_refresh_one "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+        result := mdm.refresh('customer', 'ALLOW');
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 8 THEN
+            RAISE EXCEPTION 'first concurrent source refresh failed: %', result;
+        END IF;
+    END \$\$;" >"$work_dir/refresh_one.log" 2>&1 &
+refresh_one=$!
+refresh_paused=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND classid = 718110::oid AND objid = 110972::oid AND objsubid = 2 AND granted)") == t ]]; then
+        refresh_paused=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $refresh_paused != true ]]; then
+    kill "$refresh_one" 2>/dev/null || true
+    wait "$refresh_one" || true
+    cat "$work_dir/refresh_one.log"
+    echo 'FAIL: first concurrent source refresh did not reach publication' >&2
+    exit 1
+fi
+docker exec -e PGAPPNAME=mdm_refresh_two "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+        result := mdm.refresh('customer', 'ALLOW');
+        IF result->>'changed' <> 'false' OR (result->>'publication_revision')::bigint <> 8 THEN
+            RAISE EXCEPTION 'second concurrent source refresh failed: %', result;
+        END IF;
+    END \$\$;" >"$work_dir/refresh_two.log" 2>&1 &
+refresh_two=$!
+refreshes_overlapped=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_stat_activity a, pg_catalog.pg_stat_activity b WHERE a.application_name = 'mdm_refresh_one' AND b.application_name = 'mdm_refresh_two' AND a.pid = ANY(pg_catalog.pg_blocking_pids(b.pid)))") == t ]]; then
+        refreshes_overlapped=true
+        break
+    fi
+    sleep 0.1
+done
+if ! wait "$refresh_one"; then cat "$work_dir/refresh_one.log"; exit 1; fi
+if ! wait "$refresh_two"; then cat "$work_dir/refresh_two.log"; exit 1; fi
+if [[ $refreshes_overlapped != true ]]; then
+    echo 'FAIL: concurrent source refreshes did not contend on the entity lock' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$
+DECLARE
+    source_state jsonb;
+BEGIN
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'source_record_id', r.source_record_id,
+        'source_active', r.active,
+        'membership_source_record_id', m.source_record_id,
+        'membership_active', m.active,
+        'reader_source_record_id', om.source_record_id,
+        'reader_active', om.active,
+        'source_name', c.display_name,
+        'output_name', o.name
+    ) ORDER BY r.source_record_id), '[]'::jsonb)
+      INTO source_state
+      FROM mdm_internal.source_records r
+      JOIN mdm_internal.source_identities s
+        ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
+      JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
+      JOIN public.crm_customer c
+        ON r.source_record_key = pgtrickle.encode_row_id_v2(
+            'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id))
+      LEFT JOIN mdm_internal.memberships m
+        ON m.entity_id = r.entity_id AND m.source_record_id = r.source_record_id
+      LEFT JOIN mdm_out.customer_members om ON om.source_record_id = r.source_record_id
+      LEFT JOIN mdm_out.customer o ON o.mdm_id = om.mdm_id
+     WHERE e.entity_name = 'customer' AND c.id = 5;
+    IF pg_catalog.jsonb_array_length(source_state) <> 1
+       OR source_state->0->>'source_record_id' IS NULL
+       OR source_state->0->>'source_record_id' IS DISTINCT FROM source_state->0->>'membership_source_record_id'
+       OR source_state->0->>'source_record_id' IS DISTINCT FROM source_state->0->>'reader_source_record_id'
+       OR source_state->0->>'source_active' IS DISTINCT FROM 'true'
+       OR source_state->0->>'membership_active' IS DISTINCT FROM 'true'
+       OR source_state->0->>'reader_active' IS DISTINCT FROM 'true'
+       OR source_state->0->>'source_name' IS DISTINCT FROM 'Concurrent refresh'
+       OR source_state->0->>'output_name' IS DISTINCT FROM 'Concurrent refresh' THEN
+        RAISE EXCEPTION 'concurrent refreshes did not preserve one durable source record: %', source_state;
+    END IF;
+END
+\$\$;
+DROP TRIGGER delay_concurrent_output ON mdm_out.customer;
+DROP FUNCTION public.delay_release_output();"
 
 docker exec -e PGAPPNAME=mdm_writer_one "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; BEGIN;
@@ -165,6 +262,55 @@ if ! wait "$writer_one"; then cat "$work_dir/writer_one.log"; exit 1; fi
 if wait "$writer_two"; then echo 'FAIL: concurrent stale version succeeded' >&2; exit 1; fi
 if [[ $overlapped != true ]]; then echo 'FAIL: writers did not contend on the entity lock' >&2; exit 1; fi
 if ! grep -q 'MDM_VERSION_CONFLICT' "$work_dir/writer_two.log"; then cat "$work_dir/writer_two.log"; exit 1; fi
+
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$
+DECLARE
+    state jsonb;
+BEGIN
+    SELECT pg_catalog.jsonb_build_object(
+        'desired_version', e.desired_version,
+        'v4_definition_count', (SELECT count(*) FROM mdm_internal.definitions d
+                                WHERE d.entity_id = e.entity_id AND d.definition_version = 4),
+        'v4_artifacts', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'compiler_version', a.compiler_version,
+            'artifact_digest', pg_catalog.encode(a.artifact_digest, 'hex')))
+            FROM mdm_internal.definition_artifacts a
+            WHERE a.entity_id = e.entity_id AND a.definition_version = 4), '[]'::jsonb),
+        'v4_bindings', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'artifact_id', b.artifact_id,
+            'graph_binding_digest', pg_catalog.encode(b.graph_binding_digest, 'hex'),
+            'member_count', (SELECT count(*) FROM mdm_internal.graph_members m
+                            WHERE m.graph_binding_id = b.graph_binding_id),
+            'unbound_members', (SELECT count(*) FROM mdm_internal.graph_members m
+                                LEFT JOIN pg_catalog.pg_class c ON c.oid = m.relation_oid
+                                WHERE m.graph_binding_id = b.graph_binding_id AND c.oid IS NULL))
+            ORDER BY b.graph_binding_id)
+            FROM mdm_internal.graph_bindings b
+            WHERE b.entity_id = e.entity_id AND b.definition_version = 4), '[]'::jsonb),
+        'newer_definitions', (SELECT count(*) FROM mdm_internal.definitions d
+                              WHERE d.entity_id = e.entity_id AND d.definition_version > 4),
+        'newer_artifacts', (SELECT count(*) FROM mdm_internal.definition_artifacts a
+                            WHERE a.entity_id = e.entity_id AND a.definition_version > 4),
+        'newer_bindings', (SELECT count(*) FROM mdm_internal.graph_bindings b
+                           WHERE b.entity_id = e.entity_id AND b.definition_version > 4))
+      INTO state
+      FROM mdm_internal.entities e
+     WHERE e.entity_name = 'customer';
+    IF state->>'desired_version' IS DISTINCT FROM '4'
+       OR state->>'v4_definition_count' IS DISTINCT FROM '1'
+       OR pg_catalog.jsonb_array_length(state->'v4_artifacts') <> 1
+       OR pg_catalog.jsonb_array_length(state->'v4_bindings') <> 1
+       OR (state->'v4_bindings'->0->>'member_count')::bigint < 1
+       OR (state->'v4_bindings'->0->>'unbound_members')::bigint <> 0
+       OR state->>'newer_definitions' IS DISTINCT FROM '0'
+       OR state->>'newer_artifacts' IS DISTINCT FROM '0'
+       OR state->>'newer_bindings' IS DISTINCT FROM '0'
+       OR pg_catalog.has_schema_privilege('mdm_administrator', 'mdm_graph', 'CREATE') THEN
+        RAISE EXCEPTION 'losing concurrent installer left incomplete or duplicate graph state: %', state;
+    END IF;
+END
+\$\$;"
 
 original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'public.crm_customer'::regclass::oid")
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
