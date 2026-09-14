@@ -370,17 +370,22 @@ END
 if ! docker exec -e PGAPPNAME=mdm_directive_race_apply "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 10
-           OR (SELECT count(*) FROM mdm_out.customer c
-               JOIN mdm_out.customer_members m USING (mdm_id)
-               JOIN public.e2e_source_records(ARRAY[9001]::bigint[]) r USING (source_record_id)
-               WHERE c.name = 'Race override' AND m.source_name = 'crm' AND m.active) <> 1 THEN
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 10 THEN
             RAISE EXCEPTION 'golden override was not applied by the next refresh: %', result;
         END IF;
     END \$\$;" >"$work_dir/directive_race_apply.log" 2>&1; then
     cat "$work_dir/directive_race_apply.log"
     exit 1
 fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$ BEGIN
+        IF (SELECT count(*) FROM mdm_out.customer c
+            JOIN mdm_out.customer_members m USING (mdm_id)
+            JOIN public.e2e_source_records(ARRAY[9001]::bigint[]) r USING (source_record_id)
+            WHERE c.name = 'Race override' AND m.source_name = 'crm' AND m.active) <> 1 THEN
+            RAISE EXCEPTION 'golden override was not visible in the published output';
+        END IF;
+    END \$\$;"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "DROP TRIGGER delay_directive_race_output ON mdm_out.customer;
         DROP FUNCTION public.delay_release_output();
