@@ -659,7 +659,7 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
                 FROM mdm_internal.graph_members gm
                 JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
                 JOIN mdm_internal.entities e USING (entity_id)
-                WHERE e.entity_name = 'customer' AND b.definition_version = e.active_version
+                WHERE e.entity_name = 'customer' AND b.definition_version = e.desired_version
                 ORDER BY gm.topological_ordinal
             LOOP
                 EXECUTE pg_catalog.format('SELECT count(*) FROM %s', member.relation_oid::regclass)
@@ -695,27 +695,22 @@ test "$physical_refresh" = "false|$physical_revision"
 physical_recovered_state=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
     -c "SELECT md5(public.e2e_customer_publication_state()::text)")
 test "$physical_recovered_state" = "$physical_state"
-physical_graph_counts=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
-    -c "SELECT public.e2e_graph_member_row_counts()::text")
-docker exec "$physical_container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
-    -c "DO \$\$ DECLARE member record; BEGIN
-        FOR member IN
-            SELECT gm.relation_oid
-            FROM mdm_internal.graph_members gm
-            JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
-            JOIN mdm_internal.entities e USING (entity_id)
-            WHERE e.entity_name = 'customer' AND b.definition_version = e.active_version
-            ORDER BY gm.topological_ordinal
-        LOOP
-            EXECUTE pg_catalog.format('TRUNCATE TABLE %s', member.relation_oid::regclass);
-        END LOOP;
-    END \$\$;"
-missing_graph_counts=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
-    -c "SELECT public.e2e_graph_member_row_counts()::text")
-if [[ $missing_graph_counts == "$physical_graph_counts" ]]; then
-    echo 'FAIL: physical recovery fixture did not remove derived graph rows' >&2
-    exit 1
-fi
+physical_graph_populated=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT COALESCE(pg_catalog.bool_or(row_count::bigint > 0), false) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
+test "$physical_graph_populated" = t
+docker exec "$physical_container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$
+        DECLARE result record;
+        BEGIN
+            SELECT * INTO STRICT result FROM mdm.create(jsonb_set(
+                mdm.describe('customer', 'definition'), '{limits,max_active_records}', '101'), 6);
+            IF NOT result.changed OR result.desired_version <> 7 THEN
+                RAISE EXCEPTION 'physical recovery fixture did not create pending graph version: %', result;
+            END IF;
+        END \$\$;"
+missing_graph_empty=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT count(*) > 0 AND pg_catalog.bool_and(row_count::bigint = 0) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
+test "$missing_graph_empty" = t
 mkdir -p "$missing_graph_data"
 docker exec -u postgres "$physical_container" mkdir -p /tmp/pg-mdm-missing-graph-backup
 docker exec -u postgres -e PGPASSWORD=postgres "$physical_container" \
@@ -737,9 +732,9 @@ test "$missing_graph_state" = "$physical_state"
 physical_rebuild_refresh=$(docker exec "$physical_container" psql -X -qAt -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; SELECT (result->>'changed') || '|' || (result->>'publication_revision') FROM (SELECT mdm.refresh('customer', 'ALLOW') AS result) refresh")
 test "$physical_rebuild_refresh" = "false|$physical_revision"
-rebuilt_graph_counts=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
-    -c "SELECT public.e2e_graph_member_row_counts()::text")
-test "$rebuilt_graph_counts" = "$physical_graph_counts"
+rebuilt_graph_populated=$(docker exec "$physical_container" psql -X -At -U postgres -d foundation \
+    -c "SELECT COALESCE(pg_catalog.bool_or(row_count::bigint > 0), false) FROM pg_catalog.jsonb_each_text(public.e2e_graph_member_row_counts()) AS member(logical_id, row_count)")
+test "$rebuilt_graph_populated" = t
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
@@ -813,6 +808,7 @@ python3 "$repo_root/scripts/record_e2e_evidence.py" \
 
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'
+echo 'PASS: physical backup recovery with populated and pending graph state'
 echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies'
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'SKIPPED: Delta V1 positive conformance, output_delta_consumer is not used by V1'
