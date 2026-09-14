@@ -7,21 +7,21 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:de04b23170c6e79509853ef9cfa9aa3dd628781571f9acf3e4f0883271c80ec1",
+    "docker_image_id": "sha256:d87b8cc723a9cf89e6494bf6af6c28b6bc9bdc0dbd3de09c442dca55147f479d",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 456286208,
-      "visible_available_bytes": 6473121792,
+      "cgroup_peak_bytes": 430829568,
+      "visible_available_bytes": 5479411712,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 117825490944 810320789504  13% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 118072881152 810073399296  13% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
     "archived_pg_mdm_0_12_0_sha256": "6523d19b284bf9d1ee92c72741aa2a3843335a9429ef30fdceaeaf36a9b1929d",
     "cargo_lock_sha256": "f96a398612cfe55176933349dbb84d7156691d5e1714d124909ce0b143638a01",
-    "e2e_sql_sha256": "74b6af5ab7c2e4675e0f6f185db157f2d522536213bc999ebd73216b7e1ddf67",
+    "e2e_sql_sha256": "3e4cc0a2d4bb0a283e58945ff625f80ebf74cbf8b6295cfd5c16694c6b34c17e",
     "operating_envelope_sql_sha256": "dd1abd9dd9e993cbe6851f426969e5dafbe47141ea19e742ebd8c760002edec8",
     "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
     "pg_mdm_package_manifest_sha256": "f9493c4630adbf52f8f61551b0a2c4bb750bb2730bce4277bce97dc9deee2076",
@@ -42,13 +42,13 @@
     "last_customer_refresh": {
       "active_records": 6,
       "component_checks": 0,
-      "elapsed_ms": 2064,
+      "elapsed_ms": 1335,
       "publication_revision": 7,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 690,
-        "graph_refresh": 652,
-        "mdm_resolution": 29,
-        "publication": 4
+        "elapsed_before_operation_completion": 465,
+        "graph_refresh": 438,
+        "mdm_resolution": 21,
+        "publication": 2
       }
     },
     "max_block_records": 0,
@@ -76,9 +76,9 @@
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-13T20:55:11.715998+00:00",
+  "recorded_at_utc": "2026-09-14T06:08:01.967108+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including boundary, restore, and clone assertions, returned successfully.",
-  "source_commit": "83e1da8dbc3a5469622c77ff3f71dc037f7c1256"
+  "source_commit": "7424c8ae76a33a31076c10f42e9a9237a4080b35"
 }
