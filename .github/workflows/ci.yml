@@ -37,10 +37,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - run: scripts/run_e2e_tests.sh | tee e2e.log
+      - shell: bash
+        run: scripts/run_e2e_tests.sh | tee "$RUNNER_TEMP/e2e.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pg_mdm-0.12.0-e2e-log
-          path: e2e.log
+          path: ${{ runner.temp }}/e2e.log
           if-no-files-found: warn
