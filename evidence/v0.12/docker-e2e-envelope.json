@@ -7,15 +7,15 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:3236efbd22af2a50daf039fea834fea0751394d5cceb99dee8a06e85ccd7099b",
+    "docker_image_id": "sha256:f9ce0491e0ef2aef0e411a7486cdefaaeceff09fd62376e8f7ae8ee739ec7275",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 454606848,
-      "visible_available_bytes": 7035936768,
+      "cgroup_peak_bytes": 584040448,
+      "visible_available_bytes": 6814117888,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 56272736256 871873544192   7% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 63108329472 865037950976   7% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
@@ -42,20 +42,20 @@
     "last_customer_refresh": {
       "active_records": 9,
       "component_checks": 1,
-      "elapsed_ms": 2408,
+      "elapsed_ms": 2777,
       "publication_revision": 12,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 548,
-        "graph_refresh": 542,
-        "mdm_resolution": 2,
-        "publication": 1
+        "elapsed_before_operation_completion": 872,
+        "graph_refresh": 864,
+        "mdm_resolution": 4,
+        "publication": 0
       }
     },
     "max_block_records": 0,
-    "output_bytes": 98304,
+    "output_bytes": 131072,
     "outputs": {
       "entity": {
-        "bytes": 32768,
+        "bytes": 65536,
         "rows": 8
       },
       "members": {
@@ -76,9 +76,9 @@
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-14T20:02:18.816499+00:00",
+  "recorded_at_utc": "2026-09-14T20:35:26.157411+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
-  "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including boundary, restore, and clone assertions, returned successfully.",
-  "source_commit": "32b4c4c06e08c57cd3697d92e5932a202d1a080c"
+  "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
+  "source_commit": "8d4b82d05b0b517df27d906a9815dcecba66a283"
 }

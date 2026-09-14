@@ -85,7 +85,7 @@ report = {
     "command": "scripts/run_e2e_tests.sh",
     "result": "passed",
     "retained_log": str(retained_log.relative_to(ROOT)),
-    "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including boundary, restore, and clone assertions, returned successfully.",
+    "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
     "metrics": metrics,
     "inputs": {
         "organization_fixture_sha256": sha256_file(ROOT / "tests/fixtures/organization_domain_v1.json"),
