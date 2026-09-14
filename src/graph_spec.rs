@@ -572,7 +572,10 @@ fn candidate_pairs_sql_with_relation(
             "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key FROM {fallback_relation} AS empty WHERE false"
         );
     }
-    pairs.join("\nUNION\n")
+    format!(
+        "SELECT DISTINCT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\n{}\n) AS candidate_pairs",
+        pairs.join("\nUNION ALL\n")
+    )
 }
 
 pub fn candidate_pairs_sql(
@@ -873,6 +876,29 @@ mod tests {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
         artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
+    }
+
+    #[test]
+    fn candidate_pairs_sql_deduplicates_union_all_inside_a_projection() {
+        let channel = |channel_id: &str, field: &str| CandidateChannel {
+            channel_id: channel_id.into(),
+            kind: ChannelKind::Exact,
+            fields: vec![field.into()],
+            prefix_length: None,
+            token_min_length: None,
+            owners: Vec::new(),
+        };
+        let sql = candidate_pairs_sql(
+            &[channel("email", "email"), channel("name", "name")],
+            &crate::candidate::CandidateLimits {
+                max_block_records: 10_000,
+                max_candidate_pairs: 100_000,
+            },
+        );
+        assert_eq!(
+            sql,
+            "SELECT DISTINCT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/email} l\nJOIN @{block-stats/email} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/email} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\nUNION ALL\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/name} l\nJOIN @{block-stats/name} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/name} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\n) AS candidate_pairs"
+        );
     }
 
     #[test]
