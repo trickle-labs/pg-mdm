@@ -879,6 +879,81 @@ mod tests {
     }
 
     #[test]
+    fn resolver_semantics_ignore_upstream_uuid_allocation() {
+        let input = |allocation: u8, reverse: bool| {
+            let uuid = |value| id(value + allocation);
+            let mut records = (1..=4)
+                .map(|value| ResolverRecord {
+                    source_record_id: uuid(value),
+                    source_sort_key: vec![value],
+                    authority: BTreeMap::new(),
+                })
+                .collect::<Vec<_>>();
+            let mut pair_decisions =
+                vec![edge(2, 3, "shared_email", 2), edge(1, 4, "shared_name", 1)];
+            for decision in &mut pair_decisions {
+                decision.pair.left_source_record_id = uuid(decision.pair.left_sort_key[0]);
+                decision.pair.right_source_record_id = uuid(decision.pair.right_sort_key[0]);
+            }
+            if reverse {
+                records.reverse();
+                pair_decisions.reverse();
+            }
+            ResolverInput {
+                records,
+                manual_matches: vec![DecisionEdge {
+                    decision_id: id(90),
+                    left_source_record_id: uuid(1),
+                    right_source_record_id: uuid(2),
+                    decision: DecisionKind::Match,
+                }],
+                cannot_links: vec![DecisionEdge {
+                    decision_id: id(91),
+                    left_source_record_id: uuid(3),
+                    right_source_record_id: uuid(4),
+                    decision: DecisionKind::NotMatch,
+                }],
+                pair_decisions,
+                limits: ResolverLimits::default(),
+            }
+        };
+        let canonical = |result: &Resolution| {
+            let facts = |facts: &[UnionFact]| {
+                facts
+                    .iter()
+                    .map(|fact| {
+                        serde_json::json!([
+                            fact.left_component_key,
+                            fact.right_component_key,
+                            fact.edge.left_sort_key,
+                            fact.edge.right_sort_key,
+                            match fact.outcome {
+                                UnionOutcome::Accepted => "accepted",
+                                UnionOutcome::Rejected => "rejected",
+                            },
+                            fact.reason_code,
+                            fact.evidence_groups,
+                        ])
+                    })
+                    .collect::<Vec<_>>()
+            };
+            serde_json::to_vec(&serde_json::json!({
+                "memberships": result.memberships.iter().map(|membership| serde_json::json!([
+                    membership.source_sort_key,
+                    membership.component_key,
+                ])).collect::<Vec<_>>(),
+                "accepted": facts(&result.accepted),
+                "rejected": facts(&result.rejected),
+            }))
+            .unwrap()
+        };
+
+        let original = resolve(input(0, false)).unwrap();
+        let reallocated = resolve(input(20, true)).unwrap();
+        assert_eq!(canonical(&reallocated), canonical(&original));
+    }
+
+    #[test]
     fn generated_edge_additions_and_removals_match_clean_resolution() {
         let records = (1..=4)
             .map(|value| ResolverRecord {
