@@ -604,9 +604,10 @@ fn persist(
             "execution role is not the selected role".into(),
         ));
     }
-    let capabilities = crate::integration::require_graph_v1()?;
+    let capabilities = crate::integration::integration_capabilities()?;
+    let graph_enabled = capabilities.external_graph_refresh.enabled;
     let outcome = JsonB(
-        json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": true, "capabilities": capabilities}),
+        json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": graph_enabled, "capabilities": capabilities}),
     );
     let mut operation_id = String::new();
     let mut version = 1_i64;
@@ -850,7 +851,9 @@ fn persist(
             client.update("INSERT INTO mdm_internal.definition_artifacts (entity_id, definition_version, compiler_version, artifact_format_version, artifact_bytes, artifact_digest, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7)", None, &[entity_id.clone().into(), version.into(), graph_spec::COMPILER_VERSION.into(), graph_spec::ARTIFACT_FORMAT_VERSION.into(), prepared.artifact_bytes.clone().into(), prepared.artifact_digest.clone().into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             client.update("UPDATE mdm_internal.entities SET desired_version = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[entity_id.clone().into(), version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
-        install_graph(client, &entity_id, version, &prepared, &selected)?;
+        if graph_enabled {
+            install_graph(client, &entity_id, version, &prepared, &selected)?;
+        }
         complete_operation(client, &operation_id)
     })?;
     Ok((operation_id, version, changed))

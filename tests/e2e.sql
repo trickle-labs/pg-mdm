@@ -919,10 +919,30 @@ BEGIN
        OR summary #>> '{candidate_plan,max_block_records}' IS NULL
        OR summary #>> '{candidate_plan,max_candidate_pairs}' IS NULL
        OR summary #>> '{candidate_plan,warning_block_records}' IS NULL
+       OR COALESCE((summary #>> '{candidate_plan,max_block_records}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_plan,max_candidate_pairs}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_plan,warning_block_records}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,candidate,defaults,max_block_records}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,candidate,defaults,max_candidate_pairs}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,candidate,defaults,warning_block_records}')::numeric, 0) <= 0
        OR summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_block_records}' IS NULL
        OR summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_candidate_pairs}' IS NULL
+       OR COALESCE((summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_block_records}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,candidate,absolute_ceilings,max_candidate_pairs}')::numeric, 0) <= 0
        OR summary #>> '{evidence_semantics,absolute_max_comparator_work}' IS NULL
+       OR COALESCE((summary #>> '{evidence_semantics,default_max_comparator_work}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{evidence_semantics,absolute_max_comparator_work}')::numeric, 0) <= 0
        OR summary #>> '{candidate_semantics,decisions,absolute_max_decision_closure}' IS NULL
+       OR COALESCE((summary #>> '{candidate_semantics,decisions,default_max_decision_closure}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,decisions,absolute_max_decision_closure}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,defaults,max_active_records}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,defaults,max_automatic_edges}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,defaults,max_records_per_component}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,defaults,max_component_checks}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_active_records}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_automatic_edges}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_records_per_component}')::numeric, 0) <= 0
+       OR COALESCE((summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_component_checks}')::numeric, 0) <= 0
        OR summary #>> '{candidate_semantics,clustering,absolute_ceilings,max_active_records}' IS NULL
        OR summary->'resolver_limits' IS NULL
        OR summary::text LIKE '%mdm_graph.%'
@@ -1142,6 +1162,8 @@ DECLARE
     first_refresh jsonb;
     second_refresh jsonb;
     rebuilt jsonb;
+    members_before jsonb;
+    members_after jsonb;
 BEGIN
     first_refresh := mdm.refresh('customer', 'ALLOW');
     IF first_refresh->>'changed' <> 'true'
@@ -1167,10 +1189,18 @@ BEGIN
        OR (second_refresh->>'publication_revision')::bigint <> 1 THEN
         RAISE EXCEPTION 'refresh no-op is invalid: %', second_refresh;
     END IF;
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_id::text), '[]'::jsonb)
+      INTO members_before
+      FROM mdm_out.customer_members m;
     rebuilt := mdm_admin.rebuild('customer', 'ALLOW');
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_id::text), '[]'::jsonb)
+      INTO members_after
+      FROM mdm_out.customer_members m;
     IF rebuilt->>'entity_name' <> 'customer'
-       OR (rebuilt->>'publication_revision')::bigint <> 1 THEN
-        RAISE EXCEPTION 'administrative rebuild is invalid: %', rebuilt;
+       OR (rebuilt->>'publication_revision')::bigint <> 1
+       OR members_after IS DISTINCT FROM members_before THEN
+        RAISE EXCEPTION 'administrative rebuild changed scalar-key membership rows: result %, before %, after %',
+            rebuilt, members_before, members_after;
     END IF;
 END
 $$;
@@ -2091,6 +2121,38 @@ RESET ROLE;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;
 
+-- A disabled Graph V1 blocks execution, not definition storage.
+BEGIN;
+CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
+RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
+LANGUAGE sql
+AS $$
+    VALUES ('external_graph_refresh', 1::smallint, 1::smallint, false, '{}'::jsonb),
+           ('output_delta_consumer', 1::smallint, 1::smallint, false, '{}'::jsonb)
+$$;
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+DO $$
+DECLARE proposed jsonb; result record; summary jsonb;
+BEGIN
+    proposed := pg_catalog.jsonb_set(
+        mdm.describe('customer', 'definition'), '{name}', '"disabled_graph_probe"'::jsonb);
+    SELECT * INTO STRICT result FROM mdm.create(proposed);
+    summary := mdm.describe('disabled_graph_probe', 'summary');
+    IF result.desired_version <> 1 OR NOT result.changed
+       OR summary #>> '{definition,name}' IS DISTINCT FROM 'disabled_graph_probe'
+       OR summary->>'graph_state' IS DISTINCT FROM 'absent'
+       OR summary->>'graph_executable' IS DISTINCT FROM 'false'
+       OR (summary->'graph_blocking_errors' @> '[{"code":"MDM_PGT_CAPABILITY_DISABLED","message":"Graph V1 is disabled"}]'::jsonb) IS NOT TRUE THEN
+        RAISE EXCEPTION 'disabled Graph V1 blocked definition storage or was hidden by describe: create %, summary %',
+            result, summary;
+    END IF;
+END
+$$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK;
+
 -- Entity drop validates the complete binding before changing graph or MDM state.
 BEGIN;
 SET SESSION AUTHORIZATION mdm_test_login;
@@ -2196,3 +2258,137 @@ $$;
 \connect postgres postgres
 DROP DATABASE graph_conformance WITH (FORCE);
 \connect foundation postgres
+
+CREATE TABLE public.crm_customer_composite (
+    tenant_id bigint NOT NULL,
+    customer_id bigint NOT NULL,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_id, customer_id)
+);
+GRANT SELECT, MAINTAIN ON public.crm_customer_composite TO mdm_administrator;
+INSERT INTO public.crm_customer_composite VALUES
+    (101, 1001, 'Composite One', 'composite-one@example.test', statement_timestamp()),
+    (202, 2002, 'Composite Two', 'composite-two@example.test', statement_timestamp());
+CREATE FUNCTION public.e2e_composite_source_records()
+RETURNS TABLE(tenant_id bigint, customer_id bigint, source_record_id uuid, source_record_key bytea)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, mdm_internal, public
+AS $$
+    SELECT c.tenant_id, c.customer_id, r.source_record_id, r.source_record_key
+    FROM mdm_internal.source_records r
+    JOIN mdm_internal.source_identities s
+      ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
+    JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
+    JOIN public.crm_customer_composite c
+      ON r.source_record_key = pgtrickle.encode_row_id_v2(
+          'SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.tenant_id, c.customer_id))
+    WHERE e.entity_name = 'composite_customer'
+$$;
+REVOKE ALL ON FUNCTION public.e2e_composite_source_records() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.e2e_composite_source_records() TO mdm_administrator;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    proposed jsonb;
+    created record;
+    refreshed jsonb;
+    rebuilt jsonb;
+    encoded_sources jsonb;
+    reader_sources jsonb;
+    member_keys_match boolean;
+    members_before jsonb;
+    members_after jsonb;
+BEGIN
+    proposed := mdm.entity(
+        name => 'composite_customer',
+        sources => ARRAY[mdm.source(
+            name => 'crm_composite',
+            relation => 'public.crm_customer_composite'::regclass,
+            source_id => ARRAY['tenant_id', 'customer_id'],
+            mode => 'tracked',
+            fields => pg_catalog.jsonb_build_object('name', 'display_name', 'email', 'email_address'),
+            row_changed_at => 'updated_at')],
+        fields => ARRAY[
+            mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
+            mdm.field(name => 'email', type => 'text', cleaner => 'email')
+        ],
+        matches => ARRAY[mdm.match(
+            name => 'same_email',
+            fields => ARRAY['email'],
+            comparison => 'exact',
+            strength => 'identity',
+            evidence_group => 'email',
+            candidate => pg_catalog.jsonb_build_object('kind', 'exact', 'field', 'email'))],
+        golden_values => ARRAY[mdm.golden_value(
+            field => 'name', policy => 'prefer_source', sources => ARRAY['crm_composite'])]);
+    SELECT * INTO STRICT created FROM mdm.create(proposed);
+    refreshed := mdm.refresh('composite_customer', 'ALLOW');
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'tenant_id', tenant_id,
+        'customer_id', customer_id,
+        'source_record_id', source_record_id,
+        'source_record_key', pg_catalog.encode(source_record_key, 'hex')
+    ) ORDER BY tenant_id, customer_id), '[]'::jsonb)
+      INTO encoded_sources
+      FROM public.e2e_composite_source_records();
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'tenant_id', r.tenant_id,
+        'customer_id', r.customer_id
+    ) ORDER BY r.tenant_id, r.customer_id), '[]'::jsonb)
+      INTO reader_sources
+      FROM mdm_out.composite_customer_members m
+      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+    SELECT COALESCE(pg_catalog.bool_and(
+        m.source_id = pg_catalog.jsonb_build_object(
+            'source_record_key', pg_catalog.encode(r.source_record_key, 'hex'))), false)
+      INTO member_keys_match
+      FROM mdm_out.composite_customer_members m
+      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'source_record_key', pg_catalog.encode(r.source_record_key, 'hex'),
+        'member', pg_catalog.to_jsonb(m)
+    ) ORDER BY r.tenant_id, r.customer_id), '[]'::jsonb)
+      INTO members_before
+      FROM mdm_out.composite_customer_members m
+      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+    rebuilt := mdm_admin.rebuild('composite_customer', 'ALLOW');
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'source_record_key', pg_catalog.encode(r.source_record_key, 'hex'),
+        'member', pg_catalog.to_jsonb(m)
+    ) ORDER BY r.tenant_id, r.customer_id), '[]'::jsonb)
+      INTO members_after
+      FROM mdm_out.composite_customer_members m
+      JOIN public.e2e_composite_source_records() r USING (source_record_id);
+    IF created.desired_version <> 1 OR NOT created.changed
+       OR refreshed->>'changed' IS DISTINCT FROM 'true'
+       OR pg_catalog.jsonb_array_length(encoded_sources) <> 2
+       OR encoded_sources->0->'tenant_id' IS DISTINCT FROM '101'::jsonb
+       OR encoded_sources->0->'customer_id' IS DISTINCT FROM '1001'::jsonb
+       OR encoded_sources->1->'tenant_id' IS DISTINCT FROM '202'::jsonb
+       OR encoded_sources->1->'customer_id' IS DISTINCT FROM '2002'::jsonb
+       OR encoded_sources->0->'source_record_id' IS NULL
+       OR encoded_sources->1->'source_record_id' IS NULL
+       OR encoded_sources->0->'source_record_id' = encoded_sources->1->'source_record_id'
+       OR encoded_sources->0->'source_record_key' = encoded_sources->1->'source_record_key'
+       OR reader_sources IS DISTINCT FROM '[{"tenant_id":101,"customer_id":1001},{"tenant_id":202,"customer_id":2002}]'::jsonb
+       OR NOT member_keys_match
+       OR pg_catalog.jsonb_array_length(members_before) <> 2
+       OR rebuilt->>'entity_name' IS DISTINCT FROM 'composite_customer'
+       OR (rebuilt->>'publication_revision')::bigint <> 1
+       OR members_after IS DISTINCT FROM members_before THEN
+        RAISE EXCEPTION 'composite-key row IDs, reader rows, or rebuild stability failed: create %, refresh %, encoded %, reader %, before %, rebuild %, after %',
+            created, refreshed, encoded_sources, reader_sources, members_before, rebuilt, members_after;
+    END IF;
+    PERFORM mdm_admin.drop_entity('composite_customer', 'composite_customer');
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DROP FUNCTION public.e2e_composite_source_records();
+DROP TABLE public.crm_customer_composite;

@@ -301,7 +301,7 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "member_count": graph["member_count"].clone(),
             "root_count": graph["root_count"].clone(),
             "graph_blocking_errors": graph["blocking_errors"].clone(),
-            "graph_executable": true,
+            "graph_executable": capabilities.external_graph_refresh.enabled,
             "sources": sources,
             "blocking_errors": graph["blocking_errors"].clone(),
             "definition": row.3
