@@ -518,7 +518,11 @@ fn install_graph(
         })
     {
         return Err(MdmError::GraphContract(
-            "graph contract does not match installed members".into(),
+            format!(
+                "graph contract does not match installed members: contract has {}, installed {}",
+                contract_members.len(),
+                members.len()
+            ),
         ));
     }
 
