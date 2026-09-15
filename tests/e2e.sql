@@ -1736,9 +1736,14 @@ DROP TABLE public.e2e_pg_trickle_upgrade_snapshot;
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb;
+        expected_revision bigint;
 BEGIN
+    SELECT publication_revision INTO STRICT expected_revision
+    FROM mdm_internal.entities
+    WHERE entity_name = 'customer';
     result := mdm.refresh('customer', 'ALLOW');
-    IF result->>'changed' <> 'false' OR (result->>'publication_revision')::bigint <> 1 THEN
+    IF result->>'changed' <> 'false'
+       OR (result->>'publication_revision')::bigint <> expected_revision THEN
         RAISE EXCEPTION 'post-upgrade populated graph refresh is invalid: %', result;
     END IF;
 END
