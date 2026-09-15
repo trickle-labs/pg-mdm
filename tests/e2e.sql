@@ -132,6 +132,7 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.13.0';
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.13.0')
