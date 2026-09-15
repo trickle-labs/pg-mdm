@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - run: docker build --platform linux/amd64 --target tester -f tests/Dockerfile.e2e -t pg_mdm:test .
+      - run: PG_MDM_E2E_IMAGE=pg_mdm:test PG_MDM_E2E_TARGET=tester scripts/build_e2e_image.sh
       - run: docker run --rm pg_mdm:test cargo fmt -- --check
       - run: docker run --rm pg_mdm:test cargo clippy --all-targets --features pg18 -- -D warnings
       - run: docker run --rm pg_mdm:test cargo test --lib --features pg18

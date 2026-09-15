@@ -9,7 +9,7 @@ use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 7;
+pub const COMPILER_VERSION: i32 = 8;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
@@ -77,7 +77,7 @@ pub fn artifact_nodes(artifact: &[u8]) -> Result<(Vec<GraphNode>, Vec<String>), 
         if !node.executable
             || node.initialize
             || node.orchestration_mode != "EXTERNAL"
-            || !matches!(node.refresh_mode.as_str(), "AUTO" | "FULL")
+            || !matches!(node.refresh_mode.as_str(), "AUTO" | "FULL" | "DIFFERENTIAL")
         {
             return Err(MdmError::GraphArtifact(format!(
                 "node {} is not an executable external node",
@@ -459,7 +459,7 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
     let where_value = format!("field_name = '{field}' AND state = 'value'");
     match channel.kind {
         ChannelKind::Exact => format!(
-            "SELECT '{channel_id}'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND canonical_bytes IS NOT NULL",
+            "SELECT source_record_id, field_name, '{channel_id}'::text AS channel_id, canonical_bytes AS block_key, source_sort_key\nFROM {relation}\nWHERE {where_value} AND canonical_bytes IS NOT NULL",
             channel_id = channel.channel_id.replace('\'', "''")
         ),
         ChannelKind::CompositeExact => {
@@ -504,7 +504,7 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
                 .collect::<Vec<_>>()
                 .join(" || ");
             format!(
-                "SELECT '{channel_id}'::text AS channel_id, {block_values} AS block_key, n0.source_record_id, n0.source_sort_key\n{from}\nWHERE {value_filters}",
+                "SELECT n0.source_record_id, n0.field_name, '{channel_id}'::text AS channel_id, {block_values} AS block_key, n0.source_sort_key\n{from}\nWHERE {value_filters}",
                 channel_id = channel.channel_id.replace('\'', "''"),
                 block_values = block_values,
                 from = from,
@@ -512,12 +512,12 @@ fn channel_membership_sql(channel: &CandidateChannel) -> String {
             )
         }
         ChannelKind::Prefix => format!(
-            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.convert_to(pg_catalog.left(normalized, {length}), 'UTF8') AS block_key, source_record_id, source_sort_key\nFROM {relation}\nWHERE {where_value} AND normalized IS NOT NULL",
+            "SELECT source_record_id, field_name, '{channel_id}'::text AS channel_id, pg_catalog.left(normalized, {length}) AS block_key, source_sort_key\nFROM {relation}\nWHERE {where_value} AND normalized IS NOT NULL",
             channel_id = channel.channel_id.replace('\'', "''"),
             length = channel.prefix_length.expect("validated prefix length")
         ),
         ChannelKind::Token => format!(
-            "SELECT '{channel_id}'::text AS channel_id, pg_catalog.convert_to(token, 'UTF8') AS block_key, source_record_id, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token(token)\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY token, source_record_id, source_sort_key",
+            "SELECT source_record_id, field_name, '{channel_id}'::text AS channel_id, token AS block_key, source_sort_key\nFROM {relation}\nCROSS JOIN LATERAL pg_catalog.regexp_split_to_table(normalized, '[[:space:]]+') AS token(token)\nWHERE {where_value} AND pg_catalog.char_length(token) >= {min_length}\nGROUP BY source_record_id, field_name, token, source_sort_key",
             channel_id = channel.channel_id.replace('\'', "''"),
             min_length = channel.token_min_length.expect("validated token length")
         ),
@@ -573,7 +573,7 @@ fn candidate_pairs_sql_with_relation(
         );
     }
     format!(
-        "SELECT DISTINCT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\n{}\n) AS candidate_pairs",
+        "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\n{}\n) AS candidate_pairs\nGROUP BY 1, 2, 3, 4",
         pairs.join("\nUNION ALL\n")
     )
 }
@@ -613,8 +613,14 @@ pub fn candidate_pair_overflow_sql(
     )
 }
 
+fn candidate_block_key_type(channel: &CandidateChannel) -> &'static str {
+    match channel.kind {
+        ChannelKind::Prefix | ChannelKind::Token => "text",
+        ChannelKind::Exact | ChannelKind::CompositeExact => "bytea",
+    }
+}
+
 fn match_node(channel: &CandidateChannel) -> Value {
-    // ponytail: FULL until the 0.105.3 bytea regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
     node_with_refresh_mode(
         format!("blocks/{}", channel.channel_id),
         channel
@@ -623,8 +629,8 @@ fn match_node(channel: &CandidateChannel) -> Value {
             .map(|name| format!("normalized/{name}"))
             .collect(),
         candidate_block_sql(channel),
-        json!({"channel_id":"text","block_key":"bytea","source_record_id":"uuid","source_sort_key":"bytea"}),
-        "FULL",
+        json!({"source_record_id":"uuid","field_name":"text","channel_id":"text","block_key":candidate_block_key_type(channel),"source_sort_key":"bytea"}),
+        "DIFFERENTIAL",
     )
 }
 
@@ -696,8 +702,7 @@ pub fn compile(entity: &Entity) -> Value {
     let plan = CandidatePlan::from_entity(entity).unwrap_or_else(|_| CandidatePlan {
         channels: Vec::new(),
     });
-    // ponytail: FULL until the 0.105.3 pair-join regression passes every history; use AUTO after insert, update, delete, rollback, and retry agree.
-    let pair_refresh_mode = "FULL";
+    let pair_refresh_mode = "DIFFERENTIAL";
     let fallback_logical_id = entity
         .sources
         .first()
@@ -708,20 +713,19 @@ pub fn compile(entity: &Entity) -> Value {
         .unwrap_or_else(|| "pg_catalog.pg_class".into());
     for channel in &plan.channels {
         nodes.push(match_node(channel));
-        // ponytail: keep stats and guards FULL under forced-FULL parents; use AUTO after 0.105.3 proves downstream CDC for every history.
         nodes.push(node_with_refresh_mode(
             format!("block-stats/{}", channel.channel_id),
             vec![format!("blocks/{}", channel.channel_id)],
             candidate_block_stats_sql(channel),
-            json!({"channel_id":"text","block_key":"bytea","block_records":"bigint"}),
-            "FULL",
+            json!({"channel_id":"text","block_key":candidate_block_key_type(channel),"block_records":"bigint"}),
+            "DIFFERENTIAL",
         ));
         nodes.push(node_with_refresh_mode(
             format!("block-overflow/{}", channel.channel_id),
             vec![format!("block-stats/{}", channel.channel_id)],
             candidate_block_overflow_sql(channel, &limits),
-            json!({"channel_id":"text","block_key":"bytea","block_records":"bigint","max_block_records":"bigint"}),
-            "FULL",
+            json!({"channel_id":"text","block_key":candidate_block_key_type(channel),"block_records":"bigint","max_block_records":"bigint"}),
+            "DIFFERENTIAL",
         ));
     }
     let mut blocks: Vec<String> = plan
@@ -894,7 +898,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], true);
-        assert_eq!(graph["compiler_version"], 7);
+        assert_eq!(graph["compiler_version"], 8);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
@@ -920,7 +924,7 @@ mod tests {
         );
         assert_eq!(
             sql,
-            "SELECT DISTINCT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/email} l\nJOIN @{block-stats/email} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/email} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\nUNION ALL\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/name} l\nJOIN @{block-stats/name} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/name} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\n) AS candidate_pairs"
+            "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/email} l\nJOIN @{block-stats/email} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/email} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\nUNION ALL\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/name} l\nJOIN @{block-stats/name} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/name} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\n) AS candidate_pairs\nGROUP BY 1, 2, 3, 4"
         );
     }
 
@@ -1008,7 +1012,7 @@ mod tests {
                 .iter()
                 .find(|node| node["logical_id"] == logical_id)
                 .unwrap();
-            assert_eq!(node["refresh_mode"], "FULL", "{logical_id}");
+            assert_eq!(node["refresh_mode"], "DIFFERENTIAL", "{logical_id}");
         }
     }
 }
