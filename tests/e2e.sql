@@ -1738,9 +1738,7 @@ DO $$
 DECLARE result jsonb;
         expected_revision bigint;
 BEGIN
-    SELECT publication_revision INTO STRICT expected_revision
-    FROM mdm_internal.entities
-    WHERE entity_name = 'customer';
+    expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'false'
        OR (result->>'publication_revision')::bigint <> expected_revision THEN
