@@ -2070,6 +2070,7 @@ DECLARE
     accepted_fact_count bigint;
     active_member_count bigint;
     active_mdm_count bigint;
+    expected_revision bigint;
 BEGIN
     SELECT gb.graph_binding_id INTO STRICT binding_id
     FROM mdm_internal.graph_bindings gb
@@ -2118,6 +2119,9 @@ BEGIN
         'left_value_digest', pg_catalog.decode('60ad19203e7805d9f109a44e991b02a1362e03115f39f995d9f40f56ee175c8c', 'hex'),
         'right_value_digest', pg_catalog.decode('60ad19203e7805d9f109a44e991b02a1362e03115f39f995d9f40f56ee175c8c', 'hex')
     ));
+    SELECT publication_revision INTO expected_revision
+    FROM mdm_internal.entities
+    WHERE entity_name = 'customer';
     EXECUTE pg_catalog.format(
         'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t)), ''[]''::jsonb) FROM %s t WHERE t.field_name = ''email'' AND t.source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))',
         normalized_relation
@@ -2134,7 +2138,7 @@ BEGIN
     SELECT count(*) INTO accepted_fact_count
     FROM mdm_internal.resolution_facts f
     JOIN mdm_internal.entities e USING (entity_id)
-    WHERE e.entity_name = 'customer' AND f.publication_revision = 2
+    WHERE e.entity_name = 'customer' AND f.publication_revision = expected_revision
       AND f.subject_kind = 'pair'
       AND f.subject_key = pg_catalog.convert_to(
           (expected_pair_rows->0->>'left_source_record_id') || ':' ||
