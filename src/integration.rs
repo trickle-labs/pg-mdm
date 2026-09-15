@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::MdmError;
-use crate::version::{DELTA_CAPABILITY, GRAPH_CAPABILITY};
+use crate::version::{DELTA_CAPABILITY, GRAPH_CAPABILITY, GRAPH_CAPABILITY_MIN_MINOR};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct Capability {
@@ -67,10 +67,12 @@ fn parse_capabilities(
     let graph = found
         .remove(GRAPH_CAPABILITY)
         .ok_or(MdmError::CapabilityMissing(GRAPH_CAPABILITY))?;
-    if graph.major != 1 {
+    if graph.major != 1 || graph.minor < GRAPH_CAPABILITY_MIN_MINOR {
         return Err(MdmError::CapabilityVersion {
             capability: GRAPH_CAPABILITY.to_string(),
             major: graph.major,
+            minor: graph.minor,
+            minimum_minor: GRAPH_CAPABILITY_MIN_MINOR,
         });
     }
 
@@ -188,7 +190,7 @@ mod tests {
         RawCapability {
             capability: name.into(),
             major,
-            minor: 0,
+            minor: GRAPH_CAPABILITY_MIN_MINOR,
             enabled,
             details: details.into(),
         }
@@ -242,8 +244,20 @@ mod tests {
             Err(MdmError::CapabilityVersion {
                 capability: GRAPH_CAPABILITY.into(),
                 major: 2,
+                minor: GRAPH_CAPABILITY_MIN_MINOR,
+                minimum_minor: GRAPH_CAPABILITY_MIN_MINOR,
             })
         );
+    }
+
+    #[test]
+    fn rejects_graph_minor_without_differential_candidate_guarantee() {
+        let mut graph = row(GRAPH_CAPABILITY, 1, true, "{}");
+        graph.minor = GRAPH_CAPABILITY_MIN_MINOR - 1;
+        assert!(matches!(
+            parse_capabilities([graph]),
+            Err(MdmError::CapabilityVersion { .. })
+        ));
     }
 
     #[test]

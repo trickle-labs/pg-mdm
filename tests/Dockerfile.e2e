@@ -1,16 +1,25 @@
 # syntax=docker/dockerfile:1
 ARG POSTGRES_IMAGE=postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf
+ARG PG_TRICKLE_IMAGE=pg_trickle_release
 
-FROM ${POSTGRES_IMAGE} AS pg_trickle
+FROM ${POSTGRES_IMAGE} AS pg_trickle_release
 ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.3/pg_trickle-0.105.3-pg18-linux-amd64.tar.gz
 ARG PG_TRICKLE_SHA256=c59da1ea543ea23c207f12294f40fbff41d58b5554ced81408e5f3efde7d84c6
+ARG PG_TRICKLE_UPGRADE_URL=https://raw.githubusercontent.com/trickle-labs/pg-trickle/79f38ab4e3e50d3f82e3aa78a5969b90a1bb9d27/sql/pg_trickle--0.105.3--0.106.0.sql
+ARG PG_TRICKLE_UPGRADE_SHA256=ef4f7b550f0d041aa33b9e7fd91736a5e5cdde50cb5847576cf49cc780d527eb
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL "$PG_TRICKLE_URL" -o /tmp/pg_trickle.tar.gz \
     && echo "$PG_TRICKLE_SHA256  /tmp/pg_trickle.tar.gz" | sha256sum -c - \
     && mkdir /pg_trickle \
-    && tar -xzf /tmp/pg_trickle.tar.gz -C /pg_trickle --strip-components=1
+    && tar -xzf /tmp/pg_trickle.tar.gz -C /pg_trickle --strip-components=1 \
+    && cp /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/ \
+    && cp -R /pg_trickle/extension/. /usr/share/postgresql/18/extension/ \
+    && curl -fsSL "$PG_TRICKLE_UPGRADE_URL" -o /usr/share/postgresql/18/extension/pg_trickle--0.105.3--0.106.0.sql \
+    && echo "$PG_TRICKLE_UPGRADE_SHA256  /usr/share/postgresql/18/extension/pg_trickle--0.105.3--0.106.0.sql" | sha256sum -c -
+
+FROM ${PG_TRICKLE_IMAGE} AS pg_trickle
 
 FROM ${POSTGRES_IMAGE} AS pg_trickle_previous
 ARG PG_TRICKLE_PREVIOUS_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.1/pg_trickle-0.105.1-pg18-linux-amd64.tar.gz
@@ -38,8 +47,7 @@ COPY Cargo.toml Cargo.lock pg_mdm.control ./
 COPY .cargo/ .cargo/
 COPY src/ src/
 COPY contracts/ contracts/
-COPY tests/organization_quality_tests.rs tests/stewardship_contract_tests.rs tests/
-COPY tests/fixtures/organization_domain_v1.json tests/fixtures/
+COPY tests/ tests/
 COPY scripts/ scripts/
 COPY sql/ sql/
 COPY justfile ./
@@ -52,8 +60,9 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     && find /package -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/pg_mdm-package-manifest.sha256
 
 FROM builder AS tester
-COPY --from=pg_trickle /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
-COPY --from=pg_trickle /pg_trickle/extension/ /usr/share/postgresql/18/extension/
+COPY --from=pg_trickle_release /usr/share/postgresql/18/extension/pg_trickle* /usr/share/postgresql/18/extension/
+COPY --from=pg_trickle /usr/lib/postgresql/18/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
+COPY --from=pg_trickle /usr/share/postgresql/18/extension/pg_trickle* /usr/share/postgresql/18/extension/
 RUN chmod 0755 /root \
     && chown -R postgres:postgres \
         /build /root/.cargo /root/.pgrx /root/.rustup \
@@ -65,8 +74,9 @@ ENV USER=postgres
 USER postgres
 
 FROM ${POSTGRES_IMAGE}
-COPY --from=pg_trickle /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
-COPY --from=pg_trickle /pg_trickle/extension/ /usr/share/postgresql/18/extension/
+COPY --from=pg_trickle_release /usr/share/postgresql/18/extension/pg_trickle* /usr/share/postgresql/18/extension/
+COPY --from=pg_trickle /usr/lib/postgresql/18/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
+COPY --from=pg_trickle /usr/share/postgresql/18/extension/pg_trickle* /usr/share/postgresql/18/extension/
 COPY --from=pg_trickle_previous /pg_trickle_previous/extension/pg_trickle--0.105.1.sql /usr/share/postgresql/18/extension/
 COPY --from=builder /package/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
 COPY --from=builder /package/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/

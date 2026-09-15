@@ -680,7 +680,7 @@ docker exec -u postgres "$container" mkdir -p /tmp/pg-mdm-physical-backup
 docker exec -u postgres -e PGPASSWORD=postgres "$container" \
     pg_basebackup -h 127.0.0.1 -U postgres -D /tmp/pg-mdm-physical-backup -Fp -Xs >/dev/null
 docker cp "$container:/tmp/pg-mdm-physical-backup/." "$physical_data/" >/dev/null
-docker run --detach --name "$physical_container" -e POSTGRES_PASSWORD=postgres -e PGDATA="$physical_pgdata" \
+docker run --detach --user root --name "$physical_container" -e POSTGRES_PASSWORD=postgres -e PGDATA="$physical_pgdata" \
     -v "$physical_data:$physical_pgdata" "$image" >/dev/null
 for _ in $(seq 1 60); do
     if docker exec "$physical_container" pg_isready -U postgres >/dev/null 2>&1; then
@@ -729,7 +729,7 @@ docker exec -u postgres -e PGPASSWORD=postgres "$physical_container" \
     pg_basebackup -h 127.0.0.1 -U postgres -D /tmp/pg-mdm-missing-graph-backup -Fp -Xs >/dev/null
 docker cp "$physical_container:/tmp/pg-mdm-missing-graph-backup/." "$missing_graph_data/" >/dev/null
 docker rm -fv "$physical_container" >/dev/null
-docker run --detach --name "$physical_container" -e POSTGRES_PASSWORD=postgres -e PGDATA="$physical_pgdata" \
+docker run --detach --user root --name "$physical_container" -e POSTGRES_PASSWORD=postgres -e PGDATA="$physical_pgdata" \
     -v "$missing_graph_data:$physical_pgdata" "$image" >/dev/null
 for _ in $(seq 1 60); do
     if docker exec "$physical_container" pg_isready -U postgres >/dev/null 2>&1; then

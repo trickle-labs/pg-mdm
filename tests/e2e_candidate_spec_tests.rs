@@ -34,7 +34,7 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         .iter()
         .find(|node| node["logical_id"] == "pairs/organization")
         .unwrap();
-    assert_eq!(pair["refresh_mode"], "FULL");
+    assert_eq!(pair["refresh_mode"], "DIFFERENTIAL");
     let pair_sql = pair["defining_sql"].as_str().unwrap();
     assert!(pair_sql.contains("@{block-stats/same_email}"));
     assert!(pair_sql.contains("source_sort_key < r.source_sort_key"));
@@ -56,8 +56,9 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         .iter()
         .find(|node| node["logical_id"] == "blocks/same_email")
         .unwrap();
-    assert_eq!(exact_block["refresh_mode"], "FULL");
+    assert_eq!(exact_block["refresh_mode"], "DIFFERENTIAL");
     assert_eq!(exact_block["output_schema"]["block_key"], "bytea");
+    assert_eq!(exact_block["output_schema"]["field_name"], "text");
     assert!(
         exact_block["defining_sql"]
             .as_str()
@@ -68,18 +69,18 @@ fn candidate_graph_has_separate_limit_and_pair_stages() {
         .iter()
         .find(|node| node["logical_id"] == "blocks/same_name")
         .unwrap();
-    assert_eq!(token_block["output_schema"]["block_key"], "bytea");
+    assert_eq!(token_block["output_schema"]["block_key"], "text");
     assert!(
         token_block["defining_sql"]
             .as_str()
             .unwrap()
-            .contains("convert_to(token, 'UTF8') AS block_key")
+            .contains("token AS block_key")
     );
     let pair_stats = nodes
         .iter()
         .find(|node| node["logical_id"] == "pair-stats/organization")
         .unwrap();
-    assert_eq!(pair_stats["refresh_mode"], "FULL");
+    assert_eq!(pair_stats["refresh_mode"], "DIFFERENTIAL");
     assert!(
         candidate_block_overflow_sql(
             &pg_mdm::candidate::CandidatePlan::from_entity(&entity)

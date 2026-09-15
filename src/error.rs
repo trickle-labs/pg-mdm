@@ -4,8 +4,15 @@ use thiserror::Error;
 pub enum MdmError {
     #[error("required pg_trickle capability is missing: {0}")]
     CapabilityMissing(&'static str),
-    #[error("unsupported {capability} major version {major}; expected 1")]
-    CapabilityVersion { capability: String, major: i16 },
+    #[error(
+        "unsupported {capability} version {major}.{minor}; expected major 1 with minor {minimum_minor} or newer"
+    )]
+    CapabilityVersion {
+        capability: String,
+        major: i16,
+        minor: i16,
+        minimum_minor: i16,
+    },
     #[error("invalid pg_trickle capability response: {0}")]
     CapabilityInvalid(String),
     #[error("external_graph_refresh 1.x is disabled by pg_trickle")]

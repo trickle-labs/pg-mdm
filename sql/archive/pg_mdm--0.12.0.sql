@@ -566,13 +566,13 @@ CREATE FUNCTION mdm_internal.evidence_digest(value text) RETURNS bytea IMMUTABLE
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/explain.rs:83
+-- src/api/explain.rs:165
 -- pg_mdm::api::explain::explain_entity
 CREATE FUNCTION mdm_internal.explain_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'explain_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/explain.rs:60
+-- src/api/explain.rs:142
 -- pg_mdm::api::explain::explain
 CREATE FUNCTION mdm.explain(entity_name text, subject jsonb, publication_revision bigint DEFAULT NULL, max_facts integer DEFAULT 100) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'explain_wrapper';
 /* </end connected objects> */
@@ -590,7 +590,7 @@ CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:128
+-- src/integration.rs:130
 -- pg_mdm::integration::capability_report_sql
 CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb) STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'capability_report_sql_wrapper';
 /* </end connected objects> */
@@ -644,7 +644,7 @@ CREATE FUNCTION mdm_admin.drop_entity(entity_name text, confirm text) RETURNS js
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:863
+-- src/api/create.rs:875
 -- pg_mdm::api::create::persist_entity
 CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 /* </end connected objects> */
@@ -680,7 +680,7 @@ CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1577
+-- src/api/refresh.rs:1681
 -- pg_mdm::api::refresh::persist_refresh
 CREATE FUNCTION mdm_internal.persist_refresh(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_refresh_wrapper';
 /* </end connected objects> */
@@ -692,13 +692,13 @@ CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2295
+-- src/api/refresh.rs:2412
 -- pg_mdm::api::refresh::preview_entity
 CREATE FUNCTION mdm_internal.preview_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'preview_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1602
+-- src/api/refresh.rs:1706
 -- pg_mdm::api::refresh::preview
 CREATE FUNCTION mdm.preview(entity_name text, mode text DEFAULT 'validation', options jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'preview_wrapper';
 /* </end connected objects> */
@@ -710,25 +710,25 @@ CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS '
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1561
+-- src/api/refresh.rs:1665
 -- pg_mdm::api::refresh::rebuild
 CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:1545
+-- src/api/refresh.rs:1649
 -- pg_mdm::api::refresh::refresh
 CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:395
+-- src/api/refresh.rs:417
 -- pg_mdm::api::refresh::refresh_access
 CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_access_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:167
+-- src/integration.rs:169
 -- pg_mdm::integration::require_graph_v1_sql
 CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'require_graph_v1_sql_wrapper';
 /* </end connected objects> */

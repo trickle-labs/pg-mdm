@@ -149,7 +149,9 @@ CREATE EXTENSION pg_mdm;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()
-        WHERE major_version = 1 AND minor_version = 0 AND enabled) <> 2 THEN
+        WHERE capability = 'external_graph_refresh' AND major_version = 1 AND minor_version = 1 AND enabled) <> 1
+       OR (SELECT count(*) FROM mdm_internal.integration_capabilities()
+        WHERE capability = 'output_delta_consumer' AND major_version = 1 AND minor_version = 0 AND enabled) <> 1 THEN
         RAISE EXCEPTION 'Graph V1 integration capabilities are not enabled';
     END IF;
 END
@@ -202,7 +204,13 @@ SELECT public.assert_adapter_error('MDM_PGT_CAPABILITY_VERSION');
 CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
 RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
 LANGUAGE sql
-AS $$ SELECT 'external_graph_refresh', 1::smallint, 0::smallint, false, '{}'::jsonb $$;
+AS $$ SELECT 'external_graph_refresh', 1::smallint, 0::smallint, true, '{}'::jsonb $$;
+SELECT public.assert_adapter_error('MDM_PGT_CAPABILITY_VERSION');
+
+CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
+RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
+LANGUAGE sql
+AS $$ SELECT 'external_graph_refresh', 1::smallint, 1::smallint, false, '{}'::jsonb $$;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()) <> 1 THEN
@@ -216,7 +224,7 @@ RETURNS TABLE (capability text, major_version smallint, minor_version smallint, 
 LANGUAGE sql
 AS $$
     VALUES
-        ('external_graph_refresh', 1::smallint, 0::smallint, false, '{}'::jsonb),
+        ('external_graph_refresh', 1::smallint, 1::smallint, false, '{}'::jsonb),
         ('future_capability', 9::smallint, 0::smallint, true, '{}'::jsonb)
 $$;
 DO $$
@@ -231,7 +239,9 @@ $$;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()
-        WHERE major_version = 1 AND minor_version = 0 AND enabled) <> 2 THEN
+        WHERE capability = 'external_graph_refresh' AND major_version = 1 AND minor_version = 1 AND enabled) <> 1
+       OR (SELECT count(*) FROM mdm_internal.integration_capabilities()
+        WHERE capability = 'output_delta_consumer' AND major_version = 1 AND minor_version = 0 AND enabled) <> 1 THEN
         RAISE EXCEPTION 'baseline capabilities do not match';
     END IF;
     PERFORM mdm_internal.require_graph_v1();
@@ -320,7 +330,7 @@ SELECT pgtrickle.create_stream_table(
     name => 'public.mdm_graph_diff_probe',
     query => 'SELECT id, owner_name, value FROM public.mdm_graph_diff_source',
     schedule => '1h',
-    refresh_mode => 'AUTO',
+    refresh_mode => 'DIFFERENTIAL',
     initialize => false,
     orchestration_mode => 'EXTERNAL'
 );
@@ -333,25 +343,25 @@ SELECT pgtrickle.create_stream_table(
     orchestration_mode => 'EXTERNAL'
 );
 SELECT pgtrickle.create_stream_table(
-    name => 'public.mdm_candidate_blocks_auto',
-    query => $query$SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+    name => 'public.mdm_candidate_blocks_differential',
+    query => $query$SELECT source_record_id, field_name, 'email'::text AS channel_id, canonical_bytes AS block_key, source_sort_key
         FROM public.mdm_candidate_source
         WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL$query$,
-    schedule => '1h', refresh_mode => 'AUTO', initialize => false,
+    schedule => '1h', refresh_mode => 'DIFFERENTIAL', initialize => false,
     orchestration_mode => 'EXTERNAL'
 );
 SELECT pgtrickle.create_stream_table(
     name => 'public.mdm_candidate_blocks_full',
-    query => $query$SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+    query => $query$SELECT source_record_id, field_name, 'email'::text AS channel_id, canonical_bytes AS block_key, source_sort_key
         FROM public.mdm_candidate_source
         WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL$query$,
     schedule => '1h', refresh_mode => 'FULL', initialize => false,
     orchestration_mode => 'EXTERNAL'
 );
 SELECT pgtrickle.create_stream_table(
-    name => 'public.mdm_candidate_pairs_auto',
+    name => 'public.mdm_candidate_pairs_differential',
     query => $query$WITH blocks AS (
-            SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+            SELECT source_record_id, field_name, 'email'::text AS channel_id, canonical_bytes AS block_key, source_sort_key
             FROM public.mdm_candidate_source
             WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
         ), stats AS (
@@ -367,13 +377,13 @@ SELECT pgtrickle.create_stream_table(
         JOIN blocks r ON r.channel_id = l.channel_id AND r.block_key = l.block_key
             AND l.source_sort_key < r.source_sort_key
         WHERE s.block_records <= 100$query$,
-    schedule => '1h', refresh_mode => 'AUTO', initialize => false,
+    schedule => '1h', refresh_mode => 'DIFFERENTIAL', initialize => false,
     orchestration_mode => 'EXTERNAL'
 );
 SELECT pgtrickle.create_stream_table(
     name => 'public.mdm_candidate_pairs_full',
     query => $query$WITH blocks AS (
-            SELECT 'email'::text AS channel_id, canonical_bytes AS block_key, source_record_id, source_sort_key
+            SELECT source_record_id, field_name, 'email'::text AS channel_id, canonical_bytes AS block_key, source_sort_key
             FROM public.mdm_candidate_source
             WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
         ), stats AS (
@@ -407,16 +417,15 @@ BEGIN
     RETURN pg_catalog.to_jsonb(refreshed);
 END
 $$;
--- AUTO is diagnostic here: report divergence and keep the production graph on FULL until every history agrees.
 CREATE FUNCTION public.check_mdm_candidate_probes(stage text)
 RETURNS jsonb
 LANGUAGE plpgsql
 AS $$
 DECLARE
     roots regclass[] := ARRAY[
-        'public.mdm_candidate_blocks_auto'::regclass,
+        'public.mdm_candidate_blocks_differential'::regclass,
         'public.mdm_candidate_blocks_full'::regclass,
-        'public.mdm_candidate_pairs_auto'::regclass,
+        'public.mdm_candidate_pairs_differential'::regclass,
         'public.mdm_candidate_pairs_full'::regclass];
     refreshed jsonb;
     block_rows_equal boolean;
@@ -425,21 +434,21 @@ DECLARE
 BEGIN
     refreshed := public.refresh_mdm_graph(roots);
     SELECT NOT EXISTS (
-               SELECT channel_id, block_key, source_record_id, source_sort_key
-               FROM public.mdm_candidate_blocks_auto
+               SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
+               FROM public.mdm_candidate_blocks_differential
                EXCEPT ALL
-               SELECT channel_id, block_key, source_record_id, source_sort_key
+               SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
                FROM public.mdm_candidate_blocks_full)
        AND NOT EXISTS (
-               SELECT channel_id, block_key, source_record_id, source_sort_key
+               SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
                FROM public.mdm_candidate_blocks_full
                EXCEPT ALL
-               SELECT channel_id, block_key, source_record_id, source_sort_key
-               FROM public.mdm_candidate_blocks_auto)
+               SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
+               FROM public.mdm_candidate_blocks_differential)
       INTO block_rows_equal;
     SELECT NOT EXISTS (
                SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
-               FROM public.mdm_candidate_pairs_auto
+               FROM public.mdm_candidate_pairs_differential
                EXCEPT ALL
                SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
                FROM public.mdm_candidate_pairs_full)
@@ -448,10 +457,10 @@ BEGIN
                FROM public.mdm_candidate_pairs_full
                EXCEPT ALL
                SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
-               FROM public.mdm_candidate_pairs_auto)
+               FROM public.mdm_candidate_pairs_differential)
       INTO pair_rows_equal;
     WITH blocks AS (
-             SELECT canonical_bytes AS block_key, source_record_id, source_sort_key
+             SELECT canonical_bytes AS block_key, source_record_id, source_sort_key, field_name
              FROM public.mdm_candidate_source
              WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
          ), stats AS (
@@ -459,18 +468,18 @@ BEGIN
              FROM blocks GROUP BY block_key
          )
     SELECT NOT EXISTS (
-               SELECT channel_id, block_key, source_record_id, source_sort_key
+               SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
                FROM public.mdm_candidate_blocks_full
                EXCEPT ALL
-               SELECT 'email'::text, canonical_bytes, source_record_id, source_sort_key
+               SELECT source_record_id, field_name, 'email'::text, canonical_bytes, source_sort_key
                FROM public.mdm_candidate_source
                WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL)
        AND NOT EXISTS (
-               SELECT 'email'::text, canonical_bytes, source_record_id, source_sort_key
+               SELECT source_record_id, field_name, 'email'::text, canonical_bytes, source_sort_key
                FROM public.mdm_candidate_source
                WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL
                EXCEPT ALL
-               SELECT channel_id, block_key, source_record_id, source_sort_key
+               SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
                FROM public.mdm_candidate_blocks_full)
        AND NOT EXISTS (
                SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
@@ -491,19 +500,24 @@ BEGIN
                SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key
                FROM public.mdm_candidate_pairs_full)
       INTO full_rows_valid;
-    IF NOT full_rows_valid
-       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto') IS NULL
+    IF NOT block_rows_equal
+       OR NOT pair_rows_equal
+       OR NOT full_rows_valid
+       OR (stage = 'bootstrap' AND public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_differential') IS DISTINCT FROM 'FULL')
+       OR (stage <> 'bootstrap' AND public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_differential') IS DISTINCT FROM 'DIFFERENTIAL')
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_full') IS DISTINCT FROM 'FULL'
-       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_auto') IS NULL
+       OR (stage = 'bootstrap' AND public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_differential') IS DISTINCT FROM 'FULL')
+       OR (stage <> 'bootstrap' AND public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_differential') IS DISTINCT FROM 'DIFFERENTIAL')
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full') IS DISTINCT FROM 'FULL' THEN
-        RAISE EXCEPTION 'candidate FULL oracle or reported strategy failed at %: %', stage, refreshed;
+        RAISE EXCEPTION 'candidate DIFFERENTIAL/FULL parity or reported strategy failed at % (blocks equal %, pairs equal %, FULL oracle valid %): %',
+            stage, block_rows_equal, pair_rows_equal, full_rows_valid, refreshed;
     END IF;
-    RAISE NOTICE 'candidate probes at %: blocks AUTO=%, FULL=%, equal=%; pairs AUTO=%, FULL=%, equal=%',
+    RAISE NOTICE 'candidate probes at %: blocks DIFFERENTIAL=%, FULL=%, equal=%; pairs DIFFERENTIAL=%, FULL=%, equal=%',
         stage,
-        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_auto'),
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_differential'),
         public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_blocks_full'),
         block_rows_equal,
-        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_auto'),
+        public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_differential'),
         public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full'),
         pair_rows_equal;
     RETURN refreshed || jsonb_build_object(
@@ -607,6 +621,11 @@ BEGIN
 END
 $$;
 DO $$
+BEGIN
+    PERFORM public.check_mdm_candidate_probes('bootstrap');
+END
+$$;
+DO $$
 DECLARE
     refreshed jsonb;
 BEGIN
@@ -619,7 +638,7 @@ BEGIN
     IF (SELECT count(*) FROM public.mdm_graph_diff_probe) <> 101
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
-        RAISE EXCEPTION 'AUTO and FULL baseline results disagree: %', refreshed;
+        RAISE EXCEPTION 'DIFFERENTIAL and FULL baseline results disagree: %', refreshed;
     END IF;
 END
 $$;
@@ -637,7 +656,7 @@ BEGIN
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
-        RAISE EXCEPTION 'AUTO and FULL disagree after insert: %', refreshed;
+        RAISE EXCEPTION 'DIFFERENTIAL and FULL disagree after insert: %', refreshed;
     END IF;
 
     UPDATE public.mdm_graph_diff_source SET value = 'updated' WHERE id = 103;
@@ -650,7 +669,7 @@ BEGIN
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
-        RAISE EXCEPTION 'AUTO and FULL disagree after update: %', refreshed;
+        RAISE EXCEPTION 'DIFFERENTIAL and FULL disagree after update: %', refreshed;
     END IF;
 
     DELETE FROM public.mdm_graph_diff_source WHERE id = 103;
@@ -663,7 +682,7 @@ BEGIN
        OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
-        RAISE EXCEPTION 'AUTO and FULL disagree after delete: %', refreshed;
+        RAISE EXCEPTION 'DIFFERENTIAL and FULL disagree after delete: %', refreshed;
     END IF;
 
     refreshed := public.refresh_mdm_graph(ARRAY[
@@ -672,7 +691,7 @@ BEGIN
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
-        RAISE EXCEPTION 'AUTO and FULL disagree on no-op refresh: %', refreshed;
+        RAISE EXCEPTION 'DIFFERENTIAL and FULL disagree on no-op refresh: %', refreshed;
     END IF;
 END
 $$;
@@ -1953,7 +1972,7 @@ BEGIN
     FROM mdm_internal.graph_members
     WHERE graph_binding_id = binding_id AND logical_id = 'normalized/email';
     EXECUTE pg_catalog.format(
-        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' - ''__pgt_count'' ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
         pair_relation
     ) INTO pair_rows;
     EXECUTE pg_catalog.format(
