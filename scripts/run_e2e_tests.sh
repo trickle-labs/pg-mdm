@@ -15,6 +15,9 @@ source_revision=$(git -C "$repo_root" rev-parse HEAD)
 
 cleanup() {
     docker rm -fv "$container" "$physical_container" >/dev/null 2>&1 || true
+    docker run --rm --user root \
+        -v "$physical_data:/cleanup/physical" -v "$missing_graph_data:/cleanup/missing" \
+        "$image" chown -R "$(id -u):$(id -g)" /cleanup/physical /cleanup/missing >/dev/null 2>&1 || true
     rm -rf "$work_dir"
 }
 trap cleanup EXIT
