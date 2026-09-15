@@ -36,15 +36,17 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.13.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.12.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.13.0')
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.graph_delta_consumers') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings_entity_definition_generation') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members_binding_ordinal') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION '0.8.0 to 0.12.0 upgrade did not complete';
+        RAISE EXCEPTION '0.8.0 to 0.13.0 upgrade did not complete';
     END IF;
 END
 $$;
@@ -114,6 +116,7 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.8.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.13.0';
 
 \connect postgres postgres
 CREATE DATABASE upgrade_direct;
@@ -131,12 +134,13 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.12.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.13.0')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
+       OR pg_catalog.to_regclass('mdm_internal.graph_delta_consumers') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.12.0 upgrade did not complete';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.13.0 upgrade did not complete';
     END IF;
 END
 $$;
@@ -1529,6 +1533,112 @@ BEGIN
 END
 $$;
 RESET ROLE;
+
+
+\connect foundation postgres
+CREATE TABLE public.e2e_helper_audit (
+    table_name text NOT NULL,
+    action text NOT NULL,
+    old_active boolean,
+    new_active boolean
+);
+CREATE FUNCTION public.e2e_log_helper_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    INSERT INTO public.e2e_helper_audit(table_name, action, old_active, new_active)
+    VALUES (
+        TG_TABLE_NAME,
+        TG_OP,
+        (pg_catalog.to_jsonb(OLD)->>'active')::boolean,
+        (pg_catalog.to_jsonb(NEW)->>'active')::boolean
+    );
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END
+$$;
+CREATE FUNCTION public.e2e_clear_helper_audit()
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$ TRUNCATE public.e2e_helper_audit $$;
+GRANT SELECT ON public.e2e_helper_audit TO mdm_administrator;
+GRANT EXECUTE ON FUNCTION public.e2e_clear_helper_audit() TO mdm_administrator;
+CREATE TRIGGER e2e_helper_identity_audit
+AFTER INSERT OR UPDATE OR DELETE ON mdm_graph.source_identity_map
+FOR EACH ROW EXECUTE FUNCTION public.e2e_log_helper_change();
+CREATE TRIGGER e2e_helper_record_audit
+AFTER INSERT OR UPDATE OR DELETE ON mdm_graph.source_records
+FOR EACH ROW EXECUTE FUNCTION public.e2e_log_helper_change();
+CREATE TRIGGER e2e_helper_limit_audit
+AFTER INSERT OR UPDATE OR DELETE ON mdm_graph.definition_limits
+FOR EACH ROW EXECUTE FUNCTION public.e2e_log_helper_change();
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    PERFORM public.e2e_clear_helper_audit();
+    result := mdm.refresh('customer', 'ALLOW');
+    IF (SELECT count(*) FROM public.e2e_helper_audit) <> 0
+       OR result->>'changed' <> 'false' THEN
+        RAISE EXCEPTION 'unchanged refresh churned helper rows: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+INSERT INTO public.crm_customer VALUES
+    (9901, 'Incremental Insert', 'incremental-insert@example.test', statement_timestamp());
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    PERFORM public.e2e_clear_helper_audit();
+    result := mdm.refresh('customer', 'ALLOW');
+    IF (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'INSERT') <> 1
+       OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
+        RAISE EXCEPTION 'insert refresh changed unrelated helpers: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DELETE FROM public.crm_customer WHERE id = 9901;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    PERFORM public.e2e_clear_helper_audit();
+    result := mdm.refresh('customer', 'ALLOW');
+    IF (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'UPDATE' AND old_active AND NOT new_active) <> 1
+       OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
+        RAISE EXCEPTION 'delete refresh changed unrelated helpers: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+DROP TRIGGER e2e_helper_identity_audit ON mdm_graph.source_identity_map;
+DROP TRIGGER e2e_helper_record_audit ON mdm_graph.source_records;
+DROP TRIGGER e2e_helper_limit_audit ON mdm_graph.definition_limits;
+DROP FUNCTION public.e2e_log_helper_change();
+DROP FUNCTION public.e2e_clear_helper_audit();
+DROP TABLE public.e2e_helper_audit;
 
 
 \connect foundation postgres

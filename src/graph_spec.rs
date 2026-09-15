@@ -9,12 +9,8 @@ use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 8;
+pub const COMPILER_VERSION: i32 = 9;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
-
-fn node(id: String, dependencies: Vec<String>, sql: String, schema: Value) -> Value {
-    node_with_refresh_mode(id, dependencies, sql, schema, "AUTO")
-}
 
 fn node_with_refresh_mode(
     id: String,
@@ -243,7 +239,13 @@ fn source_node(entity_name: &str, source: &Source) -> Value {
 
     let sql = source_record_sql(entity_name, source);
 
-    node(format!("records/{}", source.name), Vec::new(), sql, schema)
+    node_with_refresh_mode(
+        format!("records/{}", source.name),
+        Vec::new(),
+        sql,
+        schema,
+        "DIFFERENTIAL",
+    )
 }
 
 pub fn normalized_field_sql(field: &Field, sources: &[Source]) -> String {
@@ -313,7 +315,7 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
 
     let sql = normalized_field_sql(field, sources);
 
-    node(
+    node_with_refresh_mode(
         format!("normalized/{}", field.name),
         deps,
         sql,
@@ -329,6 +331,7 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
             "normalized": "text",
             "canonical_bytes": "bytea"
         }),
+        "DIFFERENTIAL",
     )
 }
 
@@ -810,7 +813,7 @@ pub fn compile(entity: &Entity) -> Value {
                 .flatten(),
         )
         .collect::<Vec<_>>();
-    nodes.push(node(
+    nodes.push(node_with_refresh_mode(
         format!("evidence/{}", entity.name),
         evidence_dependencies,
         pair_evidence_sql_with_relation(&entity.name, &entity.matches, &fallback_relation),
@@ -828,12 +831,15 @@ pub fn compile(entity: &Entity) -> Value {
             "left_value_digest":"bytea",
             "right_value_digest":"bytea"
         }),
+        "DIFFERENTIAL",
     ));
-    let golden_dependencies = nodes
+    let golden_dependencies = entity
+        .golden_values
         .iter()
-        .filter_map(|node| node["logical_id"].as_str().map(String::from))
+        .map(|golden| format!("normalized/{}", golden.field))
+        .chain(std::iter::once(format!("evidence/{}", entity.name)))
         .collect::<Vec<_>>();
-    nodes.push(node(
+    nodes.push(node_with_refresh_mode(
         format!("golden/{}", entity.name),
         golden_dependencies.clone(),
         golden_sql(entity, &fallback_relation, &golden_dependencies),
@@ -850,6 +856,7 @@ pub fn compile(entity: &Entity) -> Value {
             "normalized":"text",
             "canonical_bytes":"bytea"
         }),
+        "DIFFERENTIAL",
     ));
     json!({
         "format_version": ARTIFACT_FORMAT_VERSION,
@@ -898,7 +905,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], true);
-        assert_eq!(graph["compiler_version"], 8);
+        assert_eq!(graph["compiler_version"], 9);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));

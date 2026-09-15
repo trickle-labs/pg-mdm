@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+pub mod affected;
 pub mod api;
 pub mod candidate;
 pub mod catalog;

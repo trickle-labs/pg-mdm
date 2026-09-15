@@ -96,6 +96,8 @@ pub enum MdmError {
     },
     #[error("invalid resolver input: {0}")]
     ResolverInvalid(String),
+    #[error("affected-set closure failed: {0}")]
+    AffectedClosure(String),
     #[error("resolver invariant failed: {0}")]
     ResolverInvariant(String),
     #[error("invalid identity history: {0}")]
@@ -160,6 +162,7 @@ impl MdmError {
             Self::DecisionCheckLimit { .. } => "MDM_DECISION_CHECK_LIMIT",
             Self::ResolverLimit { .. } => "MDM_RESOLVER_LIMIT",
             Self::ResolverInvalid(_) => "MDM_RESOLVER_INVALID",
+            Self::AffectedClosure(_) => "MDM_AFFECTED_CLOSURE",
             Self::ResolverInvariant(_) => "MDM_RESOLVER_INVARIANT",
             Self::IdentityInvalid(_) => "MDM_IDENTITY_INVALID",
             Self::IdentityLimit { .. } => "MDM_IDENTITY_LIMIT",

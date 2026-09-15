@@ -92,7 +92,7 @@ report = {
         "e2e_sql_sha256": sha256_file(ROOT / "tests/e2e.sql"),
         "operating_envelope_sql_sha256": sha256_file(ROOT / "tests/operating_envelope.sql"),
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
-        "archived_pg_mdm_0_12_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.12.0.sql"),
+        "archived_pg_mdm_0_13_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.13.0.sql"),
         "pg_mdm_package_manifest_sha256": sha256_bytes(package_manifest.encode()),
         "pg_trickle_version": "0.106.1",
         "pg_trickle_artifact_sha256": "e6976e4e6477b5241008f5ec3b48edb395b600aea4fe78c1944e69e12046d2bf",

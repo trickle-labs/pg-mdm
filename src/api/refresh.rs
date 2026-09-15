@@ -108,6 +108,16 @@ struct RefreshResult {
     open_reviews: usize,
     stage_timings_ms: Value,
     component_checks: usize,
+    resolver_strategy: String,
+    resolver_fallback_reason: Option<String>,
+    delta_batch_count: usize,
+    delta_row_count: usize,
+    delta_acknowledged_token: Option<String>,
+    delta_lag: Option<i64>,
+    effective_node_modes: Value,
+    unexpected_full_fallbacks: Value,
+    affected_records: usize,
+    affected_components: usize,
 }
 
 fn normalized_state(value: &str) -> Result<NormalizedState, MdmError> {
@@ -499,28 +509,28 @@ fn refresh_graph(
     }
     client
         .update(
-            "DELETE FROM mdm_graph.source_identity_map WHERE entity_id = $1::pg_catalog.uuid; DELETE FROM mdm_graph.source_records WHERE entity_id = $1::pg_catalog.uuid; DELETE FROM mdm_graph.definition_limits WHERE entity_id = $1::pg_catalog.uuid",
+            "DELETE FROM mdm_graph.source_identity_map target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.source_identities source WHERE source.entity_id = target.entity_id AND source.source_name::text = target.source_name); DELETE FROM mdm_graph.source_records target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.source_records source WHERE source.entity_id = target.entity_id AND source.source_record_id = target.source_record_id); DELETE FROM mdm_graph.definition_limits target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.entities entity JOIN mdm_internal.definitions definition ON definition.entity_id = entity.entity_id AND definition.definition_version = entity.desired_version WHERE entity.entity_id = target.entity_id)",
             None,
             &[context.entity_id.clone().into()],
         )
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
     client
         .update(
-            "INSERT INTO mdm_graph.source_identity_map (entity_id, entity_name, source_identity_id, source_name) SELECT e.entity_id, e.entity_name::text, s.source_identity_id, s.source_name::text FROM mdm_internal.entities e JOIN mdm_internal.source_identities s ON s.entity_id = e.entity_id WHERE e.entity_id = $1::pg_catalog.uuid",
+            "INSERT INTO mdm_graph.source_identity_map AS target (entity_id, entity_name, source_identity_id, source_name) SELECT e.entity_id, e.entity_name::text, s.source_identity_id, s.source_name::text FROM mdm_internal.entities e JOIN mdm_internal.source_identities s ON s.entity_id = e.entity_id WHERE e.entity_id = $1::pg_catalog.uuid ON CONFLICT (entity_id, source_name) DO UPDATE SET entity_name = EXCLUDED.entity_name, source_identity_id = EXCLUDED.source_identity_id, source_name = EXCLUDED.source_name WHERE target.entity_name IS DISTINCT FROM EXCLUDED.entity_name OR target.source_identity_id IS DISTINCT FROM EXCLUDED.source_identity_id OR target.source_name IS DISTINCT FROM EXCLUDED.source_name",
             None,
             &[context.entity_id.clone().into()],
         )
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
     client
         .update(
-            "INSERT INTO mdm_graph.source_records (entity_id, source_identity_id, source_record_key, source_record_id, active) SELECT entity_id, source_identity_id, source_record_key, source_record_id, active FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid",
+            "INSERT INTO mdm_graph.source_records AS target (entity_id, source_identity_id, source_record_key, source_record_id, active) SELECT entity_id, source_identity_id, source_record_key, source_record_id, active FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid ON CONFLICT (source_record_id) DO UPDATE SET entity_id = EXCLUDED.entity_id, source_identity_id = EXCLUDED.source_identity_id, source_record_key = EXCLUDED.source_record_key, source_record_id = EXCLUDED.source_record_id, active = EXCLUDED.active WHERE target.entity_id IS DISTINCT FROM EXCLUDED.entity_id OR target.source_identity_id IS DISTINCT FROM EXCLUDED.source_identity_id OR target.source_record_key IS DISTINCT FROM EXCLUDED.source_record_key OR target.source_record_id IS DISTINCT FROM EXCLUDED.source_record_id OR target.active IS DISTINCT FROM EXCLUDED.active",
             None,
             &[context.entity_id.clone().into()],
         )
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
     client
         .update(
-            "INSERT INTO mdm_graph.definition_limits (entity_id, entity_name, expanded_definition) SELECT e.entity_id, e.entity_name::text, d.expanded_definition FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version WHERE e.entity_id = $1::pg_catalog.uuid",
+            "INSERT INTO mdm_graph.definition_limits AS target (entity_id, entity_name, expanded_definition) SELECT e.entity_id, e.entity_name::text, d.expanded_definition FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version WHERE e.entity_id = $1::pg_catalog.uuid ON CONFLICT (entity_id) DO UPDATE SET entity_name = EXCLUDED.entity_name, expanded_definition = EXCLUDED.expanded_definition WHERE target.entity_name IS DISTINCT FROM EXCLUDED.entity_name OR target.expanded_definition IS DISTINCT FROM EXCLUDED.expanded_definition",
             None,
             &[context.entity_id.clone().into()],
         )
@@ -1473,6 +1483,7 @@ fn persist_refresh_inner(
     selected: &catalog::Role,
 ) -> Result<RefreshResult, MdmError> {
     let operation_started = Instant::now();
+    let delta_admitted = crate::integration::require_output_delta_v1()?.is_some();
     Spi::connect_mut(|client| {
         let context = load_context(client, &request.entity_name, selected, true)?;
         client
@@ -1640,6 +1651,25 @@ fn persist_refresh_inner(
                 "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
             }),
             component_checks: resolution.accepted.len() + resolution.rejected.len(),
+            resolver_strategy: "full".into(),
+            resolver_fallback_reason: Some(if delta_admitted {
+                "affected_resolution_not_enabled".into()
+            } else {
+                "delta_capability_unavailable".into()
+            }),
+            delta_batch_count: 0,
+            delta_row_count: 0,
+            delta_acknowledged_token: None,
+            delta_lag: None,
+            effective_node_modes: json!({}),
+            unexpected_full_fallbacks: json!([]),
+            affected_records: sources.len(),
+            affected_components: resolution
+                .memberships
+                .iter()
+                .map(|membership| membership.component_key.clone())
+                .collect::<BTreeSet<_>>()
+                .len(),
         };
         complete_operation(client, &operation_id, &result)?;
         Ok(result)

@@ -127,6 +127,29 @@ pub(crate) fn require_graph_v1() -> Result<Capability, MdmError> {
         .ok_or(MdmError::GraphCapabilityDisabled)
 }
 
+pub(crate) fn require_output_delta_v1() -> Result<Option<Capability>, MdmError> {
+    let Some(capability) = integration_capabilities()?.output_delta_consumer else {
+        return Ok(None);
+    };
+    if capability.major != 1 {
+        return Err(MdmError::CapabilityVersion {
+            capability: DELTA_CAPABILITY.to_string(),
+            major: capability.major,
+            minor: capability.minor,
+            minimum_minor: 0,
+        });
+    }
+    if !capability.enabled {
+        return Ok(None);
+    }
+    if capability.details.get("status").and_then(Value::as_str) != Some("stable") {
+        return Err(MdmError::CapabilityInvalid(
+            "output_delta_consumer 1.x does not advertise the stable contract".into(),
+        ));
+    }
+    Ok(Some(capability))
+}
+
 #[pg_extern(
     name = "integration_capabilities",
     requires = ["pg_mdm_foundation"],
@@ -264,5 +287,18 @@ mod tests {
     fn disabled_graph_has_a_distinct_gate_error() {
         let capability = parse_capabilities([row(GRAPH_CAPABILITY, 1, false, "{}")]).unwrap();
         assert!(!capability.external_graph_refresh.enabled);
+    }
+
+    #[test]
+    fn delta_requires_the_stable_contract_only_when_enabled() {
+        let parsed = parse_capabilities([
+            row(GRAPH_CAPABILITY, 1, true, "{}"),
+            row(DELTA_CAPABILITY, 1, true, r#"{"status":"stable"}"#),
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed.output_delta_consumer.unwrap().details["status"],
+            "stable"
+        );
     }
 }

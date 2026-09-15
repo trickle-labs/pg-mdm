@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.12.0-e2e}
+image=${PG_MDM_E2E_IMAGE:-pg_mdm:0.13.0-e2e}
 container="pg-mdm-e2e-$$"
 physical_container="pg-mdm-physical-$$"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pg-mdm-e2e.XXXXXX")

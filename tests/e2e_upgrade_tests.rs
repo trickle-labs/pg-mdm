@@ -15,6 +15,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_09_10 = root.join("sql").join("pg_mdm--0.9.0--0.10.0.sql");
     let upgrade_10_11 = root.join("sql").join("pg_mdm--0.10.0--0.11.0.sql");
     let upgrade_11_12 = root.join("sql").join("pg_mdm--0.11.0--0.12.0.sql");
+    let upgrade_12_13 = root.join("sql").join("pg_mdm--0.12.0--0.13.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -60,6 +61,10 @@ fn test_upgrade_scripts_exist() {
         upgrade_11_12.is_file(),
         "0.11.0 -> 0.12.0 upgrade script must exist"
     );
+    assert!(
+        upgrade_12_13.is_file(),
+        "0.12.0 -> 0.13.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -92,4 +97,7 @@ fn test_upgrade_scripts_exist() {
     assert!(sql_10_11.contains("v0.11 release qualification"));
     let sql_11_12 = fs::read_to_string(&upgrade_11_12).expect("read 0.11.0 to 0.12.0");
     assert!(sql_11_12.contains("v0.12 admits pg_trickle 0.105.2"));
+    let sql_12_13 = fs::read_to_string(&upgrade_12_13).expect("read 0.12.0 to 0.13.0");
+    assert!(sql_12_13.contains("mdm_internal.graph_delta_consumers"));
+    assert!(sql_12_13.contains("mdm_admin.recompile"));
 }

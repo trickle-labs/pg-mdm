@@ -170,6 +170,7 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
                 "DELETE FROM mdm_graph.source_records WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_graph.source_identity_map WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_graph.definition_limits WHERE entity_id = $1::pg_catalog.uuid",
+                "DELETE FROM mdm_internal.graph_delta_consumers WHERE graph_binding_id IN (SELECT graph_binding_id FROM mdm_internal.graph_bindings WHERE entity_id = $1::pg_catalog.uuid)",
                 "DELETE FROM mdm_internal.graph_members WHERE graph_binding_id IN (SELECT graph_binding_id FROM mdm_internal.graph_bindings WHERE entity_id = $1::pg_catalog.uuid)",
                 "DELETE FROM mdm_internal.graph_bindings WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.golden_provenance WHERE entity_id = $1::pg_catalog.uuid",

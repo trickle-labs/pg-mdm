@@ -43,6 +43,10 @@ struct CreateRequest {
     comment: Option<String>,
 }
 
+struct RecompileRequest {
+    entity_name: String,
+}
+
 fn call_persist(request: CreateRequest) -> Result<CreateResult, MdmError> {
     let result = catalog::call_helper("persist_entity", request)?;
     serde_json::from_value(result.0).map_err(|error| MdmError::OperationState(error.to_string()))
@@ -870,6 +874,77 @@ fn persist(
 
 fn selected_oid() -> pg_sys::Oid {
     catalog::outer_user_id()
+}
+
+#[pg_extern(
+    name = "recompile",
+    requires = [persist_recompile],
+    sql = "CREATE FUNCTION mdm_admin.recompile(entity_name text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'recompile_wrapper';"
+)]
+pub(crate) fn recompile(entity_name: String) -> JsonB {
+    catalog::call_helper("persist_recompile", RecompileRequest { entity_name })
+        .unwrap_or_else(|error| crate::raise(error))
+}
+
+#[pg_extern(
+    name = "persist_recompile",
+    security_definer,
+    sql = "CREATE FUNCTION mdm_internal.persist_recompile(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_recompile_wrapper';"
+)]
+#[search_path(pg_catalog, mdm_internal, pg_temp)]
+pub(crate) fn persist_recompile(request: Internal) -> JsonB {
+    let result = (|| {
+        let helper_owner = catalog::validate_helper_owner()?;
+        let (session, selected) = catalog::validate_caller(&helper_owner)?;
+        // SAFETY: only recompile constructs RecompileRequest.
+        let request = unsafe { request.get::<RecompileRequest>() }
+            .ok_or_else(|| MdmError::Unauthorized("recompile request is required".into()))?;
+        let (definition, version) = Spi::connect_mut(|client| {
+            let row = client
+                .select(
+                    "SELECT d.user_definition, d.definition_version FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version WHERE e.entity_name = $1::pg_catalog.name FOR UPDATE OF e",
+                    Some(1),
+                    &[request.entity_name.clone().into()],
+                )
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .first();
+            if row.is_empty() {
+                return Err(MdmError::DefinitionInvalid(format!(
+                    "entity {} does not exist",
+                    request.entity_name
+                )));
+            }
+            Ok((
+                row.get::<JsonB>(1)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("stored definition is NULL".into()))?
+                    .0,
+                row.get::<i64>(2)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("definition version is NULL".into()))?,
+            ))
+        })?;
+        let prepared = prepare(definition)?;
+        let entity = parse_entity(prepared.expanded_definition.clone())
+            .map_err(MdmError::DefinitionInvalid)?;
+        let (operation_id, version, changed) = persist(
+            prepared.clone(),
+            entity.clone(),
+            Some(version),
+            Some("compiler recompile".into()),
+            session.name,
+            selected.name,
+        )?;
+        Ok(JsonB(json!({
+            "operation_id": operation_id,
+            "entity_name": entity.name,
+            "desired_version": version,
+            "changed": changed,
+            "graph_recompiled": true,
+            "artifact_digest": digest_hex(&prepared.artifact_digest)
+        })))
+    })();
+    result.unwrap_or_else(|error| crate::raise(error))
 }
 
 #[pg_extern(
