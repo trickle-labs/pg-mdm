@@ -838,6 +838,13 @@ pub fn compile(entity: &Entity) -> Value {
         .iter()
         .map(|golden| format!("normalized/{}", golden.field))
         .chain(std::iter::once(format!("evidence/{}", entity.name)))
+        .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
+        )
+        .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
+        .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
         .collect::<Vec<_>>();
     nodes.push(node_with_refresh_mode(
         format!("golden/{}", entity.name),
