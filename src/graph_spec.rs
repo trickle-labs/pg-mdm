@@ -244,7 +244,7 @@ fn source_node(entity_name: &str, source: &Source) -> Value {
         Vec::new(),
         sql,
         schema,
-        "DIFFERENTIAL",
+        "AUTO",
     )
 }
 
