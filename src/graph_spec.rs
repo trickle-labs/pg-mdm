@@ -680,7 +680,7 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
         .collect::<Vec<_>>();
     if rows.is_empty() {
         format!(
-            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty WHERE false AND {guards} /* {} */",
+            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty WHERE empty IS NULL AND {guards} /* {} */",
             node_ref(&format!("evidence/{}", entity.name)),
             guards = guards
         )
