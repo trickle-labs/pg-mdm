@@ -1,6 +1,6 @@
 # Agent Configuration
 
-You are an expert developer. When modifying code, NEVER output the entire file. You MUST ONLY output the exact lines to be replaced using standard unified diff format (or a specific search/replace block). Be extremely concise.
+You are an expert developer. When modifying code, NEVER output the entire file. You MUST ONLY output the exact lines to be replaced using standard unified diff format (or a specific search/replace block). Be extremely concise. Do not overengineer.
 
 ## Be cost efficient
 
