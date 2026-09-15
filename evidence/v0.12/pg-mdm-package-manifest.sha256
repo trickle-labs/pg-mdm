@@ -1,4 +1,4 @@
-ee394c2a154522ee4d67904581dd1783bf935aa954debf2c62b68572186d657d  /package/usr/lib/postgresql/18/lib/pg_mdm.so
+73998815d305709b44d0375742b0cd3ef5bf89d4b326f2cad1ce8e45f9340348  /package/usr/lib/postgresql/18/lib/pg_mdm.so
 1309ad5aaedd76b979b7e4aa25105f0cea50430121c586f2e3e4e607e56ac57e  /package/usr/share/postgresql/18/extension/pg_mdm--0.10.0--0.11.0.sql
 201c519ff322f25ccf560ada0afe9c1e02db93fe16afc6437c3d05ffa5cd36e3  /package/usr/share/postgresql/18/extension/pg_mdm--0.1.0--0.2.0.sql
 89b8cbec6b4152411fba548354d4f6b913420b2b9ef139df32cb3b71a8d89d31  /package/usr/share/postgresql/18/extension/pg_mdm--0.11.0--0.12.0.sql

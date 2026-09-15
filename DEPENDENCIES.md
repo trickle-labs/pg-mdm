@@ -12,12 +12,12 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Runtime PostgreSQL | 18.4, Debian Bookworm |
 | Build/test `pg_config` | 18.6 (`18.6-1.pgdg12+2`) |
 | PostgreSQL image | `postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf` |
-| `pg_trickle` version | 0.105.3 |
-| `pg_trickle` commit | `7b7ecf16e320c6a38b3433f8470c6cbe2b305b8d` |
-| `pg_trickle` tag object | lightweight tag at commit above |
-| `pg_trickle` artifact | `pg_trickle-0.105.3-pg18-linux-amd64.tar.gz` |
-| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.3/pg_trickle-0.105.3-pg18-linux-amd64.tar.gz` |
-| Artifact SHA-256 | `c59da1ea543ea23c207f12294f40fbff41d58b5554ced81408e5f3efde7d84c6` |
+| `pg_trickle` version | 0.106.1 |
+| `pg_trickle` commit | `df0e9c1d89dc4ccf920f3e1519d2b7f86990a4bf` |
+| `pg_trickle` tag object | annotated tag targeting the commit above |
+| `pg_trickle` artifact | `pg_trickle-0.106.1-pg18-linux-amd64.tar.gz` |
+| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.106.1/pg_trickle-0.106.1-pg18-linux-amd64.tar.gz` |
+| Artifact SHA-256 | `e6976e4e6477b5241008f5ec3b48edb395b600aea4fe78c1944e69e12046d2bf` |
 | Capture mode | trigger |
 | E2E database `LC_COLLATE` / `LC_CTYPE` | `en_US.utf8` / `en_US.utf8` |
 | Normalization fixture SHA-256 | `c01d1b0fe2b938dd09d3afa48e4e43bf648b47d0715595aa0b208ffca68826aa` |
@@ -26,9 +26,9 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Pair-precedence fixture SHA-256 | `ed2324ebcb1744ed5cf945189b7a5b30bb1838a38cd1c6f537a206f79986bd33` |
 | Organization-quality fixture SHA-256 | `f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb` |
 
-The baseline capability response contains `external_graph_refresh 1.0 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.
+The baseline capability response contains `external_graph_refresh 1.1 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.
 
-The pg-trickle 0.105.3 release includes package/runtime qualification and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
+The pg-trickle 0.106.1 release includes package/runtime qualification and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
 
 ## Archived v0.1 Linux package checksums
 

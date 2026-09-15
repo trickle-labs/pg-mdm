@@ -1583,7 +1583,7 @@ BEGIN
     END IF;
 END
 $$;
-ALTER EXTENSION pg_trickle UPDATE TO '0.105.3';
+ALTER EXTENSION pg_trickle UPDATE TO '0.106.1';
 DO $$
 DECLARE
     snapshot record;
@@ -1607,7 +1607,7 @@ BEGIN
     INTO STRICT current_state
     FROM mdm_internal.entities e
     WHERE e.entity_name = 'customer';
-    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.105.3'
+    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.106.1'
        OR snapshot.publication_revision IS DISTINCT FROM current_state.publication_revision
        OR snapshot.bindings IS DISTINCT FROM current_state.bindings
        OR snapshot.graph_members IS DISTINCT FROM current_state.graph_members
