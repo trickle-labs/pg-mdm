@@ -831,7 +831,7 @@ pub fn compile(entity: &Entity) -> Value {
             "left_value_digest":"bytea",
             "right_value_digest":"bytea"
         }),
-        "DIFFERENTIAL",
+        "AUTO",
     ));
     let golden_dependencies = entity
         .golden_values
