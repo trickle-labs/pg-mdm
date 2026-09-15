@@ -331,7 +331,7 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
             "normalized": "text",
             "canonical_bytes": "bytea"
         }),
-        "DIFFERENTIAL",
+        "AUTO",
     )
 }
 
