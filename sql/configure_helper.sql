@@ -35,6 +35,22 @@ SELECT pg_catalog.format(
     :'helper_owner'
 );
 \gexec
+SELECT pg_catalog.format(
+    'GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I',
+    pg_catalog.format('%s_%s', 'pgtrickle', 'changes'),
+    :'helper_owner'
+);
+\gexec
+SELECT pg_catalog.format(
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO %I',
+    owner_role.rolname,
+    pg_catalog.format('%s_%s', 'pgtrickle', 'changes'),
+    :'helper_owner'
+)
+FROM pg_catalog.pg_namespace AS target_schema
+JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = target_schema.nspowner
+WHERE target_schema.nspname = pg_catalog.format('%s_%s', 'pgtrickle', 'changes');
+\gexec
 GRANT EXECUTE ON FUNCTION pgtrickle.integration_capabilities() TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.create_stream_table(text, text, text, text, boolean, text, text, text, boolean, boolean, text, integer, double precision, text, boolean, text, integer, text, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.stream_table_contract(regclass) TO :"helper_owner";
