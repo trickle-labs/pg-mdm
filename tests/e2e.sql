@@ -2000,11 +2000,12 @@ INSERT INTO public.crm_customer VALUES
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
-DECLARE result jsonb;
+DECLARE result jsonb; expected_revision bigint;
 BEGIN
+    expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> 2
+       OR (result->>'publication_revision')::bigint <> expected_revision
        OR result->'source_boundary'->>'completeness' <> 'PROVEN' THEN
         RAISE EXCEPTION 'insert refresh did not publish a proven boundary: %', result;
     END IF;
@@ -2168,11 +2169,12 @@ WHERE id = 2;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
-DECLARE result jsonb;
+DECLARE result jsonb; expected_revision bigint;
 BEGIN
+    expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> 3 THEN
+       OR (result->>'publication_revision')::bigint <> expected_revision THEN
         RAISE EXCEPTION 'update refresh did not publish the split: %', result;
     END IF;
 END
@@ -2261,11 +2263,12 @@ DROP FUNCTION public.fail_release_output();
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
-DECLARE result jsonb;
+DECLARE result jsonb; expected_revision bigint;
 BEGIN
+    expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> 4
+       OR (result->>'publication_revision')::bigint <> expected_revision
        OR result->'source_boundary'->>'completeness' <> 'PROVEN'
        OR length(result->>'source_boundary_digest') <> 64 THEN
         RAISE EXCEPTION 'retry skipped a source update after rollback: %', result;
@@ -2287,18 +2290,19 @@ DELETE FROM public.crm_customer WHERE id = 1;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
-DECLARE result jsonb; before_state jsonb; output_state jsonb;
+DECLARE result jsonb; before_state jsonb; output_state jsonb; expected_revision bigint;
 BEGIN
+    expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> 5 THEN
+       OR (result->>'publication_revision')::bigint <> expected_revision THEN
         RAISE EXCEPTION 'delete refresh did not publish: %', result;
     END IF;
     before_state := public.e2e_customer_state();
     result := mdm.refresh('customer', 'ALLOW');
     output_state := public.e2e_customer_state();
     IF result->>'changed' <> 'false'
-       OR (result->>'publication_revision')::bigint <> 5
+       OR (result->>'publication_revision')::bigint <> expected_revision
        OR output_state->'internal_changed' <> '[]'::jsonb
        OR output_state->'entities' IS DISTINCT FROM before_state->'entities'
        OR output_state->'members' IS DISTINCT FROM before_state->'members'
