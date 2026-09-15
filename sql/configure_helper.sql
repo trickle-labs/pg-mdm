@@ -29,6 +29,12 @@ BEGIN;
 GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_graph TO :"helper_owner";
 GRANT USAGE, CREATE ON SCHEMA mdm_out TO :"helper_owner";
 GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
+SELECT pg_catalog.format(
+    'GRANT USAGE ON SCHEMA %I TO %I',
+    pg_catalog.format('%s_%s', 'pgtrickle', 'changes'),
+    :'helper_owner'
+);
+\gexec
 GRANT EXECUTE ON FUNCTION pgtrickle.integration_capabilities() TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.create_stream_table(text, text, text, text, boolean, text, text, text, boolean, boolean, text, integer, double precision, text, boolean, text, integer, text, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.stream_table_contract(regclass) TO :"helper_owner";
