@@ -34,6 +34,12 @@ GRANT EXECUTE ON FUNCTION pgtrickle.create_stream_table(text, text, text, text, 
 GRANT EXECUTE ON FUNCTION pgtrickle.stream_table_contract(regclass) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.graph_contract(regclass[]) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.refresh_graph_strict(regclass[], bytea, text) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.register_output_delta_consumer(oid, text, bytea, text) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.output_delta_consumer_status() TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.output_delta_batches(uuid, bigint) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.ack_output_delta(uuid, bigint, text) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.begin_output_delta_resnapshot(uuid) TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION pgtrickle.ack_output_delta_resnapshot(uuid, uuid) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) TO :"helper_owner" WITH GRANT OPTION;
 GRANT EXECUTE ON FUNCTION pgtrickle.drop_stream_table(text, boolean) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, jsonb) TO :"helper_owner";
