@@ -347,6 +347,7 @@ fn install_graph(
     definition_version: i64,
     prepared: &PreparedDefinition,
     role: &str,
+    delta_enabled: bool,
 ) -> Result<(), MdmError> {
     let (nodes, roots) = graph_spec::artifact_nodes(&prepared.artifact_bytes)?;
     let artifact_id = client
@@ -595,7 +596,85 @@ fn install_graph(
             )
             .map_err(|error| MdmError::GraphBinding(error.to_string()))?;
     }
+    if delta_enabled {
+        register_delta_consumers(client, &binding_id, &members)?;
+    }
     revoke_graph_create(client, role)?;
+    Ok(())
+}
+
+fn register_delta_consumers(
+    client: &mut SpiClient<'_>,
+    binding_id: &str,
+    members: &[InstalledMember],
+) -> Result<(), MdmError> {
+    for logical_id in ["evidence", "golden"] {
+        let member = members
+            .iter()
+            .find(|member| member.logical_id.starts_with(&format!("{logical_id}/")))
+            .ok_or_else(|| {
+                MdmError::DeltaProtocol(format!("{logical_id} terminal graph member is missing"))
+            })?;
+        let consumer_name = format!("pg_mdm:{binding_id}:{}", member.logical_id);
+        let rows = client
+            .select(
+                "SELECT consumer_id, delta_relation, output_contract_digest, row_identity_version, state FROM pgtrickle.register_output_delta_consumer($1::pg_catalog.oid, $2::text, $3::bytea, 'CURRENT'::text)",
+                Some(1),
+                &[
+                    member.relation_oid.into(),
+                    consumer_name.into(),
+                    member.contract_digest.clone().into(),
+                ],
+            )
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+        if rows.is_empty() {
+            return Err(MdmError::DeltaProtocol(format!(
+                "registration returned no consumer for {}",
+                member.logical_id
+            )));
+        }
+        let row = rows.first();
+        let consumer_id = row
+            .get::<Uuid>(1)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("consumer ID is NULL".into()))?;
+        let delta_relation = row
+            .get::<String>(2)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("delta relation is NULL".into()))?;
+        let digest = row
+            .get::<Vec<u8>>(3)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("delta contract digest is NULL".into()))?;
+        let row_identity_version = row
+            .get::<i16>(4)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("row identity version is NULL".into()))?;
+        let state = row
+            .get::<String>(5)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("consumer state is NULL".into()))?;
+        if digest != member.contract_digest || row_identity_version <= 0 || state != "ACTIVE" {
+            return Err(MdmError::DeltaProtocol(format!(
+                "consumer contract for {} does not match the installed member",
+                member.logical_id
+            )));
+        }
+        client
+            .update(
+                "INSERT INTO mdm_internal.graph_delta_consumers (graph_binding_id, logical_id, consumer_id, delta_relation_name, output_contract_digest, row_identity_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6)",
+                None,
+                &[
+                    binding_id.into(),
+                    member.logical_id.clone().into(),
+                    consumer_id.into(),
+                    delta_relation.into(),
+                    digest.into(),
+                    row_identity_version.into(),
+                ],
+            )
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+    }
     Ok(())
 }
 
@@ -619,6 +698,7 @@ fn persist(
     }
     let capabilities = crate::integration::integration_capabilities()?;
     let graph_enabled = capabilities.external_graph_refresh.enabled;
+    let delta_enabled = crate::integration::require_output_delta_v1()?.is_some();
     let outcome = JsonB(
         json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": graph_enabled, "capabilities": capabilities}),
     );
@@ -865,7 +945,14 @@ fn persist(
             client.update("UPDATE mdm_internal.entities SET desired_version = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[entity_id.clone().into(), version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
         if graph_enabled {
-            install_graph(client, &entity_id, version, &prepared, &selected)?;
+            install_graph(
+                client,
+                &entity_id,
+                version,
+                &prepared,
+                &selected,
+                delta_enabled,
+            )?;
         }
         complete_operation(client, &operation_id)
     })?;

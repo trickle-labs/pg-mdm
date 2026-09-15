@@ -23,6 +23,8 @@ pub enum MdmError {
     GraphInstallation(String),
     #[error("graph contract is invalid: {0}")]
     GraphContract(String),
+    #[error("invalid output delta: {0}")]
+    DeltaProtocol(String),
     #[error("graph binding is invalid: {0}")]
     GraphBinding(String),
     #[error("graph lifecycle failed: {0}")]
@@ -132,6 +134,7 @@ impl MdmError {
             Self::GraphArtifact(_) => "MDM_GRAPH_ARTIFACT",
             Self::GraphInstallation(_) => "MDM_GRAPH_INSTALLATION",
             Self::GraphContract(_) => "MDM_GRAPH_CONTRACT",
+            Self::DeltaProtocol(_) => "MDM_DELTA_PROTOCOL",
             Self::GraphBinding(_) => "MDM_GRAPH_BINDING",
             Self::GraphLifecycle(_) => "MDM_GRAPH_LIFECYCLE",
             Self::RefreshBoundary(_) => "MDM_REFRESH_BOUNDARY",
