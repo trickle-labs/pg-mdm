@@ -679,9 +679,21 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
         })
         .collect::<Vec<_>>();
     if rows.is_empty() {
+        let dependency_joins = dependency_ids
+            .iter()
+            .enumerate()
+            .map(|(index, logical_id)| {
+                format!(
+                    "CROSS JOIN (SELECT 1 FROM {} LIMIT 1) AS dependency_{index}",
+                    node_ref(logical_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         format!(
-            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty WHERE empty IS NULL AND {guards} /* {} */",
+            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE empty IS NULL AND {guards} /* {} */",
             node_ref(&format!("evidence/{}", entity.name)),
+            dependency_joins = dependency_joins,
             guards = guards
         )
     } else {

@@ -517,13 +517,11 @@ fn install_graph(
             member.get("orchestration_mode").and_then(Value::as_str) != Some("EXTERNAL")
         })
     {
-        return Err(MdmError::GraphContract(
-            format!(
-                "graph contract does not match installed members: contract has {}, installed {}",
-                contract_members.len(),
-                members.len()
-            ),
-        ));
+        return Err(MdmError::GraphContract(format!(
+            "graph contract does not match installed members: contract has {}, installed {}",
+            contract_members.len(),
+            members.len()
+        )));
     }
 
     // Adding downstream nodes can advance an upstream member's contract generation.
