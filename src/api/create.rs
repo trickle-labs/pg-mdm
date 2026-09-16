@@ -517,10 +517,16 @@ fn install_graph(
             member.get("orchestration_mode").and_then(Value::as_str) != Some("EXTERNAL")
         })
     {
+        let installed_logical_ids = members
+            .iter()
+            .map(|member| member.logical_id.as_str())
+            .collect::<Vec<_>>();
         return Err(MdmError::GraphContract(format!(
-            "graph contract does not match installed members: contract has {}, installed {}",
+            "graph contract does not match installed members: contract has {}, installed {}; contract members {:?}; installed logical IDs {:?}",
             contract_members.len(),
-            members.len()
+            members.len(),
+            contract_members,
+            installed_logical_ids
         )));
     }
 
