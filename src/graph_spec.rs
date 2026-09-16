@@ -644,7 +644,7 @@ fn relation_guards(dependency_ids: &[String]) -> String {
         .iter()
         .map(|logical_id| {
             format!(
-                "(SELECT pg_catalog.count(*) FROM {}) >= 0",
+                "(SELECT pg_catalog.count(1) FROM {}) >= 0",
                 node_ref(logical_id)
             )
         })
