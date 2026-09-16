@@ -7,15 +7,15 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:9a6725c3be1ffad69bd14c40c6771da648313939e5045df802313b229d822f40",
+    "docker_image_id": "sha256:91aea2c510720aa5674578483ef486ffbd6bcce34cc5e3dbc2645df9749a8fa1",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 602660864,
-      "visible_available_bytes": 6526115840,
+      "cgroup_peak_bytes": 601804800,
+      "visible_available_bytes": 6753726464,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 71962357760 856183922688   8% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 71801561088 856344719360   8% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
@@ -42,10 +42,10 @@
     "last_customer_refresh": {
       "active_records": 9,
       "component_checks": 1,
-      "elapsed_ms": 1515,
+      "elapsed_ms": 1518,
       "publication_revision": 14,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 297,
+        "elapsed_before_operation_completion": 296,
         "graph_refresh": 289,
         "mdm_resolution": 2,
         "publication": 2
@@ -76,9 +76,9 @@
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-16T06:25:00.038271+00:00",
+  "recorded_at_utc": "2026-09-16T06:40:58.010480+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
-  "source_commit": "1f8f3d655983fe0b96c802332eb55805aad3073b"
+  "source_commit": "6f693c41fab23572fca66b6cd0de28c5066e40b1"
 }
