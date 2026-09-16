@@ -639,27 +639,21 @@ fn match_node(channel: &CandidateChannel) -> Value {
     )
 }
 
-fn relation_guards(dependency_ids: &[String]) -> String {
-    let guards = dependency_ids
+fn relation_joins(dependency_ids: &[String]) -> String {
+    dependency_ids
         .iter()
-        .map(|logical_id| {
+        .enumerate()
+        .map(|(index, logical_id)| {
             format!(
-                "(SELECT pg_catalog.count(1) FROM {}) >= 0",
-                node_ref(logical_id)
+                "LEFT JOIN {} AS dependency_{index} ON false",
+                node_ref(logical_id),
             )
         })
         .collect::<Vec<_>>()
-        .join(" AND ");
-    let guards = if guards.is_empty() {
-        "true".into()
-    } else {
-        guards
-    };
-    guards
+        .join("\n")
 }
 
 fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String]) -> String {
-    let guards = relation_guards(dependency_ids);
     let rows = entity
         .golden_values
         .iter()
@@ -678,34 +672,19 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
                 .collect::<Vec<_>>()
                 .join(" ");
             format!(
-                "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name {priority} ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes\nFROM {} n\nWHERE n.field_name = {} AND {guards}",
+                "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name {priority} ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes\nFROM {} n\nLEFT JOIN {} AS evidence_dependency ON false\nWHERE n.field_name = {}",
                 node_ref(&format!("normalized/{}", golden.field)),
+                node_ref(&format!("evidence/{}", entity.name)),
                 sql_text(&golden.field),
-                guards = guards
             )
         })
         .collect::<Vec<_>>();
     if rows.is_empty() {
-        let dependency_joins = dependency_ids
-            .iter()
-            .enumerate()
-            .map(|(index, logical_id)| {
-                format!("CROSS JOIN {} AS dependency_{index}", node_ref(logical_id))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let dependency_predicates = dependency_ids
-            .iter()
-            .enumerate()
-            .map(|(index, _)| format!("dependency_{index} IS NULL"))
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let dependency_joins = relation_joins(dependency_ids);
         format!(
-            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE empty IS NULL AND {dependency_predicates} AND {guards} /* {} */",
+            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE false /* {} */",
             node_ref(&format!("evidence/{}", entity.name)),
             dependency_joins = dependency_joins,
-            dependency_predicates = dependency_predicates,
-            guards = guards
         )
     } else {
         format!(
@@ -849,9 +828,9 @@ pub fn compile(entity: &Entity) -> Value {
         )
         .collect::<Vec<_>>();
     let evidence_sql = format!(
-        "SELECT evidence.left_source_record_id, evidence.right_source_record_id, evidence.left_sort_key, evidence.right_sort_key, evidence.rule, evidence.evidence_group, evidence.class, evidence.score, evidence.comparator, evidence.comparator_version, evidence.left_value_digest, evidence.right_value_digest\nFROM ({}) AS evidence\nWHERE {}",
+        "SELECT evidence.left_source_record_id, evidence.right_source_record_id, evidence.left_sort_key, evidence.right_sort_key, evidence.rule, evidence.evidence_group, evidence.class, evidence.score, evidence.comparator, evidence.comparator_version, evidence.left_value_digest, evidence.right_value_digest\nFROM ({}) AS evidence\n{}",
         pair_evidence_sql_with_relation(&entity.name, &entity.matches, &fallback_relation),
-        relation_guards(&evidence_dependencies)
+        relation_joins(&evidence_dependencies)
     );
     nodes.push(node_with_refresh_mode(
         format!("evidence/{}", entity.name),
@@ -1034,6 +1013,24 @@ mod tests {
                         .is_some_and(|id| !id.starts_with("block-") && !id.starts_with("pair-"))
                 })
         );
+        let evidence_sql = node("evidence/customer")["defining_sql"].as_str().unwrap();
+        assert!(!evidence_sql.contains("count("));
+        for logical_id in [
+            format!("blocks/{channel_id}"),
+            format!("block-stats/{channel_id}"),
+            format!("block-overflow/{channel_id}"),
+            "pairs/customer".to_owned(),
+            "pair-stats/customer".to_owned(),
+            "pair-overflow/customer".to_owned(),
+        ] {
+            assert!(
+                evidence_sql.contains(&node_ref(&logical_id)),
+                "{logical_id}"
+            );
+        }
+        let golden_sql = node("golden/customer")["defining_sql"].as_str().unwrap();
+        assert!(!golden_sql.contains("count("));
+        assert!(golden_sql.contains(&node_ref("evidence/customer")));
 
         let relations = nodes
             .iter()
