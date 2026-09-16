@@ -670,14 +670,13 @@ fn register_delta_consumers(
         }
         client
             .update(
-                "INSERT INTO mdm_internal.graph_delta_consumers (graph_binding_id, logical_id, consumer_id, delta_relation_name, output_contract_digest, row_identity_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6)",
+                "INSERT INTO mdm_internal.graph_delta_consumers (graph_binding_id, logical_id, consumer_id, delta_relation_name, row_identity_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5)",
                 None,
                 &[
                     binding_id.into(),
                     member.logical_id.clone().into(),
                     consumer_id.into(),
                     delta_relation.into(),
-                    digest.into(),
                     row_identity_version.into(),
                 ],
             )

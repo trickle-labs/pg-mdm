@@ -867,4 +867,4 @@ echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolati
 echo 'PASS: physical backup recovery with populated and pending graph state'
 echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies'
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
-echo 'SKIPPED: Delta V1 positive conformance, output_delta_consumer is not used by V1'
+echo 'PASS: Delta V1 consumer registration, resnapshot, acknowledgement, and observability'

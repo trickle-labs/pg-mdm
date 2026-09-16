@@ -99,5 +99,13 @@ fn test_upgrade_scripts_exist() {
     assert!(sql_11_12.contains("v0.12 admits pg_trickle 0.105.2"));
     let sql_12_13 = fs::read_to_string(&upgrade_12_13).expect("read 0.12.0 to 0.13.0");
     assert!(sql_12_13.contains("mdm_internal.graph_delta_consumers"));
+    let delta_table = sql_12_13
+        .split_once("CREATE TABLE mdm_internal.graph_delta_consumers (")
+        .and_then(|(_, tail)| tail.split_once(");"))
+        .map(|(table, _)| table)
+        .expect("delta consumer table definition");
+    assert!(delta_table.contains("row_identity_version smallint"));
+    assert!(!delta_table.contains("output_contract_digest"));
+    assert!(!delta_table.contains("REFERENCES mdm_internal.graph_bindings"));
     assert!(sql_12_13.contains("mdm_admin.recompile"));
 }

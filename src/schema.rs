@@ -189,13 +189,10 @@ CREATE TABLE mdm_internal.graph_members (
 );
 
 CREATE TABLE mdm_internal.graph_delta_consumers (
-    graph_binding_id uuid NOT NULL
-        REFERENCES mdm_internal.graph_bindings(graph_binding_id),
+    graph_binding_id uuid NOT NULL,
     logical_id text NOT NULL,
     consumer_id uuid NOT NULL UNIQUE,
     delta_relation_name text NOT NULL,
-    output_contract_digest bytea NOT NULL
-        CHECK (octet_length(output_contract_digest) = 32),
     row_identity_version smallint NOT NULL CHECK (row_identity_version > 0),
     PRIMARY KEY (graph_binding_id, logical_id),
     FOREIGN KEY (graph_binding_id, logical_id)

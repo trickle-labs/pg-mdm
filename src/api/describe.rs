@@ -259,6 +259,10 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .map(|value| value.0)
         .unwrap_or_else(|| serde_json::json!({}));
+        let refresh = publication_metadata
+            .get("refresh")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
         let selected_cleaners = row.3.get("fields")
             .and_then(Value::as_array)
             .map(|fields| {
@@ -271,7 +275,7 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             })
             .unwrap_or_default();
 
-        Ok(JsonB(serde_json::json!({
+        let mut description = serde_json::json!({
             "entity_name": entity_name,
             "desired_version": row.1,
             "active_version": row.2,
@@ -305,7 +309,22 @@ pub(crate) fn describe_entity(request: Internal) -> JsonB {
             "sources": sources,
             "blocking_errors": graph["blocking_errors"].clone(),
             "definition": row.3
-        })))
+        });
+        for key in [
+            "resolver_strategy",
+            "resolver_fallback_reason",
+            "delta_batch_count",
+            "delta_row_count",
+            "delta_acknowledged_token",
+            "delta_lag",
+            "effective_node_modes",
+            "unexpected_full_fallbacks",
+            "affected_records",
+            "affected_components",
+        ] {
+            description[key] = refresh[key].clone();
+        }
+        Ok(JsonB(description))
     })();
     result.unwrap_or_else(|error| crate::raise(error))
 }

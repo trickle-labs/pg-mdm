@@ -128,7 +128,11 @@ pub(crate) fn require_graph_v1() -> Result<Capability, MdmError> {
 }
 
 pub(crate) fn require_output_delta_v1() -> Result<Option<Capability>, MdmError> {
-    let Some(capability) = integration_capabilities()?.output_delta_consumer else {
+    admit_output_delta_v1(integration_capabilities()?.output_delta_consumer)
+}
+
+fn admit_output_delta_v1(capability: Option<Capability>) -> Result<Option<Capability>, MdmError> {
+    let Some(capability) = capability else {
         return Ok(None);
     };
     if capability.major != 1 {
@@ -300,5 +304,17 @@ mod tests {
             parsed.output_delta_consumer.unwrap().details["status"],
             "stable"
         );
+    }
+
+    #[test]
+    fn enabled_delta_rejects_an_unstable_contract() {
+        let capability = Capability {
+            major: 1,
+            minor: 0,
+            enabled: true,
+            details: serde_json::json!({"status": "experimental"}),
+        };
+        let error = admit_output_delta_v1(Some(capability)).unwrap_err();
+        assert_eq!(error.code(), "MDM_PGT_CAPABILITY_INVALID");
     }
 }

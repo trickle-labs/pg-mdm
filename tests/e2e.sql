@@ -1848,13 +1848,29 @@ DROP TABLE public.e2e_pg_trickle_upgrade_snapshot;
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb;
+        summary jsonb;
         expected_revision bigint;
 BEGIN
     expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint;
     result := mdm.refresh('customer', 'ALLOW');
+    summary := mdm.describe('customer', 'summary');
     IF result->>'changed' <> 'false'
        OR (result->>'publication_revision')::bigint <> expected_revision THEN
         RAISE EXCEPTION 'post-upgrade populated graph refresh is invalid: %', result;
+    END IF;
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
+       OR result->>'delta_batch_count' IS NULL
+       OR result->>'delta_row_count' IS NULL
+       OR result->>'delta_acknowledged_token' IS NULL
+       OR result->>'delta_lag' IS DISTINCT FROM '0'
+       OR jsonb_typeof(result->'effective_node_modes') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(result->'unexpected_full_fallbacks') IS DISTINCT FROM 'array'
+       OR result->>'affected_records' IS NULL
+       OR result->>'affected_components' IS NULL
+       OR summary->>'resolver_strategy' IS DISTINCT FROM result->>'resolver_strategy'
+       OR summary->>'delta_acknowledged_token' IS DISTINCT FROM result->>'delta_acknowledged_token'
+       OR summary->>'delta_lag' IS DISTINCT FROM result->>'delta_lag' THEN
+        RAISE EXCEPTION 'Delta V1 refresh observability is invalid: result %, summary %', result, summary;
     END IF;
 END
 $$;

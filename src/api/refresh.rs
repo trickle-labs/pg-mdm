@@ -92,6 +92,8 @@ struct DeltaConsumer {
     contract_digest: Vec<u8>,
     row_identity_version: i16,
     state: String,
+    acknowledged_token: i64,
+    log_head: i64,
     resnapshot_token: Option<Uuid>,
     through_token: Option<i64>,
     batch_count: usize,
@@ -103,6 +105,122 @@ struct DeltaConsumer {
 #[derive(Default)]
 struct DeltaRefresh {
     consumers: Vec<DeltaConsumer>,
+}
+
+#[derive(Debug, PartialEq)]
+struct DeltaBatch {
+    token: i64,
+    row_count: i64,
+    rows_inserted: i64,
+    rows_deleted: i64,
+    mode: String,
+    contract_digest: Vec<u8>,
+    row_identity_version: i16,
+}
+
+fn validate_delta_batch(
+    batch: &DeltaBatch,
+    expected_token: i64,
+    contract_digest: &[u8],
+    row_identity_version: i16,
+) -> Result<(), MdmError> {
+    let counts_match = batch
+        .rows_inserted
+        .checked_add(batch.rows_deleted)
+        .is_some_and(|count| count == batch.row_count);
+    if batch.token != expected_token
+        || batch.row_count < 0
+        || batch.rows_inserted < 0
+        || batch.rows_deleted < 0
+        || !counts_match
+        || batch.contract_digest != contract_digest
+        || batch.row_identity_version != row_identity_version
+        || !matches!(batch.mode.as_str(), "EXACT" | "FULL_INVALIDATION")
+    {
+        return Err(MdmError::DeltaProtocol(format!(
+            "invalid batch metadata for token {}",
+            batch.token
+        )));
+    }
+    Ok(())
+}
+
+fn validate_delta_payload(
+    payload: &[(String, Vec<u8>)],
+    batch: &DeltaBatch,
+) -> Result<(), MdmError> {
+    if payload.len() as i64 != batch.row_count {
+        return Err(MdmError::DeltaProtocol(format!(
+            "payload row count for batch {} does not match metadata",
+            batch.token
+        )));
+    }
+    let mut inserted = 0_i64;
+    let mut deleted = 0_i64;
+    for (action, identity) in payload {
+        if identity.is_empty() {
+            return Err(MdmError::DeltaProtocol(
+                "payload row identity is empty".into(),
+            ));
+        }
+        match action.as_str() {
+            "INSERT" => inserted += 1,
+            "DELETE" => deleted += 1,
+            _ => return Err(MdmError::DeltaProtocol("payload action is invalid".into())),
+        }
+    }
+    if inserted != batch.rows_inserted || deleted != batch.rows_deleted {
+        return Err(MdmError::DeltaProtocol(format!(
+            "payload action counts for batch {} do not match metadata",
+            batch.token
+        )));
+    }
+    Ok(())
+}
+
+fn node_mode_summary(node_results: &Value) -> (Value, Value) {
+    let mut modes = BTreeMap::<String, usize>::new();
+    let mut fallbacks = Vec::new();
+    for result in node_results
+        .as_object()
+        .into_iter()
+        .flat_map(|nodes| nodes.values())
+    {
+        let effective_mode = result
+            .get("action")
+            .or_else(|| result.get("effective_mode"))
+            .and_then(Value::as_str)
+            .unwrap_or("UNKNOWN");
+        *modes.entry(effective_mode.into()).or_default() += 1;
+        let requested_mode = result.get("requested_mode").and_then(Value::as_str);
+        let fallback_reason = if effective_mode == "FULL" && requested_mode != Some("FULL") {
+            result
+                .get("fallback_reason")
+                .or_else(|| result.get("reason"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    requested_mode
+                        .filter(|requested| *requested != effective_mode)
+                        .and_then(|_| result.get("result_class").and_then(Value::as_str))
+                })
+        } else {
+            None
+        };
+        if let Some(reason) = fallback_reason {
+            fallbacks.push(json!({
+                "logical_id": result.get("identity").cloned().unwrap_or(Value::Null),
+                "reason": reason,
+            }));
+        }
+    }
+    fallbacks.sort_by_key(|fallback| {
+        fallback
+            .get("logical_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    });
+    (json!(modes), Value::Array(fallbacks))
 }
 
 #[derive(Clone, Debug)]
@@ -723,13 +841,73 @@ fn delta_registration(
     Ok((consumer_id, relation, digest, row_identity_version, state))
 }
 
+#[derive(Debug)]
+struct DeltaStatus {
+    delta_relation: String,
+    state: String,
+    acknowledged_token: i64,
+    log_head: i64,
+    lag: i64,
+    contract_digest: Vec<u8>,
+    row_identity_version: i16,
+}
+
+fn read_delta_status(
+    client: &mut SpiClient<'_>,
+    consumer_id: Uuid,
+) -> Result<DeltaStatus, MdmError> {
+    let rows = client
+        .select(
+            "SELECT delta_relation, state, acknowledged_batch_token, log_head, batch_lag, output_contract_digest, row_identity_version FROM pgtrickle.output_delta_consumer_status() WHERE consumer_id = $1::uuid",
+            Some(1),
+            &[consumer_id.into()],
+        )
+        .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+    if rows.is_empty() {
+        return Err(MdmError::DeltaProtocol(format!(
+            "consumer {consumer_id} is missing from pgtrickle status"
+        )));
+    }
+    let row = rows.first();
+    Ok(DeltaStatus {
+        delta_relation: row
+            .get::<String>(1)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("status relation is NULL".into()))?,
+        state: row
+            .get::<String>(2)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("status state is NULL".into()))?,
+        acknowledged_token: row
+            .get::<i64>(3)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("acknowledged token is NULL".into()))?,
+        log_head: row
+            .get::<i64>(4)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("log head is NULL".into()))?,
+        lag: row
+            .get::<i64>(5)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("batch lag is NULL".into()))?,
+        contract_digest: row
+            .get::<Vec<u8>>(6)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("status digest is NULL".into()))?,
+        row_identity_version: row
+            .get::<i16>(7)
+            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+            .ok_or_else(|| MdmError::DeltaProtocol("status row version is NULL".into()))?,
+    })
+}
+
 fn ensure_delta_consumers(
     client: &mut SpiClient<'_>,
     context: &Context,
 ) -> Result<DeltaRefresh, MdmError> {
     let members = client
         .select(
-            "SELECT m.logical_id, m.relation_oid, m.contract_digest, c.consumer_id, c.delta_relation_name, c.output_contract_digest, c.row_identity_version FROM mdm_internal.graph_members m LEFT JOIN mdm_internal.graph_delta_consumers c ON c.graph_binding_id = m.graph_binding_id AND c.logical_id = m.logical_id WHERE m.graph_binding_id = $1::pg_catalog.uuid AND m.logical_id IN ($2, $3) ORDER BY m.logical_id",
+            "SELECT m.logical_id, m.relation_oid, m.contract_digest, c.consumer_id, c.delta_relation_name, c.row_identity_version FROM mdm_internal.graph_members m LEFT JOIN mdm_internal.graph_delta_consumers c ON c.graph_binding_id = m.graph_binding_id AND c.logical_id = m.logical_id WHERE m.graph_binding_id = $1::pg_catalog.uuid AND m.logical_id IN ($2, $3) ORDER BY m.logical_id",
             None,
             &[
                 context.graph_binding_id.clone().into(),
@@ -757,9 +935,7 @@ fn ensure_delta_consumers(
             .get::<Vec<u8>>(3)
             .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
             .ok_or_else(|| MdmError::DeltaProtocol("member contract digest is NULL".into()))?;
-        let (consumer_id, delta_relation, digest, row_identity_version, state) = if let Some(
-            consumer_id,
-        ) = row
+        let (consumer_id, delta_relation, row_identity_version) = if let Some(consumer_id) = row
             .get::<Uuid>(4)
             .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
         {
@@ -767,63 +943,16 @@ fn ensure_delta_consumers(
                 .get::<String>(5)
                 .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
                 .ok_or_else(|| MdmError::DeltaProtocol("delta relation is NULL".into()))?;
-            let digest = row
-                .get::<Vec<u8>>(6)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("delta digest is NULL".into()))?;
             let row_identity_version = row
-                .get::<i16>(7)
+                .get::<i16>(6)
                 .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
                 .ok_or_else(|| MdmError::DeltaProtocol("row identity version is NULL".into()))?;
-            if digest != member_digest || row_identity_version <= 0 {
+            if row_identity_version <= 0 {
                 return Err(MdmError::DeltaProtocol(format!(
-                    "stored consumer contract for {logical_id} does not match the graph member"
+                    "stored consumer row identity version for {logical_id} is invalid"
                 )));
             }
-            let status = client
-                    .select(
-                        "SELECT delta_relation, state, output_contract_digest, row_identity_version FROM pgtrickle.output_delta_consumer_status() WHERE consumer_id = $1::uuid",
-                        Some(1),
-                        &[consumer_id.into()],
-                    )
-                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
-            if status.is_empty() {
-                return Err(MdmError::DeltaProtocol(format!(
-                    "consumer {consumer_id} is missing from pgtrickle status"
-                )));
-            }
-            let status_row = status.first();
-            let status_relation = status_row
-                .get::<String>(1)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("status relation is NULL".into()))?;
-            let state = status_row
-                .get::<String>(2)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("status state is NULL".into()))?;
-            let status_digest = status_row
-                .get::<Vec<u8>>(3)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("status digest is NULL".into()))?;
-            let status_version = status_row
-                .get::<i16>(4)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("status row version is NULL".into()))?;
-            if status_relation != delta_relation
-                || status_digest != member_digest
-                || status_version != row_identity_version
-            {
-                return Err(MdmError::DeltaProtocol(format!(
-                    "status for {logical_id} does not match its catalog binding"
-                )));
-            }
-            (
-                consumer_id,
-                delta_relation,
-                digest,
-                row_identity_version,
-                state,
-            )
+            (consumer_id, delta_relation, row_identity_version)
         } else {
             let registered = delta_registration(
                 client,
@@ -835,32 +964,51 @@ fn ensure_delta_consumers(
             )?;
             client
                     .update(
-                        "INSERT INTO mdm_internal.graph_delta_consumers (graph_binding_id, logical_id, consumer_id, delta_relation_name, output_contract_digest, row_identity_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6)",
+                        "INSERT INTO mdm_internal.graph_delta_consumers (graph_binding_id, logical_id, consumer_id, delta_relation_name, row_identity_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5)",
                         None,
                         &[
                             context.graph_binding_id.clone().into(),
                             logical_id.clone().into(),
                             registered.0.into(),
                             registered.1.clone().into(),
-                            registered.2.clone().into(),
                             registered.3.into(),
                         ],
                     )
                     .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
-            registered
+            (registered.0, registered.1, registered.3)
         };
+        let status = read_delta_status(client, consumer_id)?;
+        if status.delta_relation != delta_relation
+            || status.contract_digest != member_digest
+            || status.row_identity_version != row_identity_version
+        {
+            return Err(MdmError::DeltaProtocol(format!(
+                "status for {logical_id} does not match its catalog binding"
+            )));
+        }
+        if !matches!(
+            status.state.as_str(),
+            "ACTIVE" | "RESNAPSHOT_REQUIRED" | "INVALIDATED"
+        ) {
+            return Err(MdmError::DeltaProtocol(format!(
+                "unsupported state {} for {logical_id}",
+                status.state
+            )));
+        }
         let mut consumer = DeltaConsumer {
             consumer_id,
             delta_relation,
-            contract_digest: digest,
+            contract_digest: member_digest,
             row_identity_version,
-            state,
+            state: status.state,
+            acknowledged_token: status.acknowledged_token,
+            log_head: status.log_head,
             resnapshot_token: None,
             through_token: None,
             batch_count: 0,
             row_count: 0,
             saw_full_invalidation: false,
-            lag: 0,
+            lag: status.lag,
         };
         if matches!(
             consumer.state.as_str(),
@@ -868,7 +1016,7 @@ fn ensure_delta_consumers(
         ) {
             let rows = client
                 .select(
-                    "SELECT log_head, resnapshot_token FROM pgtrickle.begin_output_delta_resnapshot($1::uuid)",
+                    "SELECT log_head, output_contract_digest, row_identity_version, resnapshot_token FROM pgtrickle.begin_output_delta_resnapshot($1::uuid)",
                     Some(1),
                     &[consumer.consumer_id.into()],
                 )
@@ -879,12 +1027,31 @@ fn ensure_delta_consumers(
                 )));
             }
             let row = rows.first();
-            consumer.through_token = row
+            let log_head = row
                 .get::<i64>(1)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                .ok_or_else(|| MdmError::DeltaProtocol("resnapshot log head is NULL".into()))?;
+            let digest = row
+                .get::<Vec<u8>>(2)
+                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                .ok_or_else(|| MdmError::DeltaProtocol("resnapshot digest is NULL".into()))?;
+            let version = row
+                .get::<i16>(3)
+                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                .ok_or_else(|| MdmError::DeltaProtocol("resnapshot row version is NULL".into()))?;
+            if digest != consumer.contract_digest || version != consumer.row_identity_version {
+                return Err(MdmError::DeltaProtocol(format!(
+                    "resnapshot contract for {logical_id} does not match the graph member"
+                )));
+            }
+            consumer.log_head = log_head;
+            consumer.through_token = Some(log_head);
             consumer.resnapshot_token = row
-                .get::<Uuid>(2)
+                .get::<Uuid>(4)
                 .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+            if consumer.resnapshot_token.is_none() {
+                return Err(MdmError::DeltaProtocol("resnapshot token is NULL".into()));
+            }
         }
         consumers.push(consumer);
     }
@@ -907,73 +1074,57 @@ fn read_delta_batches(
             )
             .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
         let relation = delta_relation_sql(&consumer.delta_relation)?;
-        let mut expected = None;
+        let mut expected = consumer
+            .acknowledged_token
+            .checked_add(1)
+            .ok_or_else(|| MdmError::DeltaProtocol("acknowledged token is exhausted".into()))?;
         for row in rows {
-            let token = row
-                .get::<i64>(1)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("batch token is NULL".into()))?;
-            if let Some(previous) = expected
-                && token != previous + 1
-            {
-                return Err(MdmError::DeltaProtocol(
-                    "delta token sequence is not contiguous".into(),
-                ));
-            }
-            expected = Some(token);
-            let row_count = row
-                .get::<i64>(2)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("batch row count is NULL".into()))?;
-            let rows_inserted = row
-                .get::<i64>(3)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("insert count is NULL".into()))?;
-            let rows_deleted = row
-                .get::<i64>(4)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("delete count is NULL".into()))?;
-            let mode = row
-                .get::<String>(5)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("batch mode is NULL".into()))?;
-            let digest = row
-                .get::<Vec<u8>>(6)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("batch digest is NULL".into()))?;
-            let version = row
-                .get::<i16>(7)
-                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-                .ok_or_else(|| MdmError::DeltaProtocol("batch row version is NULL".into()))?;
-            if row_count < 0
-                || rows_inserted < 0
-                || rows_deleted < 0
-                || rows_inserted + rows_deleted != row_count
-                || digest != consumer.contract_digest
-                || version != consumer.row_identity_version
-                || !matches!(mode.as_str(), "EXACT" | "FULL_INVALIDATION")
-            {
-                return Err(MdmError::DeltaProtocol(format!(
-                    "invalid batch metadata for consumer {}",
-                    consumer.consumer_id
-                )));
-            }
+            let batch = DeltaBatch {
+                token: row
+                    .get::<i64>(1)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("batch token is NULL".into()))?,
+                row_count: row
+                    .get::<i64>(2)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("batch row count is NULL".into()))?,
+                rows_inserted: row
+                    .get::<i64>(3)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("insert count is NULL".into()))?,
+                rows_deleted: row
+                    .get::<i64>(4)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("delete count is NULL".into()))?,
+                mode: row
+                    .get::<String>(5)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("batch mode is NULL".into()))?,
+                contract_digest: row
+                    .get::<Vec<u8>>(6)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("batch digest is NULL".into()))?,
+                row_identity_version: row
+                    .get::<i16>(7)
+                    .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                    .ok_or_else(|| MdmError::DeltaProtocol("batch row version is NULL".into()))?,
+            };
+            validate_delta_batch(
+                &batch,
+                expected,
+                &consumer.contract_digest,
+                consumer.row_identity_version,
+            )?;
             let payload = client
                 .select(
                     &format!(
                         "SELECT action, row_identity FROM {relation} WHERE batch_token = $1 ORDER BY ordinal"
                     ),
                     None,
-                    &[token.into()],
+                    &[batch.token.into()],
                 )
                 .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
-            if payload.len() as i64 != row_count {
-                return Err(MdmError::DeltaProtocol(format!(
-                    "payload row count for batch {token} does not match metadata"
-                )));
-            }
-            let mut inserted = 0_i64;
-            let mut deleted = 0_i64;
+            let mut decoded = Vec::with_capacity(payload.len());
             for payload_row in payload {
                 let action = payload_row
                     .get::<String>(1)
@@ -985,26 +1136,19 @@ fn read_delta_batches(
                     .ok_or_else(|| {
                         MdmError::DeltaProtocol("payload row identity is NULL".into())
                     })?;
-                if identity.is_empty() {
-                    return Err(MdmError::DeltaProtocol(
-                        "payload row identity is empty".into(),
-                    ));
-                }
-                match action.as_str() {
-                    "INSERT" => inserted += 1,
-                    "DELETE" => deleted += 1,
-                    _ => return Err(MdmError::DeltaProtocol("payload action is invalid".into())),
-                }
+                decoded.push((action, identity));
             }
-            if inserted != rows_inserted || deleted != rows_deleted {
-                return Err(MdmError::DeltaProtocol(format!(
-                    "payload action counts for batch {token} do not match metadata"
-                )));
-            }
+            validate_delta_payload(&decoded, &batch)?;
             consumer.batch_count += 1;
-            consumer.row_count += row_count as usize;
-            consumer.saw_full_invalidation |= mode == "FULL_INVALIDATION";
-            consumer.through_token = Some(token);
+            consumer.row_count += usize::try_from(batch.row_count)
+                .map_err(|_| MdmError::DeltaProtocol("batch row count is too large".into()))?;
+            consumer.saw_full_invalidation |= batch.mode == "FULL_INVALIDATION";
+            consumer.through_token = Some(batch.token);
+            consumer.lag = consumer.log_head.saturating_sub(batch.token);
+            expected = batch
+                .token
+                .checked_add(1)
+                .ok_or_else(|| MdmError::DeltaProtocol("batch token is exhausted".into()))?;
         }
     }
     Ok(())
@@ -1013,13 +1157,33 @@ fn read_delta_batches(
 fn finish_delta(client: &mut SpiClient<'_>, delta: &mut DeltaRefresh) -> Result<(), MdmError> {
     for consumer in &mut delta.consumers {
         if let Some(token) = consumer.resnapshot_token {
-            client
+            let rows = client
                 .select(
                     "SELECT pgtrickle.ack_output_delta_resnapshot($1::uuid, $2::uuid)",
                     Some(1),
                     &[consumer.consumer_id.into(), token.into()],
                 )
                 .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+            if rows.is_empty() {
+                return Err(MdmError::DeltaProtocol(
+                    "resnapshot acknowledgement returned no row".into(),
+                ));
+            }
+            let disposition = rows
+                .first()
+                .get::<String>(1)
+                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                .ok_or_else(|| {
+                    MdmError::DeltaProtocol("resnapshot acknowledgement is NULL".into())
+                })?;
+            if disposition != "ACTIVE" {
+                return Err(MdmError::DeltaProtocol(format!(
+                    "unexpected resnapshot acknowledgement {disposition}"
+                )));
+            }
+            consumer.acknowledged_token = consumer
+                .through_token
+                .ok_or_else(|| MdmError::DeltaProtocol("resnapshot has no through token".into()))?;
             consumer.state = "ACTIVE".into();
         } else if let Some(through_token) = consumer.through_token {
             let disposition = if consumer.saw_full_invalidation {
@@ -1027,7 +1191,7 @@ fn finish_delta(client: &mut SpiClient<'_>, delta: &mut DeltaRefresh) -> Result<
             } else {
                 "APPLIED"
             };
-            client
+            let rows = client
                 .select(
                     "SELECT pgtrickle.ack_output_delta($1::uuid, $2::bigint, $3::text)",
                     Some(1),
@@ -1038,6 +1202,22 @@ fn finish_delta(client: &mut SpiClient<'_>, delta: &mut DeltaRefresh) -> Result<
                     ],
                 )
                 .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
+            if rows.is_empty() {
+                return Err(MdmError::DeltaProtocol(
+                    "delta acknowledgement returned no row".into(),
+                ));
+            }
+            let returned_disposition = rows
+                .first()
+                .get::<String>(1)
+                .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                .ok_or_else(|| MdmError::DeltaProtocol("delta acknowledgement is NULL".into()))?;
+            if returned_disposition != disposition {
+                return Err(MdmError::DeltaProtocol(format!(
+                    "expected acknowledgement {disposition}, got {returned_disposition}"
+                )));
+            }
+            consumer.acknowledged_token = through_token;
         }
         consumer.lag = 0;
     }
@@ -2064,10 +2244,12 @@ fn persist_refresh_inner(
         let delta_acknowledged_token = delta
             .consumers
             .iter()
-            .filter_map(|consumer| consumer.through_token)
+            .map(|consumer| consumer.acknowledged_token)
             .max()
             .map(|token| token.to_string());
         let delta_lag = delta.consumers.iter().map(|consumer| consumer.lag).max();
+        let (effective_node_modes, unexpected_full_fallbacks) =
+            node_mode_summary(&graph.node_results);
         let result = RefreshResult {
             operation_id: operation_id.clone(),
             entity_name: context.entity.name.clone(),
@@ -2104,8 +2286,8 @@ fn persist_refresh_inner(
             delta_row_count,
             delta_acknowledged_token,
             delta_lag,
-            effective_node_modes: json!({}),
-            unexpected_full_fallbacks: json!([]),
+            effective_node_modes,
+            unexpected_full_fallbacks,
             affected_records: sources.len(),
             affected_components: resolution
                 .memberships
@@ -2917,6 +3099,69 @@ mod tests {
         );
         assert!(delta_relation_sql("pg_catalog.pg_class").is_err());
         assert!(delta_relation_sql(&format!("{schema}.bad.table")).is_err());
+    }
+
+    #[test]
+    fn delta_protocol_validates_metadata_and_typed_payload() {
+        let batch = DeltaBatch {
+            token: 7,
+            row_count: 2,
+            rows_inserted: 1,
+            rows_deleted: 1,
+            mode: "EXACT".into(),
+            contract_digest: vec![1, 2, 3],
+            row_identity_version: 2,
+        };
+        assert_eq!(validate_delta_batch(&batch, 7, &[1, 2, 3], 2), Ok(()));
+        assert_eq!(
+            validate_delta_payload(
+                &[("DELETE".into(), vec![9]), ("INSERT".into(), vec![8])],
+                &batch,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn delta_protocol_rejects_gaps_and_inconsistent_payloads() {
+        let batch = DeltaBatch {
+            token: 7,
+            row_count: 1,
+            rows_inserted: 1,
+            rows_deleted: 0,
+            mode: "EXACT".into(),
+            contract_digest: vec![1],
+            row_identity_version: 2,
+        };
+        assert_eq!(
+            validate_delta_batch(&batch, 6, &[1], 2),
+            Err(MdmError::DeltaProtocol(
+                "invalid batch metadata for token 7".into()
+            ))
+        );
+        assert_eq!(
+            validate_delta_payload(&[("UPDATE".into(), vec![9])], &batch),
+            Err(MdmError::DeltaProtocol("payload action is invalid".into()))
+        );
+    }
+
+    #[test]
+    fn node_mode_summary_counts_modes_and_fallback_reasons() {
+        assert_eq!(
+            node_mode_summary(&json!({
+                "z": {"identity": "z", "action": "FULL"},
+                "a": {"identity": "a", "action": "DIFFERENTIAL"},
+                "b": {
+                    "identity": "b",
+                    "action": "FULL",
+                    "fallback_reason": "unproven boundary"
+                }
+            })),
+            (
+                json!({"DIFFERENTIAL": 1, "FULL": 2}),
+                json!([{"logical_id": "b", "reason": "unproven boundary"}]),
+            )
+        );
     }
 
     #[test]
