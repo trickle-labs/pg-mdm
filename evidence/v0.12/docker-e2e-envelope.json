@@ -7,24 +7,24 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:36c9e10d1605c3a61d21f7e9bdb4317a20d6360376aa260ca7524911b4978083",
+    "docker_image_id": "sha256:cb5db4551677cb212d211352f739054d8337cd7f8f1571f9b864e43852c45e73",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 633065472,
-      "visible_available_bytes": 6884814848,
+      "cgroup_peak_bytes": 601362432,
+      "visible_available_bytes": 6833385472,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 71175938048 856970342400   8% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 71578042368 856568238080   8% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
-    "archived_pg_mdm_0_12_0_sha256": "647699b6974c808bda14d04c3ff4540e153f4708bf85256f3d605485c64aa086",
-    "cargo_lock_sha256": "f96a398612cfe55176933349dbb84d7156691d5e1714d124909ce0b143638a01",
-    "e2e_sql_sha256": "dab2eaff535c70c53ec64c328bec2cb97e4cf7afc875168c760a84826810e8c2",
+    "archived_pg_mdm_0_13_0_sha256": "7feb1d6559927ed02610ca29bb3675d82030165dea2f7212ad2168ea23eb7554",
+    "cargo_lock_sha256": "be6a542cdd760d89e7c7419e63854375afc73d3831e5ff46c73ae188c95595da",
+    "e2e_sql_sha256": "0b9cff6de7c404fd43bf14c0455c98e7f4c4542e15010876a220d99f24771772",
     "operating_envelope_sql_sha256": "dd1abd9dd9e993cbe6851f426969e5dafbe47141ea19e742ebd8c760002edec8",
     "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
-    "pg_mdm_package_manifest_sha256": "becfc7ae8a09524045343cdfe841549ca71ab7a8225718ee5fb4fcb7f4f01ad2",
+    "pg_mdm_package_manifest_sha256": "b31cf810f8cc4364475be55a979fbd8b8051839d0775a0128ed924ee15d95162",
     "pg_trickle_artifact_sha256": "e6976e4e6477b5241008f5ec3b48edb395b600aea4fe78c1944e69e12046d2bf",
     "pg_trickle_version": "0.106.1",
     "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
@@ -42,13 +42,13 @@
     "last_customer_refresh": {
       "active_records": 9,
       "component_checks": 1,
-      "elapsed_ms": 1487,
-      "publication_revision": 12,
+      "elapsed_ms": 1525,
+      "publication_revision": 14,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 306,
-        "graph_refresh": 302,
+        "elapsed_before_operation_completion": 295,
+        "graph_refresh": 287,
         "mdm_resolution": 1,
-        "publication": 0
+        "publication": 2
       }
     },
     "max_block_records": 0,
@@ -60,7 +60,7 @@
       },
       "members": {
         "bytes": 32768,
-        "rows": 10
+        "rows": 11
       },
       "reviews": {
         "bytes": 32768,
@@ -69,16 +69,16 @@
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
     "repeated_pair_discoveries": 0,
-    "retained_history_rows_customer": 47,
-    "retained_history_table_bytes_database_wide": 286720,
+    "retained_history_rows_customer": 52,
+    "retained_history_table_bytes_database_wide": 303104,
     "scope": "customer entity state after Docker E2E; temp_bytes is cumulative for foundation database",
     "source_rows": 9,
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-15T17:30:01.630344+00:00",
+  "recorded_at_utc": "2026-09-16T05:15:28.313051+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
-  "source_commit": "d5fd8ca8a1b183b362b10aa681a30c71e3eef13c"
+  "source_commit": "b2a9b9563c66625e2447cce85414899f0b58c80f"
 }
