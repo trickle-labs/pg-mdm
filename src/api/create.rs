@@ -693,7 +693,7 @@ fn persist(
     comment: Option<String>,
     session_name: String,
     selected: String,
-) -> Result<(String, i64, bool), MdmError> {
+) -> Result<(String, i64, bool, bool), MdmError> {
     let name = entity.name.clone();
     let role = entity
         .execution_role
@@ -713,6 +713,7 @@ fn persist(
     let mut operation_id = String::new();
     let mut version = 1_i64;
     let mut changed = true;
+    let mut graph_changed = true;
     Spi::connect_mut(|client| {
         let existing = client.update(
             "SELECT e.entity_id::text, e.desired_version, e.execution_role_name, b.role_oid FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE e.entity_name = $1::pg_catalog.name FOR UPDATE OF e",
@@ -749,17 +750,23 @@ fn persist(
             let same = client.select(
                 "SELECT definition_digest, (SELECT artifact_digest FROM mdm_internal.definition_artifacts a WHERE a.entity_id = d.entity_id AND a.definition_version = d.definition_version ORDER BY a.artifact_id DESC LIMIT 1) FROM mdm_internal.definitions d WHERE d.entity_id = $1::pg_catalog.uuid AND d.definition_version = $2",
                 Some(1), &[entity_id.clone().into(), current_version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
-            let digest_current = if same.is_empty() {
-                None
+            let (definition_digest_current, artifact_digest_current) = if same.is_empty() {
+                (None, None)
             } else {
-                same.first().get::<Vec<u8>>(1).ok().flatten()
+                let row = same.first();
+                (
+                    row.get::<Vec<u8>>(1).ok().flatten(),
+                    row.get::<Vec<u8>>(2).ok().flatten(),
+                )
             };
-            if digest_current.as_deref() == Some(prepared.definition_digest.as_slice()) {
+            if definition_digest_current.as_deref() == Some(prepared.definition_digest.as_slice()) {
                 changed = false;
                 version = current_version;
             } else {
                 version = current_version + 1;
             }
+            graph_changed =
+                artifact_digest_current.as_deref() != Some(prepared.artifact_digest.as_slice());
         } else {
             if expected_version.is_some() {
                 return Err(MdmError::VersionConflict(
@@ -949,8 +956,10 @@ fn persist(
                 let _ = source_id;
             }
             client.update("INSERT INTO mdm_internal.definitions (entity_id, definition_version, parent_version, user_definition, expanded_definition, logical_candidate_plan, semantic_manifest, definition_digest, comment, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)", None, &[entity_id.clone().into(), version.into(), if version > 1 { Some(version - 1) } else { None }.into(), JsonB(prepared.user_definition.clone()).into(), JsonB(prepared.expanded_definition.clone()).into(), JsonB(prepared.logical_candidate_plan.clone()).into(), JsonB(prepared.semantic_manifest.clone()).into(), prepared.definition_digest.clone().into(), comment.into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
-            client.update("INSERT INTO mdm_internal.definition_artifacts (entity_id, definition_version, compiler_version, artifact_format_version, artifact_bytes, artifact_digest, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7)", None, &[entity_id.clone().into(), version.into(), graph_spec::COMPILER_VERSION.into(), graph_spec::ARTIFACT_FORMAT_VERSION.into(), prepared.artifact_bytes.clone().into(), prepared.artifact_digest.clone().into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             client.update("UPDATE mdm_internal.entities SET desired_version = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[entity_id.clone().into(), version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+        }
+        if graph_changed {
+            client.update("INSERT INTO mdm_internal.definition_artifacts (entity_id, definition_version, compiler_version, artifact_format_version, artifact_bytes, artifact_digest, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7)", None, &[entity_id.clone().into(), version.into(), graph_spec::COMPILER_VERSION.into(), graph_spec::ARTIFACT_FORMAT_VERSION.into(), prepared.artifact_bytes.clone().into(), prepared.artifact_digest.clone().into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
         if graph_enabled {
             install_graph(
@@ -964,7 +973,7 @@ fn persist(
         }
         complete_operation(client, &operation_id)
     })?;
-    Ok((operation_id, version, changed))
+    Ok((operation_id, version, changed, graph_changed))
 }
 
 fn selected_oid() -> pg_sys::Oid {
@@ -1022,7 +1031,7 @@ pub(crate) fn persist_recompile(request: Internal) -> JsonB {
         let prepared = prepare(definition)?;
         let entity = parse_entity(prepared.expanded_definition.clone())
             .map_err(MdmError::DefinitionInvalid)?;
-        let (operation_id, version, changed) = persist(
+        let (operation_id, version, changed, graph_recompiled) = persist(
             prepared.clone(),
             entity.clone(),
             Some(version),
@@ -1035,7 +1044,7 @@ pub(crate) fn persist_recompile(request: Internal) -> JsonB {
             "entity_name": entity.name,
             "desired_version": version,
             "changed": changed,
-            "graph_recompiled": true,
+            "graph_recompiled": graph_recompiled,
             "artifact_digest": digest_hex(&prepared.artifact_digest)
         })))
     })();
@@ -1058,7 +1067,7 @@ pub(crate) fn persist_entity(request: Internal) -> JsonB {
         let prepared = &request.prepared;
         let entity = parse_entity(prepared.expanded_definition.clone())
             .map_err(MdmError::DefinitionInvalid)?;
-        let (operation_id, version, changed) = persist(
+        let (operation_id, version, changed, _) = persist(
             prepared.clone(),
             entity.clone(),
             request.expected_version,

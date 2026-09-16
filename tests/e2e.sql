@@ -430,14 +430,41 @@ DECLARE
     roots regclass[] := ARRAY[
         'public.mdm_candidate_blocks_differential'::regclass,
         'public.mdm_candidate_blocks_full'::regclass,
-        'public.mdm_candidate_pairs_differential'::regclass,
-        'public.mdm_candidate_pairs_full'::regclass];
+    'public.mdm_candidate_pairs_differential'::regclass,
+    'public.mdm_candidate_pairs_full'::regclass];
     refreshed jsonb;
+    qualification jsonb;
     block_rows_equal boolean;
     pair_rows_equal boolean;
     full_rows_valid boolean;
 BEGIN
     refreshed := public.refresh_mdm_graph(roots);
+    qualification := public.mdm_graph_qualification(
+        refreshed->'node_results',
+        ARRAY[
+            'public.mdm_candidate_blocks_differential',
+            'public.mdm_candidate_blocks_full',
+            'public.mdm_candidate_pairs_differential',
+            'public.mdm_candidate_pairs_full']);
+    IF jsonb_array_length(qualification) <> 4
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.jsonb_array_elements(qualification) AS item
+           WHERE item->>'requested_mode' IS DISTINCT FROM CASE
+               WHEN item->>'identity' IN (
+                   'public.mdm_candidate_blocks_differential',
+                   'public.mdm_candidate_pairs_differential')
+               THEN 'DIFFERENTIAL' ELSE 'FULL' END
+             OR item->>'effective_mode' IS DISTINCT FROM CASE
+               WHEN stage = 'bootstrap' THEN 'FULL'
+               WHEN item->>'identity' IN (
+                   'public.mdm_candidate_blocks_differential',
+                   'public.mdm_candidate_pairs_differential')
+               THEN 'DIFFERENTIAL' ELSE 'FULL' END
+             OR NOT (item ? 'fallback_reason'))
+    THEN
+        RAISE EXCEPTION 'graph qualification matrix failed at %: %', stage, qualification;
+    END IF;
     SELECT NOT EXISTS (
                SELECT source_record_id, field_name, channel_id, block_key, source_sort_key
                FROM public.mdm_candidate_blocks_differential
@@ -526,6 +553,7 @@ BEGIN
         public.mdm_graph_action(refreshed->'node_results', 'public.mdm_candidate_pairs_full'),
         pair_rows_equal;
     RETURN refreshed || jsonb_build_object(
+        'qualification', qualification,
         'candidate_probe_rows_equal', jsonb_build_object(
             'blocks', block_rows_equal,
             'pairs', pair_rows_equal),
@@ -541,6 +569,37 @@ AS $$
     SELECT value->>'action'
     FROM pg_catalog.jsonb_each(results)
     WHERE value->>'identity' = node_identity
+$$;
+CREATE FUNCTION public.mdm_graph_qualification(results jsonb, node_identities text[])
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO pg_catalog, public
+AS $$
+    SELECT COALESCE(
+        pg_catalog.jsonb_agg(
+            pg_catalog.jsonb_build_object(
+                'identity', node_identity,
+                'requested_mode', contract.contract->>'refresh_mode',
+                'effective_mode', result.value->>'action',
+                'fallback_reason', CASE
+                    WHEN result.value->>'action' IS DISTINCT FROM contract.contract->>'refresh_mode'
+                    THEN COALESCE(
+                        result.value->>'fallback_reason',
+                        result.value->>'reason',
+                        result.value->>'result_class')
+                END)
+            ORDER BY node_identity),
+        '[]'::jsonb)
+    FROM pg_catalog.unnest(node_identities) AS nodes(node_identity)
+    CROSS JOIN LATERAL pgtrickle.stream_table_contract(node_identity::regclass) AS contract
+    LEFT JOIN LATERAL (
+        SELECT value
+        FROM pg_catalog.jsonb_each(results)
+        WHERE value->>'identity' = node_identity
+        LIMIT 1
+    ) AS result ON true
 $$;
 DO $$
 DECLARE stream_contract record;
@@ -694,6 +753,8 @@ BEGIN
         'public.mdm_graph_diff_probe'::regclass,
         'public.mdm_graph_diff_probe_reference'::regclass]);
     IF refreshed->'source_boundary'->>'completeness' <> 'PROVEN'
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe') IS DISTINCT FROM 'DIFFERENTIAL'
+       OR public.mdm_graph_action(refreshed->'node_results', 'public.mdm_graph_diff_probe_reference') IS DISTINCT FROM 'FULL'
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe EXCEPT SELECT * FROM public.mdm_graph_diff_probe_reference)
        OR EXISTS (SELECT * FROM public.mdm_graph_diff_probe_reference EXCEPT SELECT * FROM public.mdm_graph_diff_probe) THEN
         RAISE EXCEPTION 'DIFFERENTIAL and FULL disagree on no-op refresh: %', refreshed;
@@ -1370,6 +1431,38 @@ END
 $$;
 DROP TABLE public.e2e_artifact_immutability_snapshot;
 
+\connect foundation postgres
+CREATE FUNCTION public.mdm_graph_qualification(results jsonb, node_identities text[])
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO pg_catalog, public
+AS $$
+    SELECT COALESCE(
+        pg_catalog.jsonb_agg(
+            pg_catalog.jsonb_build_object(
+                'identity', node_identity,
+                'requested_mode', contract.contract->>'refresh_mode',
+                'effective_mode', result.value->>'action',
+                'fallback_reason', CASE
+                    WHEN result.value->>'action' IS DISTINCT FROM contract.contract->>'refresh_mode'
+                    THEN COALESCE(
+                        result.value->>'fallback_reason',
+                        result.value->>'reason',
+                        result.value->>'result_class')
+                END)
+            ORDER BY node_identity),
+        '[]'::jsonb)
+    FROM pg_catalog.unnest(node_identities) AS nodes(node_identity)
+    CROSS JOIN LATERAL pgtrickle.stream_table_contract(node_identity::regclass) AS contract
+    LEFT JOIN LATERAL (
+        SELECT value
+        FROM pg_catalog.jsonb_each(results)
+        WHERE value->>'identity' = node_identity
+        LIMIT 1
+    ) AS result ON true
+$$;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$
@@ -1494,6 +1587,7 @@ DO $$
 DECLARE
     first_refresh jsonb;
     second_refresh jsonb;
+    qualification jsonb;
     rebuilt jsonb;
     members_before jsonb;
     members_after jsonb;
@@ -1517,6 +1611,24 @@ BEGIN
        OR (first_refresh->>'component_checks')::bigint < 0 THEN
         RAISE EXCEPTION 'initial v0.9 refresh is invalid: %', first_refresh;
     END IF;
+    qualification := public.mdm_graph_qualification(
+        first_refresh->'node_results',
+        ARRAY(
+            SELECT value->>'identity'
+            FROM pg_catalog.jsonb_each(first_refresh->'node_results') AS nodes(key, value)));
+    IF jsonb_array_length(qualification) = 0
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.jsonb_array_elements(qualification) AS item
+           WHERE item->>'requested_mode' NOT IN ('AUTO', 'DIFFERENTIAL', 'FULL')
+              OR item->>'effective_mode' NOT IN ('DIFFERENTIAL', 'FULL')
+              OR NOT (item ? 'fallback_reason')
+              OR (item->>'requested_mode' = 'FULL' AND item->>'effective_mode' <> 'FULL')
+              OR (item->>'requested_mode' = 'DIFFERENTIAL' AND item->>'effective_mode' <> 'FULL')
+       ) THEN
+        RAISE EXCEPTION 'initial graph qualification failed: %', qualification;
+    END IF;
+    RAISE NOTICE 'initial graph qualification: %', qualification;
     second_refresh := mdm.refresh('customer', 'ALLOW');
     IF second_refresh->>'changed' <> 'false'
        OR (second_refresh->>'publication_revision')::bigint <> 1 THEN
@@ -3249,3 +3361,4 @@ RESET ROLE;
 \connect foundation postgres
 DROP FUNCTION public.e2e_composite_source_records();
 DROP TABLE public.crm_customer_composite;
+DROP FUNCTION public.mdm_graph_qualification(jsonb, text[]);

@@ -244,6 +244,7 @@ fn source_node(entity_name: &str, source: &Source) -> Value {
         Vec::new(),
         sql,
         schema,
+        // encode_row_id_v2 is STABLE, so pg_trickle must choose the safe mode.
         "AUTO",
     )
 }
@@ -331,6 +332,7 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
             "normalized": "text",
             "canonical_bytes": "bytea"
         }),
+        // The normalization function is invoked through unsupported LATERAL SQL.
         "AUTO",
     )
 }
@@ -637,7 +639,7 @@ fn match_node(channel: &CandidateChannel) -> Value {
     )
 }
 
-fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String]) -> String {
+fn relation_guards(dependency_ids: &[String]) -> String {
     let guards = dependency_ids
         .iter()
         .map(|logical_id| {
@@ -653,6 +655,11 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
     } else {
         guards
     };
+    guards
+}
+
+fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String]) -> String {
+    let guards = relation_guards(dependency_ids);
     let rows = entity
         .golden_values
         .iter()
@@ -815,12 +822,24 @@ pub fn compile(entity: &Entity) -> Value {
         .iter()
         .map(|channel| format!("blocks/{}", channel.channel_id))
         .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-stats/{}", channel.channel_id)),
+        )
+        .chain(
+            plan.channels
+                .iter()
+                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
+        )
+        .chain(
             entity
                 .fields
                 .iter()
                 .map(|field| format!("normalized/{}", field.name)),
         )
         .chain(std::iter::once(format!("pairs/{}", entity.name)))
+        .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
+        .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
         .chain(
             entity
                 .matches
@@ -829,10 +848,15 @@ pub fn compile(entity: &Entity) -> Value {
                 .flatten(),
         )
         .collect::<Vec<_>>();
+    let evidence_sql = format!(
+        "SELECT evidence.left_source_record_id, evidence.right_source_record_id, evidence.left_sort_key, evidence.right_sort_key, evidence.rule, evidence.evidence_group, evidence.class, evidence.score, evidence.comparator, evidence.comparator_version, evidence.left_value_digest, evidence.right_value_digest\nFROM ({}) AS evidence\nWHERE {}",
+        pair_evidence_sql_with_relation(&entity.name, &entity.matches, &fallback_relation),
+        relation_guards(&evidence_dependencies)
+    );
     nodes.push(node_with_refresh_mode(
         format!("evidence/{}", entity.name),
         evidence_dependencies,
-        pair_evidence_sql_with_relation(&entity.name, &entity.matches, &fallback_relation),
+        evidence_sql,
         json!({
             "left_source_record_id":"uuid",
             "right_source_record_id":"uuid",
@@ -847,27 +871,15 @@ pub fn compile(entity: &Entity) -> Value {
             "left_value_digest":"bytea",
             "right_value_digest":"bytea"
         }),
+        // Evidence depends on normalization's unsupported LATERAL shape.
         "AUTO",
     ));
-    let mut golden_dependencies = entity
+    let golden_dependencies = entity
         .golden_values
         .iter()
         .map(|golden| format!("normalized/{}", golden.field))
         .chain(std::iter::once(format!("evidence/{}", entity.name)))
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
-        )
-        .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
-        .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
         .collect::<Vec<_>>();
-    for field in &entity.fields {
-        let logical_id = format!("normalized/{}", field.name);
-        if !golden_dependencies.contains(&logical_id) {
-            golden_dependencies.push(logical_id);
-        }
-    }
     nodes.push(node_with_refresh_mode(
         format!("golden/{}", entity.name),
         golden_dependencies.clone(),
@@ -885,7 +897,8 @@ pub fn compile(entity: &Entity) -> Value {
             "normalized":"text",
             "canonical_bytes":"bytea"
         }),
-        "DIFFERENTIAL",
+        // Dependency guards use scalar subqueries, which are not differential-safe.
+        "AUTO",
     ));
     json!({
         "format_version": ARTIFACT_FORMAT_VERSION,
@@ -939,6 +952,126 @@ mod tests {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
         artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
+    }
+
+    #[test]
+    fn phase_two_graph_qualification_has_differential_modes_and_minimal_golden_fan_in() {
+        let entity = parse_entity(json!({
+            "name": "customer",
+            "sources": [{
+                "name": "crm",
+                "relation": "public.crm_customer",
+                "source_id": ["id"],
+                "mode": "tracked",
+                "fields": {"name": "display_name", "email": "email_address"},
+                "row_changed_at": null,
+                "soft_delete_when": null,
+                "authority": {}
+            }],
+            "fields": [
+                {"name": "name", "type": "text", "cleaner": "company_name", "cleaner_options": {}, "display": "masked"},
+                {"name": "email", "type": "text", "cleaner": "email", "cleaner_options": {}, "display": "masked"}
+            ],
+            "matches": [{
+                "name": "same_email",
+                "fields": ["email"],
+                "comparison": "exact",
+                "strength": "identity",
+                "evidence_group": "email",
+                "candidate": {"kind": "exact", "field": "email"}
+            }],
+            "golden_values": [{"field": "name", "policy": "prefer_source", "sources": ["crm"]}],
+            "preset": null,
+            "limits": {},
+            "execution_role": null
+        }))
+        .expect("parses");
+        let graph = compile(&entity);
+        let nodes = graph["nodes"].as_array().expect("nodes are an array");
+        let channel_id = CandidatePlan::from_entity(&entity)
+            .expect("candidate plan compiles")
+            .channels[0]
+            .channel_id
+            .clone();
+        let node = |logical_id: &str| {
+            nodes
+                .iter()
+                .find(|node| node["logical_id"] == logical_id)
+                .unwrap_or_else(|| panic!("missing node {logical_id}"))
+        };
+
+        assert_eq!(node("records/crm")["refresh_mode"], "AUTO");
+        assert_eq!(node("normalized/name")["refresh_mode"], "AUTO");
+        assert_eq!(node("normalized/email")["refresh_mode"], "AUTO");
+        assert_eq!(node("evidence/customer")["refresh_mode"], "AUTO");
+        assert_eq!(node("golden/customer")["refresh_mode"], "AUTO");
+        for logical_id in [
+            format!("blocks/{channel_id}"),
+            format!("block-stats/{channel_id}"),
+            format!("block-overflow/{channel_id}"),
+            "pairs/customer".to_owned(),
+            "pair-stats/customer".to_owned(),
+            "pair-overflow/customer".to_owned(),
+        ] {
+            assert_eq!(
+                node(&logical_id)["refresh_mode"],
+                "DIFFERENTIAL",
+                "{logical_id}"
+            );
+        }
+        assert_eq!(
+            node("golden/customer")["dependencies"],
+            json!(["normalized/name", "evidence/customer"])
+        );
+        assert!(
+            node("golden/customer")["dependencies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|dependency| {
+                    dependency
+                        .as_str()
+                        .is_some_and(|id| !id.starts_with("block-") && !id.starts_with("pair-"))
+                })
+        );
+
+        let relations = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                (
+                    node["logical_id"].as_str().unwrap().to_owned(),
+                    format!("relation_{index}"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for graph_node in nodes {
+            let rendered = render_sql(graph_node["defining_sql"].as_str().unwrap(), &relations)
+                .expect("all logical references render");
+            assert!(!rendered.contains("@{"), "{}", graph_node["logical_id"]);
+        }
+
+        let mut reachable = BTreeSet::from(["golden/customer".to_owned()]);
+        while let Some(dependency) = nodes
+            .iter()
+            .filter(|node| reachable.contains(node["logical_id"].as_str().unwrap()))
+            .flat_map(|node| node["dependencies"].as_array().into_iter().flatten())
+            .filter_map(Value::as_str)
+            .find(|dependency| !reachable.contains(*dependency))
+        {
+            reachable.insert(dependency.to_owned());
+        }
+        assert!(
+            [
+                "records/crm",
+                "normalized/email",
+                "pairs/customer",
+                "evidence/customer"
+            ]
+            .into_iter()
+            .all(|logical_id| reachable.contains(logical_id))
+        );
+        assert!(reachable.contains(&format!("blocks/{channel_id}")));
     }
 
     #[test]
