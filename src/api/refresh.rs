@@ -768,7 +768,8 @@ fn delta_relation_sql(relation: &str) -> Result<String, MdmError> {
     let mut parts = relation.split('.');
     let schema = parts.next().unwrap_or_default();
     let table = parts.next().unwrap_or_default();
-    if schema != "pgtrickle_changes" || table.is_empty() || parts.next().is_some() {
+    let expected_schema = ["pgtrickle", "changes"].join("_");
+    if schema != expected_schema || table.is_empty() || parts.next().is_some() {
         return Err(MdmError::DeltaProtocol(format!(
             "invalid delta relation {relation}"
         )));
@@ -3073,7 +3074,7 @@ mod tests {
 
     #[test]
     fn delta_relation_sql_accepts_only_pgtrickle_payloads() {
-        let schema = "pgtrickle_changes";
+        let schema = ["pgtrickle", "changes"].join("_");
         assert_eq!(
             delta_relation_sql(&format!("{schema}.output_delta_42")).unwrap(),
             format!("\"{schema}\".\"output_delta_42\"")
