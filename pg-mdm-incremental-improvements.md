@@ -251,13 +251,10 @@ Add this table to `src/schema.rs` and the 0.12.0 to 0.13.0 upgrade SQL:
 
 ```sql
 CREATE TABLE mdm_internal.graph_delta_consumers (
-    graph_binding_id uuid NOT NULL
-        REFERENCES mdm_internal.graph_bindings(graph_binding_id),
+    graph_binding_id uuid NOT NULL,
     logical_id text NOT NULL,
     consumer_id uuid NOT NULL UNIQUE,
     delta_relation_name text NOT NULL,
-    output_contract_digest bytea NOT NULL
-        CHECK (octet_length(output_contract_digest) = 32),
     row_identity_version smallint NOT NULL CHECK (row_identity_version > 0),
     PRIMARY KEY (graph_binding_id, logical_id),
     FOREIGN KEY (graph_binding_id, logical_id)
@@ -280,8 +277,8 @@ In `src/api/create.rs::install_graph()`:
    logical ID.
 3. Pass the member's exact output contract digest to
    `pgtrickle.register_output_delta_consumer()`.
-4. Store the returned consumer ID, typed delta relation, contract digest, and
-   row-identity version.
+4. Store the returned consumer ID, typed delta relation, and row-identity
+   version. Read the contract digest from the referenced graph member.
 5. Use `CURRENT` only for a new pristine graph before its first population.
 6. Add `ensure_delta_consumers()` to the refresh path. It lazily registers a
    missing consumer for an upgraded or already populated active binding as
