@@ -687,10 +687,17 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let dependency_predicates = dependency_ids
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("dependency_{index} IS NULL"))
+            .collect::<Vec<_>>()
+            .join(" AND ");
         format!(
-            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE empty IS NULL AND {guards} /* {} */",
+            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE empty IS NULL AND {dependency_predicates} AND {guards} /* {} */",
             node_ref(&format!("evidence/{}", entity.name)),
             dependency_joins = dependency_joins,
+            dependency_predicates = dependency_predicates,
             guards = guards
         )
     } else {
