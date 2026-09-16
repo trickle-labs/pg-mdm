@@ -1867,9 +1867,12 @@ BEGIN
        OR jsonb_typeof(result->'unexpected_full_fallbacks') IS DISTINCT FROM 'array'
        OR result->>'affected_records' IS NULL
        OR result->>'affected_components' IS NULL
-       OR summary->>'resolver_strategy' IS DISTINCT FROM result->>'resolver_strategy'
-       OR summary->>'delta_acknowledged_token' IS DISTINCT FROM result->>'delta_acknowledged_token'
-       OR summary->>'delta_lag' IS DISTINCT FROM result->>'delta_lag' THEN
+       OR summary->'publication'->'refresh'->>'resolver_strategy'
+          IS DISTINCT FROM result->>'resolver_strategy'
+       OR summary->'publication'->'refresh'->>'delta_acknowledged_token'
+          IS DISTINCT FROM result->>'delta_acknowledged_token'
+       OR summary->'publication'->'refresh'->>'delta_lag'
+          IS DISTINCT FROM result->>'delta_lag' THEN
         RAISE EXCEPTION 'Delta V1 refresh observability is invalid: result %, summary %', result, summary;
     END IF;
 END

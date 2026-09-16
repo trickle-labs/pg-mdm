@@ -102,11 +102,6 @@ struct DeltaConsumer {
     lag: i64,
 }
 
-#[derive(Default)]
-struct DeltaRefresh {
-    consumers: Vec<DeltaConsumer>,
-}
-
 #[derive(Debug, PartialEq)]
 struct DeltaBatch {
     token: i64,
@@ -773,8 +768,7 @@ fn delta_relation_sql(relation: &str) -> Result<String, MdmError> {
     let mut parts = relation.split('.');
     let schema = parts.next().unwrap_or_default();
     let table = parts.next().unwrap_or_default();
-    let expected_schema = ["pgtrickle", "changes"].join("_");
-    if schema != expected_schema || table.is_empty() || parts.next().is_some() {
+    if schema != "pgtrickle_changes" || table.is_empty() || parts.next().is_some() {
         return Err(MdmError::DeltaProtocol(format!(
             "invalid delta relation {relation}"
         )));
@@ -793,11 +787,11 @@ fn delta_registration(
     logical_id: &str,
     contract_digest: &[u8],
     start_position: &str,
-) -> Result<(Uuid, String, Vec<u8>, i16, String), MdmError> {
+) -> Result<(Uuid, String, i16), MdmError> {
     let consumer_name = format!("pg_mdm:{binding_id}:{logical_id}");
     let rows = client
         .select(
-            "SELECT consumer_id, delta_relation, output_contract_digest, row_identity_version, state FROM pgtrickle.register_output_delta_consumer($1::pg_catalog.oid, $2::text, $3::bytea, $4::text)",
+            "SELECT consumer_id, delta_relation, output_contract_digest, row_identity_version FROM pgtrickle.register_output_delta_consumer($1::pg_catalog.oid, $2::text, $3::bytea, $4::text)",
             Some(1),
             &[
                 relation_oid.into(),
@@ -829,16 +823,12 @@ fn delta_registration(
         .get::<i16>(4)
         .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
         .ok_or_else(|| MdmError::DeltaProtocol("row identity version is NULL".into()))?;
-    let state = row
-        .get::<String>(5)
-        .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
-        .ok_or_else(|| MdmError::DeltaProtocol("consumer state is NULL".into()))?;
     if digest != contract_digest || row_identity_version <= 0 {
         return Err(MdmError::DeltaProtocol(format!(
             "consumer contract for {logical_id} does not match the graph member"
         )));
     }
-    Ok((consumer_id, relation, digest, row_identity_version, state))
+    Ok((consumer_id, relation, row_identity_version))
 }
 
 #[derive(Debug)]
@@ -904,7 +894,7 @@ fn read_delta_status(
 fn ensure_delta_consumers(
     client: &mut SpiClient<'_>,
     context: &Context,
-) -> Result<DeltaRefresh, MdmError> {
+) -> Result<Vec<DeltaConsumer>, MdmError> {
     let members = client
         .select(
             "SELECT m.logical_id, m.relation_oid, m.contract_digest, c.consumer_id, c.delta_relation_name, c.row_identity_version FROM mdm_internal.graph_members m LEFT JOIN mdm_internal.graph_delta_consumers c ON c.graph_binding_id = m.graph_binding_id AND c.logical_id = m.logical_id WHERE m.graph_binding_id = $1::pg_catalog.uuid AND m.logical_id IN ($2, $3) ORDER BY m.logical_id",
@@ -971,11 +961,11 @@ fn ensure_delta_consumers(
                             logical_id.clone().into(),
                             registered.0.into(),
                             registered.1.clone().into(),
-                            registered.3.into(),
+                            registered.2.into(),
                         ],
                     )
                     .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
-            (registered.0, registered.1, registered.3)
+            (registered.0, registered.1, registered.2)
         };
         let status = read_delta_status(client, consumer_id)?;
         if status.delta_relation != delta_relation
@@ -1055,14 +1045,14 @@ fn ensure_delta_consumers(
         }
         consumers.push(consumer);
     }
-    Ok(DeltaRefresh { consumers })
+    Ok(consumers)
 }
 
 fn read_delta_batches(
     client: &mut SpiClient<'_>,
-    delta: &mut DeltaRefresh,
+    delta: &mut [DeltaConsumer],
 ) -> Result<(), MdmError> {
-    for consumer in &mut delta.consumers {
+    for consumer in delta.iter_mut() {
         if consumer.resnapshot_token.is_some() || consumer.state != "ACTIVE" {
             continue;
         }
@@ -1154,8 +1144,8 @@ fn read_delta_batches(
     Ok(())
 }
 
-fn finish_delta(client: &mut SpiClient<'_>, delta: &mut DeltaRefresh) -> Result<(), MdmError> {
-    for consumer in &mut delta.consumers {
+fn finish_delta(client: &mut SpiClient<'_>, delta: &mut [DeltaConsumer]) -> Result<(), MdmError> {
+    for consumer in delta.iter_mut() {
         if let Some(token) = consumer.resnapshot_token {
             let rows = client
                 .select(
@@ -2102,7 +2092,7 @@ fn persist_refresh_inner(
         let mut delta = if delta_admitted {
             ensure_delta_consumers(client, &context)?
         } else {
-            DeltaRefresh::default()
+            Vec::new()
         };
         sync_source_records(client, &context, &request.source_snapshots)?;
         let graph_refresh_started = Instant::now();
@@ -2231,23 +2221,14 @@ fn persist_refresh_inner(
             finish_delta(client, &mut delta)?;
         }
         let publication_ms = publication_started.elapsed().as_millis() as u64;
-        let delta_batch_count = delta
-            .consumers
-            .iter()
-            .map(|consumer| consumer.batch_count)
-            .sum();
-        let delta_row_count = delta
-            .consumers
-            .iter()
-            .map(|consumer| consumer.row_count)
-            .sum();
+        let delta_batch_count = delta.iter().map(|consumer| consumer.batch_count).sum();
+        let delta_row_count = delta.iter().map(|consumer| consumer.row_count).sum();
         let delta_acknowledged_token = delta
-            .consumers
             .iter()
             .map(|consumer| consumer.acknowledged_token)
             .max()
             .map(|token| token.to_string());
-        let delta_lag = delta.consumers.iter().map(|consumer| consumer.lag).max();
+        let delta_lag = delta.iter().map(|consumer| consumer.lag).max();
         let (effective_node_modes, unexpected_full_fallbacks) =
             node_mode_summary(&graph.node_results);
         let result = RefreshResult {
@@ -3092,7 +3073,7 @@ mod tests {
 
     #[test]
     fn delta_relation_sql_accepts_only_pgtrickle_payloads() {
-        let schema = ["pgtrickle", "changes"].join("_");
+        let schema = "pgtrickle_changes";
         assert_eq!(
             delta_relation_sql(&format!("{schema}.output_delta_42")).unwrap(),
             format!("\"{schema}\".\"output_delta_42\"")
