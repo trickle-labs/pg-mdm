@@ -87,6 +87,7 @@ struct GraphRefresh {
 
 #[derive(Clone, Debug)]
 struct DeltaConsumer {
+    logical_id: String,
     consumer_id: Uuid,
     delta_relation: String,
     contract_digest: Vec<u8>,
@@ -99,6 +100,7 @@ struct DeltaConsumer {
     batch_count: usize,
     row_count: usize,
     saw_full_invalidation: bool,
+    affected_records: BTreeSet<Uuid>,
     lag: i64,
 }
 
@@ -111,6 +113,13 @@ struct DeltaBatch {
     mode: String,
     contract_digest: Vec<u8>,
     row_identity_version: i16,
+}
+
+#[derive(Debug, PartialEq)]
+struct DeltaRow {
+    action: String,
+    row_identity: Vec<u8>,
+    source_record_ids: Vec<Uuid>,
 }
 
 fn validate_delta_batch(
@@ -131,6 +140,8 @@ fn validate_delta_batch(
         || batch.contract_digest != contract_digest
         || batch.row_identity_version != row_identity_version
         || !matches!(batch.mode.as_str(), "EXACT" | "FULL_INVALIDATION")
+        || (batch.mode == "FULL_INVALIDATION"
+            && (batch.row_count != 0 || batch.rows_inserted != 0 || batch.rows_deleted != 0))
     {
         return Err(MdmError::DeltaProtocol(format!(
             "invalid batch metadata for token {}",
@@ -140,10 +151,7 @@ fn validate_delta_batch(
     Ok(())
 }
 
-fn validate_delta_payload(
-    payload: &[(String, Vec<u8>)],
-    batch: &DeltaBatch,
-) -> Result<(), MdmError> {
+fn validate_delta_payload(payload: &[DeltaRow], batch: &DeltaBatch) -> Result<(), MdmError> {
     if payload.len() as i64 != batch.row_count {
         return Err(MdmError::DeltaProtocol(format!(
             "payload row count for batch {} does not match metadata",
@@ -152,13 +160,13 @@ fn validate_delta_payload(
     }
     let mut inserted = 0_i64;
     let mut deleted = 0_i64;
-    for (action, identity) in payload {
-        if identity.is_empty() {
+    for row in payload {
+        if row.row_identity.is_empty() || row.source_record_ids.is_empty() {
             return Err(MdmError::DeltaProtocol(
-                "payload row identity is empty".into(),
+                "payload row identity or source record IDs are empty".into(),
             ));
         }
-        match action.as_str() {
+        match row.action.as_str() {
             "INSERT" => inserted += 1,
             "DELETE" => deleted += 1,
             _ => return Err(MdmError::DeltaProtocol("payload action is invalid".into())),
@@ -252,6 +260,23 @@ struct RefreshResult {
     unexpected_full_fallbacks: Value,
     affected_records: usize,
     affected_components: usize,
+    shadow_comparison: Option<ShadowComparison>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ShadowComparison {
+    affected_records: usize,
+    affected_components: usize,
+    equivalent: bool,
+    shadow_digest: Option<String>,
+    full_digest: Option<String>,
+}
+
+#[derive(Default)]
+struct ControlChanges {
+    seeds: BTreeSet<Uuid>,
+    reconstructable: bool,
+    changed: bool,
 }
 
 fn normalized_state(value: &str) -> Result<NormalizedState, MdmError> {
@@ -987,6 +1012,7 @@ fn ensure_delta_consumers(
             )));
         }
         let mut consumer = DeltaConsumer {
+            logical_id: logical_id.clone(),
             consumer_id,
             delta_relation,
             contract_digest: member_digest,
@@ -999,6 +1025,7 @@ fn ensure_delta_consumers(
             batch_count: 0,
             row_count: 0,
             saw_full_invalidation: false,
+            affected_records: BTreeSet::new(),
             lag: status.lag,
         };
         if matches!(
@@ -1065,6 +1092,17 @@ fn read_delta_batches(
             )
             .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
         let relation = delta_relation_sql(&consumer.delta_relation)?;
+        let payload_columns = match consumer.logical_id.as_str() {
+            logical_id if logical_id.starts_with("evidence/") => {
+                "left_source_record_id, right_source_record_id"
+            }
+            logical_id if logical_id.starts_with("golden/") => "source_record_id",
+            logical_id => {
+                return Err(MdmError::DeltaProtocol(format!(
+                    "unsupported terminal logical ID {logical_id}"
+                )));
+            }
+        };
         let mut expected = consumer
             .acknowledged_token
             .checked_add(1)
@@ -1109,7 +1147,7 @@ fn read_delta_batches(
             let payload = client
                 .select(
                     &format!(
-                        "SELECT action, row_identity FROM {relation} WHERE batch_token = $1 ORDER BY ordinal"
+                        "SELECT action, row_identity, {payload_columns} FROM {relation} WHERE batch_token = $1 ORDER BY ordinal"
                     ),
                     None,
                     &[batch.token.into()],
@@ -1127,9 +1165,47 @@ fn read_delta_batches(
                     .ok_or_else(|| {
                         MdmError::DeltaProtocol("payload row identity is NULL".into())
                     })?;
-                decoded.push((action, identity));
+                let source_record_ids = if payload_columns.contains("left_source_record_id") {
+                    vec![
+                        payload_row
+                            .get::<Uuid>(3)
+                            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                            .ok_or_else(|| {
+                                MdmError::DeltaProtocol(
+                                    "evidence left source record ID is NULL".into(),
+                                )
+                            })?,
+                        payload_row
+                            .get::<Uuid>(4)
+                            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                            .ok_or_else(|| {
+                                MdmError::DeltaProtocol(
+                                    "evidence right source record ID is NULL".into(),
+                                )
+                            })?,
+                    ]
+                } else {
+                    vec![
+                        payload_row
+                            .get::<Uuid>(3)
+                            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                            .ok_or_else(|| {
+                                MdmError::DeltaProtocol("golden source record ID is NULL".into())
+                            })?,
+                    ]
+                };
+                decoded.push(DeltaRow {
+                    action,
+                    row_identity: identity,
+                    source_record_ids,
+                });
             }
             validate_delta_payload(&decoded, &batch)?;
+            for row in &decoded {
+                consumer
+                    .affected_records
+                    .extend(row.source_record_ids.iter().copied());
+            }
             consumer.batch_count += 1;
             consumer.row_count += usize::try_from(batch.row_count)
                 .map_err(|_| MdmError::DeltaProtocol("batch row count is too large".into()))?;
@@ -1651,6 +1727,136 @@ fn load_limits(context: &Context) -> ResolverLimits {
     }
 }
 
+fn load_control_changes(
+    client: &SpiClient<'_>,
+    context: &Context,
+) -> Result<ControlChanges, MdmError> {
+    let publication = client
+        .select(
+            "SELECT decision_epoch FROM mdm_internal.publications WHERE entity_id = $1::pg_catalog.uuid AND publication_revision = $2",
+            Some(1),
+            &[
+                context.entity_id.clone().into(),
+                context.publication_revision.into(),
+            ],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let previous_epoch = if publication.is_empty() {
+        None
+    } else {
+        publication
+            .first()
+            .get::<i64>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+    };
+    let Some(previous_epoch) = previous_epoch else {
+        return Ok(ControlChanges {
+            reconstructable: context.publication_revision == 0 && context.decision_epoch == 0,
+            changed: context.decision_epoch != 0,
+            ..ControlChanges::default()
+        });
+    };
+    if previous_epoch > context.decision_epoch {
+        return Ok(ControlChanges {
+            reconstructable: false,
+            changed: true,
+            ..ControlChanges::default()
+        });
+    }
+
+    let mut changes = ControlChanges {
+        reconstructable: true,
+        changed: previous_epoch != context.decision_epoch,
+        ..ControlChanges::default()
+    };
+    let mut epochs = BTreeSet::new();
+    let decision_rows = client
+        .select(
+            "SELECT decision_epoch, left_source_record_id, right_source_record_id FROM mdm_internal.steward_decisions WHERE entity_id = $1::pg_catalog.uuid AND decision_epoch > $2 AND decision_epoch <= $3 ORDER BY decision_epoch, decision_id",
+            None,
+            &[
+                context.entity_id.clone().into(),
+                previous_epoch.into(),
+                context.decision_epoch.into(),
+            ],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    for row in decision_rows {
+        let epoch = row
+            .get::<i64>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("decision epoch is NULL".into()))?;
+        changes.reconstructable &= epochs.insert(epoch);
+        for index in [2, 3] {
+            changes.seeds.insert(
+                row.get::<Uuid>(index)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("decision endpoint is NULL".into()))?,
+            );
+        }
+    }
+    let override_rows = client
+        .select(
+            "SELECT decision_epoch, anchor_source_record_id FROM mdm_internal.golden_override_directives WHERE entity_id = $1::pg_catalog.uuid AND decision_epoch > $2 AND decision_epoch <= $3 ORDER BY decision_epoch, override_id",
+            None,
+            &[
+                context.entity_id.clone().into(),
+                previous_epoch.into(),
+                context.decision_epoch.into(),
+            ],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    for row in override_rows {
+        let epoch = row
+            .get::<i64>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("override epoch is NULL".into()))?;
+        changes.reconstructable &= epochs.insert(epoch);
+        changes.seeds.insert(
+            row.get::<Uuid>(2)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .ok_or_else(|| MdmError::Spi("override anchor is NULL".into()))?,
+        );
+    }
+    let mut epoch = previous_epoch;
+    while epoch < context.decision_epoch {
+        epoch = epoch
+            .checked_add(1)
+            .ok_or_else(|| MdmError::OperationState("decision epoch exhausted".into()))?;
+        if !epochs.contains(&epoch) {
+            changes.reconstructable = false;
+        }
+    }
+    Ok(changes)
+}
+
+fn graph_generation_transition(
+    client: &SpiClient<'_>,
+    context: &Context,
+) -> Result<bool, MdmError> {
+    if context.publication_revision == 0 {
+        return Ok(false);
+    }
+    let rows = client
+        .select(
+            "SELECT artifact_id::text FROM mdm_internal.publication_observations WHERE entity_id = $1::pg_catalog.uuid ORDER BY observed_at DESC, observation_id DESC",
+            Some(1),
+            &[context.entity_id.clone().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if rows.is_empty() {
+        return Ok(true);
+    }
+    let Some(artifact_id) = rows
+        .first()
+        .get::<String>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+    else {
+        return Ok(true);
+    };
+    Ok(artifact_id != context.artifact_id)
+}
+
 fn allocate_ids(client: &mut SpiClient<'_>, count: usize) -> Result<Vec<Uuid>, MdmError> {
     (0..count)
         .map(|_| {
@@ -2063,6 +2269,148 @@ fn persist_outputs(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn compare_shadow(
+    entity: &Entity,
+    definition_version: i64,
+    publication_revision: i64,
+    records: &[EvaluationRecord],
+    manual_matches: &[DecisionEdge],
+    cannot_links: &[DecisionEdge],
+    pair_decisions: &[crate::pair::PairDecision],
+    limits: ResolverLimits,
+    old_identity: &IdentityState,
+    old_reviews: &[Review],
+    old_golden: &Value,
+    old_resolution_facts: &Value,
+    golden_rows: &[GoldenRow],
+    overrides: &BTreeMap<String, Vec<GoldenOverride>>,
+    seeds: BTreeSet<Uuid>,
+    full: &evaluation::EvaluationResult,
+) -> Result<ShadowComparison, MdmError> {
+    let affected = crate::affected::build(
+        seeds,
+        &old_identity.memberships,
+        manual_matches,
+        pair_decisions,
+    )?;
+    let selected = affected.into_records();
+    if selected.is_empty() {
+        return Err(MdmError::AffectedClosure(
+            "shadow evaluation has no affected records".into(),
+        ));
+    }
+    let selected_mdm_ids = selected_mdm_ids(old_identity, &selected);
+    let scoped_old_identity = scope_identity(old_identity, &selected);
+    let scoped_old_reviews = scope_reviews(old_reviews, &selected, &selected_mdm_ids);
+    let scoped_old_golden = scope_current_golden(old_golden.clone(), &selected_mdm_ids);
+    let scoped_old_resolution_facts = scope_resolution_facts(old_resolution_facts, &selected);
+    let scoped_records = records
+        .iter()
+        .filter(|record| selected.contains(&record.source_record_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let scoped_manual_matches = manual_matches
+        .iter()
+        .filter(|decision| {
+            selected.contains(&decision.left_source_record_id)
+                && selected.contains(&decision.right_source_record_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let scoped_cannot_links = cannot_links
+        .iter()
+        .filter(|decision| {
+            selected.contains(&decision.left_source_record_id)
+                && selected.contains(&decision.right_source_record_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let scoped_pair_decisions = pair_decisions
+        .iter()
+        .filter(|decision| {
+            selected.contains(&decision.pair.left_source_record_id)
+                && selected.contains(&decision.pair.right_source_record_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let scoped_golden_rows = golden_rows
+        .iter()
+        .filter(|row| selected.contains(&row.source_record_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let scoped_overrides = overrides
+        .iter()
+        .map(|(field, values)| {
+            (
+                field.clone(),
+                values
+                    .iter()
+                    .filter(|value| selected.contains(&value.anchor_source_record_id))
+                    .cloned()
+                    .collect(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut shadow_ids = shadow_allocator_ids(
+        &scoped_old_identity,
+        &selected,
+        &full.resolution,
+        &full.identity,
+    )?;
+    let mut allocator = || {
+        shadow_ids
+            .pop()
+            .unwrap_or_else(|| Uuid::from_bytes([0; 16]))
+    };
+    let shadow = evaluation::resolve_and_compare(evaluation::EvaluationInput {
+        entity,
+        definition_version,
+        publication_revision,
+        records: &scoped_records,
+        manual_matches: scoped_manual_matches,
+        cannot_links: scoped_cannot_links,
+        pair_decisions: scoped_pair_decisions,
+        limits,
+        old_identity: &scoped_old_identity,
+        old_reviews: &scoped_old_reviews,
+        old_golden: &scoped_old_golden,
+        old_resolution_facts: &scoped_old_resolution_facts,
+        golden_rows: &scoped_golden_rows,
+        overrides: &scoped_overrides,
+        allocator: &mut allocator,
+    })?;
+    let shadow_identity = splice_identity(old_identity, &selected, &shadow.identity);
+    let shadow_golden = splice_golden(old_golden, &selected_mdm_ids, &shadow.golden);
+    let shadow_reviews = splice_reviews(old_reviews, &selected, &selected_mdm_ids, &shadow.reviews);
+    let shadow_facts = splice_resolution_facts(old_resolution_facts, &selected, &shadow.resolution);
+    let shadow_projection = semantic_projection_with_values(
+        &shadow_identity,
+        shadow_golden,
+        &shadow_reviews,
+        shadow_facts,
+    );
+    let full_projection = evaluation::semantic_projection(
+        &full.identity,
+        &full.golden,
+        &full.reviews,
+        &full.resolution,
+    );
+    Ok(ShadowComparison {
+        affected_records: selected.len(),
+        affected_components: shadow
+            .resolution
+            .memberships
+            .iter()
+            .map(|membership| membership.component_key.clone())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        equivalent: shadow.changed == full.changed && shadow_projection == full_projection,
+        shadow_digest: Some(projection_digest(&shadow_projection)),
+        full_digest: Some(projection_digest(&full_projection)),
+    })
+}
+
 fn persist_refresh_inner(
     request: &RefreshRequest,
     session: &catalog::Role,
@@ -2102,6 +2450,16 @@ fn persist_refresh_inner(
         if delta_admitted {
             read_delta_batches(client, &mut delta)?;
         }
+        let control_changes = if delta_admitted {
+            load_control_changes(client, &context)?
+        } else {
+            ControlChanges {
+                reconstructable: false,
+                changed: false,
+                ..ControlChanges::default()
+            }
+        };
+        let graph_transition = graph_generation_transition(client, &context)?;
         let resolution_started = Instant::now();
         let limits = load_limits(&context);
         limits.validate()?;
@@ -2138,6 +2496,10 @@ fn persist_refresh_inner(
                 .saturating_add(old_reviews.len())
                 .saturating_add(1),
         )?;
+        let shadow_limits = limits.clone();
+        let shadow_manual_matches = manual_matches.clone();
+        let shadow_cannot_links = cannot_links.clone();
+        let shadow_pair_decisions = pair_decisions.clone();
         let mut allocator = || ids.pop().unwrap_or_else(|| Uuid::from_bytes([0; 16]));
         let evaluation = evaluation::resolve_and_compare(evaluation::EvaluationInput {
             entity: &context.entity,
@@ -2156,6 +2518,106 @@ fn persist_refresh_inner(
             overrides: &overrides,
             allocator: &mut allocator,
         })?;
+        let full_component_count = evaluation
+            .resolution
+            .memberships
+            .iter()
+            .map(|membership| membership.component_key.clone())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let delta_seeds = delta
+            .iter()
+            .flat_map(|consumer| consumer.affected_records.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let resnapshot_required = delta
+            .iter()
+            .any(|consumer| consumer.resnapshot_token.is_some() || consumer.state != "ACTIVE");
+        let full_invalidation = delta.iter().any(|consumer| consumer.saw_full_invalidation);
+        let exact_delta_range = delta_admitted
+            && delta.len() == 2
+            && context.publication_revision > 0
+            && !request.rebuild
+            && !graph_transition
+            && !resnapshot_required
+            && !full_invalidation
+            && delta
+                .iter()
+                .all(|consumer| consumer.through_token.is_some());
+        let mut resolver_strategy = "full".to_owned();
+        let mut resolver_fallback_reason = Some(
+            if !delta_admitted {
+                "delta_capability_unavailable"
+            } else if request.rebuild {
+                "rebuild_requested"
+            } else if context.publication_revision == 0 {
+                "initial_population"
+            } else if graph_transition {
+                "graph_generation_transition"
+            } else if resnapshot_required {
+                "delta_resnapshot_required"
+            } else if full_invalidation {
+                "delta_full_invalidation"
+            } else if !exact_delta_range {
+                "delta_range_unavailable"
+            } else if !control_changes.reconstructable {
+                "control_history_unreconstructable"
+            } else if delta_seeds.is_empty() && !control_changes.changed {
+                "no_affected_records"
+            } else {
+                "shadow_comparison_failed"
+            }
+            .to_owned(),
+        );
+        let mut shadow_comparison = None;
+        let mut affected_records = sources.len();
+        let mut affected_components = full_component_count;
+        if exact_delta_range
+            && control_changes.reconstructable
+            && (!delta_seeds.is_empty() || control_changes.changed)
+        {
+            let mut seeds = delta_seeds;
+            seeds.extend(control_changes.seeds.iter().copied());
+            match compare_shadow(
+                &context.entity,
+                context.definition_version,
+                revision,
+                &records,
+                &shadow_manual_matches,
+                &shadow_cannot_links,
+                &shadow_pair_decisions,
+                shadow_limits,
+                &old_identity,
+                &old_reviews,
+                &old_golden,
+                &old_resolution_facts,
+                &golden_rows,
+                &overrides,
+                seeds,
+                &evaluation,
+            ) {
+                Ok(comparison) => {
+                    if comparison.equivalent {
+                        resolver_strategy = "shadow".into();
+                        resolver_fallback_reason = None;
+                        affected_records = comparison.affected_records;
+                        affected_components = comparison.affected_components;
+                    } else {
+                        resolver_fallback_reason = Some("shadow_mismatch".into());
+                    }
+                    shadow_comparison = Some(comparison);
+                }
+                Err(error) => {
+                    resolver_fallback_reason = Some(
+                        if matches!(error, MdmError::AffectedClosure(_)) {
+                            "affected_closure_failed"
+                        } else {
+                            "shadow_evaluation_failed"
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
         let mdm_resolution_ms = resolution_started.elapsed().as_millis() as u64;
         let resolution = &evaluation.resolution;
         let next_identity = &evaluation.identity;
@@ -2258,25 +2720,17 @@ fn persist_refresh_inner(
                 "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
             }),
             component_checks: resolution.accepted.len() + resolution.rejected.len(),
-            resolver_strategy: "full".into(),
-            resolver_fallback_reason: Some(if delta_admitted {
-                "affected_resolution_not_enabled".into()
-            } else {
-                "delta_capability_unavailable".into()
-            }),
+            resolver_strategy,
+            resolver_fallback_reason,
             delta_batch_count,
             delta_row_count,
             delta_acknowledged_token,
             delta_lag,
             effective_node_modes,
             unexpected_full_fallbacks,
-            affected_records: sources.len(),
-            affected_components: resolution
-                .memberships
-                .iter()
-                .map(|membership| membership.component_key.clone())
-                .collect::<BTreeSet<_>>()
-                .len(),
+            affected_records,
+            affected_components,
+            shadow_comparison,
         };
         complete_operation(client, &operation_id, &result)?;
         Ok(result)
@@ -2650,6 +3104,239 @@ fn scope_current_golden(current: Value, mdm_ids: &BTreeSet<Uuid>) -> Value {
             .cloned()
             .collect(),
     )
+}
+
+fn selected_mdm_ids(identity: &IdentityState, selected: &BTreeSet<Uuid>) -> BTreeSet<Uuid> {
+    identity
+        .memberships
+        .iter()
+        .filter(|membership| selected.contains(&membership.source_record_id))
+        .map(|membership| membership.mdm_id)
+        .collect()
+}
+
+fn splice_identity(
+    old: &IdentityState,
+    selected: &BTreeSet<Uuid>,
+    scoped: &IdentityState,
+) -> IdentityState {
+    let selected_mdm_ids = selected_mdm_ids(old, selected);
+    let mut registry = old
+        .registry
+        .iter()
+        .filter(|row| !selected_mdm_ids.contains(&row.mdm_id))
+        .map(|row| (row.mdm_id, row.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for row in &scoped.registry {
+        registry.insert(row.mdm_id, row.clone());
+    }
+    let mut aliases = old.aliases.clone();
+    for row in &scoped.aliases {
+        if !aliases.iter().any(|existing| existing == row) {
+            aliases.push(row.clone());
+        }
+    }
+    let mut splits = old.splits.clone();
+    for row in &scoped.splits {
+        if !splits.iter().any(|existing| existing == row) {
+            splits.push(row.clone());
+        }
+    }
+    IdentityState {
+        registry: registry.into_values().collect(),
+        memberships: old
+            .memberships
+            .iter()
+            .filter(|row| !selected.contains(&row.source_record_id))
+            .cloned()
+            .chain(scoped.memberships.iter().cloned())
+            .collect(),
+        aliases,
+        splits,
+    }
+}
+
+fn splice_golden(
+    old: &Value,
+    selected_mdm_ids: &BTreeSet<Uuid>,
+    scoped: &BTreeMap<(Uuid, String), GoldenSelection>,
+) -> Value {
+    let mut rows = old
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            row.get(0)
+                .and_then(Value::as_str)
+                .and_then(|id| parse_preview_uuid(id).ok())
+                .is_none_or(|id| !selected_mdm_ids.contains(&id))
+        })
+        .cloned()
+        .chain(
+            evaluation::semantic_golden(scoped)
+                .as_array()
+                .into_iter()
+                .flatten()
+                .cloned(),
+        )
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left.get(0)
+            .and_then(Value::as_str)
+            .cmp(&right.get(0).and_then(Value::as_str))
+            .then_with(|| {
+                left.get(1)
+                    .and_then(Value::as_str)
+                    .cmp(&right.get(1).and_then(Value::as_str))
+            })
+    });
+    Value::Array(rows)
+}
+
+fn splice_reviews(
+    old: &[Review],
+    selected: &BTreeSet<Uuid>,
+    selected_mdm_ids: &BTreeSet<Uuid>,
+    scoped: &[Review],
+) -> Vec<Review> {
+    let ids = selected
+        .iter()
+        .chain(selected_mdm_ids)
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    old.iter()
+        .filter(|review| !json_mentions_any(&review.subjects, &ids))
+        .cloned()
+        .chain(scoped.iter().cloned())
+        .collect()
+}
+
+fn fact_is_scoped(row: &Value, selected: &BTreeSet<Uuid>) -> bool {
+    row.get(0)
+        .and_then(Value::as_str)
+        .and_then(|key| key.split_once(':'))
+        .and_then(|(left, right)| {
+            Some((
+                parse_preview_uuid(left).ok()?,
+                parse_preview_uuid(right).ok()?,
+            ))
+        })
+        .is_some_and(|(left, right)| selected.contains(&left) && selected.contains(&right))
+}
+
+fn splice_resolution_facts(
+    old: &Value,
+    selected: &BTreeSet<Uuid>,
+    scoped: &crate::resolver::Resolution,
+) -> Value {
+    let mut rows = old
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| !fact_is_scoped(row, selected))
+        .cloned()
+        .chain(
+            evaluation::semantic_resolution_facts(scoped)
+                .as_array()
+                .into_iter()
+                .flatten()
+                .cloned(),
+        )
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| serde_json::to_string(row).unwrap_or_default());
+    Value::Array(rows)
+}
+
+fn shadow_allocator_ids(
+    old: &IdentityState,
+    selected: &BTreeSet<Uuid>,
+    full_resolution: &crate::resolver::Resolution,
+    full: &IdentityState,
+) -> Result<Vec<Uuid>, MdmError> {
+    let mut by_component = BTreeMap::<Vec<u8>, Vec<Uuid>>::new();
+    for membership in &full_resolution.memberships {
+        by_component
+            .entry(membership.component_key.clone())
+            .or_default()
+            .push(membership.source_record_id);
+    }
+    let resolved_records = full_resolution
+        .memberships
+        .iter()
+        .map(|membership| membership.source_record_id)
+        .collect::<BTreeSet<_>>();
+    let mut anchors = BTreeMap::<Uuid, (i64, Vec<u8>, Uuid)>::new();
+    for membership in old.memberships.iter().filter(|membership| {
+        membership.active && resolved_records.contains(&membership.source_record_id)
+    }) {
+        let candidate = (
+            membership.first_membership_revision,
+            membership.source_sort_key.clone(),
+            membership.source_record_id,
+        );
+        if anchors
+            .get(&membership.mdm_id)
+            .is_none_or(|anchor| candidate < *anchor)
+        {
+            anchors.insert(membership.mdm_id, candidate);
+        }
+    }
+    let anchor_records = anchors
+        .into_values()
+        .map(|(_, _, record)| record)
+        .collect::<BTreeSet<_>>();
+    let mut allocated = Vec::new();
+    for records in by_component.values() {
+        let selected_records = records
+            .iter()
+            .filter(|record| selected.contains(record))
+            .copied()
+            .collect::<Vec<_>>();
+        if selected_records.is_empty() {
+            continue;
+        }
+        if selected_records.len() != records.len() {
+            return Err(MdmError::AffectedClosure(
+                "full component crosses the affected boundary".into(),
+            ));
+        }
+        let anchored = selected_records
+            .iter()
+            .any(|record| anchor_records.contains(record));
+        if anchored {
+            continue;
+        }
+        let id = full
+            .memberships
+            .iter()
+            .find(|membership| selected_records.contains(&membership.source_record_id))
+            .map(|membership| membership.mdm_id)
+            .ok_or_else(|| {
+                MdmError::ResolverInvariant(
+                    "shadow component has no full-resolution identity".into(),
+                )
+            })?;
+        allocated.push(id);
+    }
+    Ok(allocated)
+}
+
+fn semantic_projection_with_values(
+    identity: &IdentityState,
+    golden: Value,
+    reviews: &[Review],
+    resolution_facts: Value,
+) -> Value {
+    json!({
+        "identity": evaluation::semantic_identity(identity),
+        "golden": golden,
+        "reviews": evaluation::semantic_reviews(reviews),
+        "resolution_facts": resolution_facts
+    })
+}
+
+fn projection_digest(projection: &Value) -> String {
+    hex(&digest("pg_mdm/publication/v1", &[&json_bytes(projection)]))
 }
 
 fn validate_scoped_subjects(
@@ -3097,7 +3784,18 @@ mod tests {
         assert_eq!(validate_delta_batch(&batch, 7, &[1, 2, 3], 2), Ok(()));
         assert_eq!(
             validate_delta_payload(
-                &[("DELETE".into(), vec![9]), ("INSERT".into(), vec![8])],
+                &[
+                    DeltaRow {
+                        action: "DELETE".into(),
+                        row_identity: vec![9],
+                        source_record_ids: vec![Uuid::from_bytes([1; 16])],
+                    },
+                    DeltaRow {
+                        action: "INSERT".into(),
+                        row_identity: vec![8],
+                        source_record_ids: vec![Uuid::from_bytes([2; 16])],
+                    },
+                ],
                 &batch,
             ),
             Ok(())
@@ -3122,7 +3820,14 @@ mod tests {
             ))
         );
         assert_eq!(
-            validate_delta_payload(&[("UPDATE".into(), vec![9])], &batch),
+            validate_delta_payload(
+                &[DeltaRow {
+                    action: "UPDATE".into(),
+                    row_identity: vec![9],
+                    source_record_ids: vec![Uuid::from_bytes([1; 16])],
+                }],
+                &batch,
+            ),
             Err(MdmError::DeltaProtocol("payload action is invalid".into()))
         );
     }

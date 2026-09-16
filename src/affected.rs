@@ -149,6 +149,15 @@ mod tests {
         }
     }
 
+    fn decision(left: u8, right: u8, decision: DecisionKind) -> DecisionEdge {
+        DecisionEdge {
+            decision_id: id(9),
+            left_source_record_id: id(left),
+            right_source_record_id: id(right),
+            decision,
+        }
+    }
+
     #[test]
     fn closure_includes_old_component_and_connecting_edges() {
         let manual = DecisionEdge {
@@ -177,11 +186,100 @@ mod tests {
     }
 
     #[test]
+    fn evidence_insert_and_delete_seeds_include_both_endpoints() {
+        assert_eq!(
+            build([id(1), id(2)], &[], &[], &[]).unwrap().into_records(),
+            BTreeSet::from([id(1), id(2)])
+        );
+        assert_eq!(
+            build([id(3), id(4)], &[membership(3, 8)], &[], &[])
+                .unwrap()
+                .into_records(),
+            BTreeSet::from([id(3), id(4)])
+        );
+    }
+
+    #[test]
+    fn rejected_edge_becoming_admissible_connects_both_records() {
+        let prohibited = build([id(1)], &[], &[], &[pair(1, 2, PairResult::Prohibited)])
+            .unwrap()
+            .into_records();
+        let admissible = build(
+            [id(1)],
+            &[],
+            &[],
+            &[pair(1, 2, PairResult::AutomaticStrong)],
+        )
+        .unwrap()
+        .into_records();
+        assert_eq!(prohibited, BTreeSet::from([id(1)]));
+        assert_eq!(admissible, BTreeSet::from([id(1), id(2)]));
+    }
+
+    #[test]
+    fn old_component_split_keeps_historical_memberships_together() {
+        let affected = build(
+            [id(1)],
+            &[membership(1, 8), membership(2, 8), membership(3, 9)],
+            &[],
+            &[],
+        )
+        .unwrap()
+        .into_records();
+        assert_eq!(affected, BTreeSet::from([id(1), id(2)]));
+    }
+
+    #[test]
+    fn merge_cascade_reaches_every_connecting_edge() {
+        let affected = build(
+            [id(1)],
+            &[],
+            &[],
+            &[
+                pair(1, 2, PairResult::AutomaticStrong),
+                pair(2, 3, PairResult::Review),
+                pair(3, 4, PairResult::AutomaticIdentity),
+            ],
+        )
+        .unwrap()
+        .into_records();
+        assert_eq!(affected, BTreeSet::from([id(1), id(2), id(3), id(4)]));
+    }
+
+    #[test]
+    fn isolated_golden_change_does_not_expand() {
+        assert_eq!(
+            build([id(5)], &[], &[], &[]).unwrap().into_records(),
+            BTreeSet::from([id(5)])
+        );
+    }
+
+    #[test]
+    fn not_match_add_replacement_and_removal_seed_both_endpoints_without_connecting() {
+        for seeds in [
+            BTreeSet::from([id(1), id(2)]),
+            BTreeSet::from([id(1), id(2)]),
+            BTreeSet::from([id(1), id(2)]),
+        ] {
+            let affected = build(seeds, &[], &[decision(1, 2, DecisionKind::NotMatch)], &[])
+                .unwrap()
+                .into_records();
+            assert_eq!(affected, BTreeSet::from([id(1), id(2)]));
+        }
+    }
+
+    #[test]
     fn closure_is_order_independent() {
         let memberships = [membership(1, 8), membership(2, 8), membership(3, 9)];
         let pairs = [pair(2, 3, PairResult::AutomaticStrong)];
         let first = build([id(1)], &memberships, &[], &pairs).unwrap();
-        let second = build([id(1)], &memberships, &[], &pairs).unwrap();
+        let second = build(
+            [id(1)],
+            &memberships.into_iter().rev().collect::<Vec<_>>(),
+            &[],
+            &pairs.into_iter().rev().collect::<Vec<_>>(),
+        )
+        .unwrap();
         assert_eq!(first, second);
     }
 }
