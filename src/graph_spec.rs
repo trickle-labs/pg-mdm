@@ -849,7 +849,7 @@ pub fn compile(entity: &Entity) -> Value {
         }),
         "AUTO",
     ));
-    let golden_dependencies = entity
+    let mut golden_dependencies = entity
         .golden_values
         .iter()
         .map(|golden| format!("normalized/{}", golden.field))
@@ -862,6 +862,12 @@ pub fn compile(entity: &Entity) -> Value {
         .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
         .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
         .collect::<Vec<_>>();
+    for field in &entity.fields {
+        let logical_id = format!("normalized/{}", field.name);
+        if !golden_dependencies.contains(&logical_id) {
+            golden_dependencies.push(logical_id);
+        }
+    }
     nodes.push(node_with_refresh_mode(
         format!("golden/{}", entity.name),
         golden_dependencies.clone(),
