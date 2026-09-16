@@ -13,6 +13,14 @@ CREATE TABLE mdm_internal.graph_delta_consumers (
 );
 
 SELECT pg_catalog.pg_extension_config_dump(
+    'mdm_internal.graph_bindings'::pg_catalog.regclass,
+    ''
+);
+SELECT pg_catalog.pg_extension_config_dump(
+    'mdm_internal.graph_members'::pg_catalog.regclass,
+    ''
+);
+SELECT pg_catalog.pg_extension_config_dump(
     'mdm_internal.graph_delta_consumers'::pg_catalog.regclass,
     ''
 );
