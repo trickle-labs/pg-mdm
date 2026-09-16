@@ -42,6 +42,9 @@ fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
+current_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
+    -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
+expected_revision=$((current_revision + 1))
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
 INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
@@ -61,14 +64,14 @@ CREATE TRIGGER delay_release_output
 BEFORE INSERT OR UPDATE ON mdm_out.customer
 FOR EACH ROW EXECUTE FUNCTION public.delay_release_output();
 SQL
-docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb;
 BEGIN
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> 6
+       OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint
        OR result->'source_boundary'->>'completeness' <> 'PROVEN'
        OR length(result->>'source_boundary_digest') <> 64 THEN
         RAISE EXCEPTION 'concurrent refresh returned an invalid boundary: %', result;
@@ -96,6 +99,8 @@ fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "INSERT INTO public.crm_customer VALUES (4, 'After boundary', 'after@example.test', statement_timestamp())" >/dev/null
 if ! wait "$boundary_refresh"; then cat "$work_dir/boundary_refresh.log"; exit 1; fi
+current_revision=$expected_revision
+expected_revision=$((current_revision + 1))
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
 DO $$
 BEGIN
@@ -108,14 +113,14 @@ BEGIN
 END
 $$;
 SQL
-docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation <<'SQL'
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation <<'SQL'
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb;
 BEGIN
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> 7
+       OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint
        OR result->'source_boundary'->>'completeness' <> 'PROVEN' THEN
         RAISE EXCEPTION 'next refresh did not consume the later source write: %', result;
     END IF;
@@ -144,10 +149,12 @@ BEFORE INSERT OR UPDATE ON mdm_out.customer
 FOR EACH ROW WHEN (NEW.name = 'Concurrent refresh')
 EXECUTE FUNCTION public.delay_release_output();
 SQL
+current_revision=$expected_revision
+expected_revision=$((current_revision + 1))
 docker exec -e PGAPPNAME=mdm_refresh_one "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
-    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+    -v expected_revision="$expected_revision" -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 8 THEN
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint THEN
             RAISE EXCEPTION 'first concurrent source refresh failed: %', result;
         END IF;
     END \$\$;" >"$work_dir/refresh_one.log" 2>&1 &
@@ -169,9 +176,9 @@ if [[ $refresh_paused != true ]]; then
     exit 1
 fi
 docker exec -e PGAPPNAME=mdm_refresh_two "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
-    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+    -v expected_revision="$expected_revision" -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'false' OR (result->>'publication_revision')::bigint <> 8 THEN
+        IF result->>'changed' <> 'false' OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint THEN
             RAISE EXCEPTION 'second concurrent source refresh failed: %', result;
         END IF;
     END \$\$;" >"$work_dir/refresh_two.log" 2>&1 &
@@ -191,6 +198,8 @@ if [[ $refreshes_overlapped != true ]]; then
     echo 'FAIL: concurrent source refreshes did not contend on the entity lock' >&2
     exit 1
 fi
+current_revision=$expected_revision
+expected_revision=$((current_revision + 1))
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "DO \$\$
 DECLARE
@@ -269,10 +278,10 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
         BEFORE INSERT OR UPDATE ON mdm_out.customer
         FOR EACH ROW WHEN (NEW.name IN ('Directive race', 'Pair decision race'))
         EXECUTE FUNCTION public.delay_release_output();"
-docker exec -e PGAPPNAME=mdm_directive_race_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+docker exec -e PGAPPNAME=mdm_directive_race_refresh "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 9 THEN
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint THEN
             RAISE EXCEPTION 'directive-race publication failed: %', result;
         END IF;
     END \$\$;" >"$work_dir/directive_race_refresh.log" 2>&1 &
@@ -314,7 +323,7 @@ if [[ $directive_race_blocked != true ]]; then
     echo 'FAIL: golden override did not contend with publication on the entity lock' >&2
     exit 1
 fi
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U postgres -d foundation \
     -c "DO \$\$
 DECLARE state jsonb;
 DECLARE anchor_id uuid;
@@ -352,7 +361,7 @@ BEGIN
             'action', 'SET', 'value', '\"Race override\"'::jsonb, 'value_type_name', 'text',
             'override_version', 1, 'reason', 'publication race',
             'created_by_name', 'mdm_test_login', 'created_as_role_name', 'mdm_administrator',
-            'base_publication_revision', 9, 'decision_epoch', 4, 'supersedes', NULL, 'is_current', true,
+            'base_publication_revision', :'expected_revision'::bigint, 'decision_epoch', 4, 'supersedes', NULL, 'is_current', true,
             'operation_id', (SELECT d.operation_id FROM mdm_internal.golden_override_directives d
                 JOIN mdm_internal.entities e USING (entity_id)
                 WHERE e.entity_name = 'customer' AND d.field_name = 'name'
@@ -360,7 +369,7 @@ BEGIN
         'operations', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
             'operation_kind', 'golden_override', 'status', 'succeeded', 'result_code', 'MDM_OK',
             'outcome', (SELECT pg_catalog.jsonb_build_object(
-                    'field', 'name', 'action', 'SET', 'base_publication_revision', 9,
+                    'field', 'name', 'action', 'SET', 'base_publication_revision', :'expected_revision'::bigint,
                     'override_id', d.override_id, 'decision_epoch', 4)
                 FROM mdm_internal.operations o
                 JOIN mdm_internal.golden_override_directives d USING (operation_id)
@@ -368,15 +377,17 @@ BEGIN
                 WHERE e.entity_name = 'customer' AND d.field_name = 'name'
                   AND d.anchor_source_record_id = anchor_id),
             'actor_name', 'mdm_test_login', 'actor_role_name', 'mdm_administrator')),
-        'publication_revision', 9, 'race_output_count', 1) THEN
+        'publication_revision', :'expected_revision'::bigint, 'race_output_count', 1) THEN
         RAISE EXCEPTION 'golden override/publication race left unexpected durable history or output: %', state;
     END IF;
 END
 \$\$;"
-if ! docker exec -e PGAPPNAME=mdm_directive_race_apply "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+current_revision=$expected_revision
+expected_revision=$((current_revision + 1))
+if ! docker exec -e PGAPPNAME=mdm_directive_race_apply "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 10 THEN
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint THEN
             RAISE EXCEPTION 'golden override was not applied by the next refresh: %', result;
         END IF;
     END \$\$;" >"$work_dir/directive_race_apply.log" 2>&1; then
@@ -394,10 +405,12 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     END \$\$;"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "INSERT INTO public.crm_customer VALUES (7, 'Pair decision race', 'pair-race@example.test', statement_timestamp())" >/dev/null
-docker exec -e PGAPPNAME=mdm_pair_decision_refresh "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+current_revision=$expected_revision
+expected_revision=$((current_revision + 1))
+docker exec -e PGAPPNAME=mdm_pair_decision_refresh "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> 11 THEN
+        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> :'expected_revision'::bigint THEN
             RAISE EXCEPTION 'pair-decision publication failed: %', result;
         END IF;
     END \$\$;" >"$work_dir/pair_decision_refresh.log" 2>&1 &
@@ -469,7 +482,7 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
              WHERE e.entity_name = 'customer' AND d.reason = 'pair decision publication race';
             IF state IS DISTINCT FROM pg_catalog.jsonb_build_object(
                 'row_count', 1, 'decision', 'MATCH', 'decision_version', 1,
-                'decision_epoch', 5, 'base_publication_revision', 11,
+                'decision_epoch', 5, 'base_publication_revision', :'expected_revision'::bigint,
                 'reason', 'pair decision publication race', 'created_by_name', 'mdm_test_login',
                 'created_as_role_name', 'mdm_administrator', 'is_current', true,
                 'operation_kind', 'steward_decide', 'status', 'succeeded', 'result_code', 'MDM_OK',
