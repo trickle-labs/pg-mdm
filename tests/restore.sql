@@ -29,8 +29,8 @@ BEGIN
        OR (SELECT count(*) FROM mdm_internal.output_names) <> 3
        OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 4
        OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 5
-       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 11
-       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 28
+       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 13
+       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 31
        OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 9 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;
@@ -69,7 +69,7 @@ BEGIN
           AND d.action = 'SET'
           AND d.value = '"Race override"'::jsonb
           AND d.override_version = 1
-          AND d.base_publication_revision = 9
+          AND d.base_publication_revision = 11
           AND d.decision_epoch = 4
           AND d.reason = 'publication race'
           AND d.created_by_name = 'mdm_test_login'
@@ -92,7 +92,7 @@ BEGIN
           AND d.decision = 'MATCH'
           AND d.reason = 'pair decision publication race'
           AND d.decision_version = 1
-          AND d.base_publication_revision = 11
+          AND d.base_publication_revision = 13
           AND d.decision_epoch = 5
           AND d.created_by_name = 'mdm_test_login'
           AND d.created_as_role_name = 'mdm_administrator'
