@@ -526,6 +526,8 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_records'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_names'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definition_artifacts'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.graph_bindings'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.graph_members'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.graph_delta_consumers'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.steward_decisions'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.publications'::pg_catalog.regclass, '');
@@ -602,7 +604,7 @@ CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:153
+-- src/integration.rs:157
 -- pg_mdm::integration::capability_report_sql
 CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb) STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'capability_report_sql_wrapper';
 /* </end connected objects> */
@@ -656,7 +658,7 @@ CREATE FUNCTION mdm_admin.drop_entity(entity_name text, confirm text) RETURNS js
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:1037
+-- src/api/create.rs:1053
 -- pg_mdm::api::create::persist_entity
 CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 /* </end connected objects> */
@@ -692,13 +694,13 @@ CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:976
+-- src/api/create.rs:992
 -- pg_mdm::api::create::persist_recompile
 CREATE FUNCTION mdm_internal.persist_recompile(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_recompile_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2154
+-- src/api/refresh.rs:2317
 -- pg_mdm::api::refresh::persist_refresh
 CREATE FUNCTION mdm_internal.persist_refresh(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_refresh_wrapper';
 /* </end connected objects> */
@@ -710,13 +712,13 @@ CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2885
+-- src/api/refresh.rs:3048
 -- pg_mdm::api::refresh::preview_entity
 CREATE FUNCTION mdm_internal.preview_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'preview_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2179
+-- src/api/refresh.rs:2342
 -- pg_mdm::api::refresh::preview
 CREATE FUNCTION mdm.preview(entity_name text, mode text DEFAULT 'validation', options jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'preview_wrapper';
 /* </end connected objects> */
@@ -728,31 +730,31 @@ CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS '
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2138
+-- src/api/refresh.rs:2301
 -- pg_mdm::api::refresh::rebuild
 CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:966
+-- src/api/create.rs:982
 -- pg_mdm::api::create::recompile
 CREATE FUNCTION mdm_admin.recompile(entity_name text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'recompile_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2122
+-- src/api/refresh.rs:2285
 -- pg_mdm::api::refresh::refresh
 CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:449
+-- src/api/refresh.rs:562
 -- pg_mdm::api::refresh::refresh_access
 CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_access_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:192
+-- src/integration.rs:196
 -- pg_mdm::integration::require_graph_v1_sql
 CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'require_graph_v1_sql_wrapper';
 /* </end connected objects> */
@@ -770,7 +772,7 @@ CREATE FUNCTION mdm_admin.verify_installation() RETURNS text STRICT SECURITY DEF
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/schema.rs:581
+-- src/schema.rs:580
 -- requires:
 --   verify_installation
 --   normalize_text
@@ -803,3 +805,4 @@ REVOKE ALL ON FUNCTION mdm_internal.refresh_access(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.recompile(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_steward.decide(text, uuid, uuid, text, bigint, text) FROM PUBLIC;
 /* </end connected objects> */
+
