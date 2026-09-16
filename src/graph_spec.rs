@@ -684,7 +684,7 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
             .enumerate()
             .map(|(index, logical_id)| {
                 format!(
-                    "CROSS JOIN (SELECT 1 FROM {} LIMIT 1) AS dependency_{index}",
+                    "CROSS JOIN (SELECT 1 FROM {}) AS dependency_{index}",
                     node_ref(logical_id)
                 )
             })
