@@ -548,6 +548,8 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_records'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_names'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definition_artifacts'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.graph_bindings'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.graph_members'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.graph_delta_consumers'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.steward_decisions'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.publications'::pg_catalog.regclass, '');
