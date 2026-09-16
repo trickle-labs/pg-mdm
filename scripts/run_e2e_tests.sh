@@ -69,9 +69,8 @@ SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb; expected_revision bigint;
 BEGIN
-    SELECT publication_revision + 1 INTO expected_revision
-    FROM mdm_internal.entities
-    WHERE entity_name = 'customer';
+    SELECT (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1
+    INTO expected_revision;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
        OR (result->>'publication_revision')::bigint <> expected_revision
@@ -121,9 +120,8 @@ SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb; expected_revision bigint;
 BEGIN
-    SELECT publication_revision + 1 INTO expected_revision
-    FROM mdm_internal.entities
-    WHERE entity_name = 'customer';
+    SELECT (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1
+    INTO expected_revision;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
        OR (result->>'publication_revision')::bigint <> expected_revision
