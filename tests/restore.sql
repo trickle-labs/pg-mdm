@@ -21,7 +21,7 @@ BEGIN
         'succeeded_operations', (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login'),
         'active_source_records', (SELECT count(*) FROM mdm_internal.source_records WHERE active)
     );
-    -- The directive and pair-decision races add two active records and five successful operations.
+    -- The directive and pair-decision races add two active records and six successful operations.
     IF (SELECT count(*) FROM mdm_internal.entities WHERE entity_name = 'customer' AND desired_version = 4) <> 1
        OR (SELECT count(*) FROM mdm_internal.definitions) <> 4
        OR (SELECT count(*) FROM mdm_internal.definition_artifacts) <> 4
@@ -29,8 +29,8 @@ BEGIN
        OR (SELECT count(*) FROM mdm_internal.output_names) <> 3
        OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 4
        OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 5
-       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 13
-       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 31
+       OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 14
+       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 32
        OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 9 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;

@@ -3,17 +3,17 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> v0.12 admits `pg_trickle` 0.105.2 and closes scoped and sampled preview behavior against the production resolver.
+> v0.13 requires `pg_trickle` 0.106.1. It consumes Delta V1 terminal changes and uses affected resolution when the exact scope is provable.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
 The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
 
-## Install v0.12
+## Install v0.13
 
-v0.12 supports PostgreSQL 18 and requires the pinned `pg_trickle` 0.105.2 package. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum.
+v0.13 supports PostgreSQL 18 and requires the pinned `pg_trickle` 0.106.1 package. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum.
 
-The extension stores definitions, installs private Graph V1 members transactionally, refreshes complete evidence, and publishes ordinary PostgreSQL output tables in the same transaction. The v0.12 CI suite compares AUTO and FULL graph results, tests rollback and retry, and exercises sampled and scoped preview on PostgreSQL 18.
+The extension stores definitions, installs private Graph V1 members, consumes Delta V1 changes, and publishes PostgreSQL output tables in one transaction. The v0.13 CI suite compares differential and full results, tests affected resolution, and covers rollback, retry, upgrade, and restore on PostgreSQL 18.
 
 Build and copy the package:
 
@@ -119,7 +119,20 @@ RESET ROLE;
 
 Grant consumers access to the three output tables after the first refresh creates them: `mdm_out.customer`, `mdm_out.customer_members`, and `mdm_out.customer_review`. Use `mdm.describe('customer', 'summary')` to inspect the definition and graph state. Use `mdm.preview()` to validate a proposed change before activating it.
 
-`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. The resolver still reads the full terminal evidence relations on every refresh. `mdm_admin.rebuild()` repeats the resolution from current graph evidence without replacing the identity ledger.
+`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. Exact Delta V1 ranges use affected resolution. Gaps, invalidations, contract changes, graph transitions, and uncertain limits use the full resolver. `mdm_admin.rebuild()` always uses the full resolver without replacing the identity ledger.
+
+## Roll out compiler v9
+
+Keep `full_policy = 'ALLOW'` during the rollout. Use `ERROR` only in qualification tests.
+
+1. Upgrade `pg_trickle` to 0.106.1, then upgrade `pg_mdm` to 0.13.0.
+2. Pick one entity as the canary. Capture its public output rows and `mdm.describe('<entity>', 'summary')` result.
+3. Grant the entity administrator access to `mdm_admin.recompile(text)` and run `mdm_admin.recompile('<entity>')`.
+4. Run `mdm.refresh('<entity>', 'ALLOW')`. The first refresh after the graph transition uses the full resolver. Confirm that the public rows are unchanged and `delta_lag` is zero.
+5. Apply one representative source change. Confirm that `resolver_strategy` is `affected` and `unexpected_full_fallbacks` is empty.
+6. Repeat steps 2 through 5 for the remaining entities.
+
+Alert when a steady-state refresh reports a full resolver fallback or an unexpected FULL graph node. Recovery refreshes, rebuilds, graph transitions, invalidations, and resnapshots are expected full cases.
 
 ## Rebind restored entities
 
@@ -175,7 +188,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The v0.12 release admits the checksummed `pg_trickle` 0.105.2 artifact, qualifies preview modes through the production resolver, and extends the cumulative release and V1 acceptance evidence. Earlier releases supply the resolver, stewardship, publication, resource-limit, upgrade, backup, restore, and clone behavior exercised by CI.
+The v0.13 release admits the checksummed `pg_trickle` 0.106.1 artifact. It adds differential graph refresh, Delta V1 consumers, affected resolution, scoped publication, and compiler v9 recompilation. The CI suite checks full-result equivalence and the documented recovery paths.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

@@ -42,6 +42,106 @@ fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "CREATE TABLE public.recompile_canary_source (
+            id bigint PRIMARY KEY,
+            display_name text NOT NULL,
+            email_address text,
+            updated_at timestamptz NOT NULL
+        );
+        INSERT INTO public.recompile_canary_source
+        VALUES (1, 'Compiler canary', 'compiler-canary@example.test', statement_timestamp());
+        GRANT SELECT, MAINTAIN ON public.recompile_canary_source TO mdm_administrator;
+        GRANT EXECUTE ON FUNCTION mdm_admin.recompile(text) TO mdm_administrator;"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$
+        DECLARE created record; refreshed jsonb;
+        BEGIN
+            SELECT * INTO STRICT created FROM mdm.create(
+                pg_catalog.jsonb_set(
+                    pg_catalog.jsonb_set(
+                        mdm.describe('customer', 'definition'),
+                        '{name}', pg_catalog.to_jsonb('recompile_canary'::text)),
+                    '{sources,0,relation}', pg_catalog.to_jsonb('public.recompile_canary_source'::text)));
+            refreshed := mdm.refresh('recompile_canary', 'ALLOW');
+            IF NOT created.changed OR created.desired_version <> 1
+               OR refreshed->>'changed' <> 'true'
+               OR refreshed->>'publication_revision' <> '1' THEN
+                RAISE EXCEPTION 'compiler canary bootstrap failed: create %, refresh %', created, refreshed;
+            END IF;
+        END \$\$;"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "CREATE TABLE public.recompile_canary_snapshot AS
+        SELECT e.publication_revision,
+               max(b.graph_generation) AS graph_generation,
+               (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(o) ORDER BY o.mdm_id)
+                  FROM mdm_out.recompile_canary o) AS output
+          FROM mdm_internal.entities e
+          JOIN mdm_internal.graph_bindings b USING (entity_id)
+         WHERE e.entity_name = 'recompile_canary'
+         GROUP BY e.entity_id, e.publication_revision;
+        UPDATE mdm_internal.definition_artifacts a
+           SET compiler_version = 8,
+               artifact_digest = pg_catalog.decode(pg_catalog.repeat('00', 32), 'hex')
+          FROM mdm_internal.entities e
+         WHERE e.entity_id = a.entity_id
+           AND e.entity_name = 'recompile_canary'
+           AND a.definition_version = e.desired_version;"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$
+        DECLARE recompiled jsonb; refreshed jsonb;
+        BEGIN
+            recompiled := mdm_admin.recompile('recompile_canary');
+            refreshed := mdm.refresh('recompile_canary', 'ALLOW');
+            IF recompiled->>'changed' <> 'false'
+               OR recompiled->>'graph_recompiled' <> 'true'
+               OR recompiled->>'desired_version' <> '1'
+               OR refreshed->>'changed' <> 'false'
+               OR refreshed->>'publication_revision' <> '1'
+               OR refreshed->>'resolver_strategy' <> 'full'
+               OR refreshed->>'resolver_fallback_reason' <> 'graph_generation_transition' THEN
+                RAISE EXCEPTION 'compiler canary adoption failed: recompile %, refresh %', recompiled, refreshed;
+            END IF;
+        END \$\$;"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DO \$\$
+        DECLARE state jsonb;
+        BEGIN
+            SELECT pg_catalog.jsonb_build_object(
+                'definition_version', e.desired_version,
+                'publication_revision', e.publication_revision,
+                'previous_publication_revision', s.publication_revision,
+                'graph_generation', max(b.graph_generation),
+                'previous_graph_generation', s.graph_generation,
+                'compiler_versions', (SELECT pg_catalog.jsonb_agg(a.compiler_version ORDER BY a.compiler_version)
+                    FROM mdm_internal.definition_artifacts a WHERE a.entity_id = e.entity_id),
+                'terminal_consumers', (SELECT count(*) FROM mdm_internal.graph_delta_consumers c
+                    WHERE c.graph_binding_id = (SELECT graph_binding_id FROM mdm_internal.graph_bindings
+                        WHERE entity_id = e.entity_id ORDER BY graph_generation DESC LIMIT 1)),
+                'output_equal', s.output IS NOT DISTINCT FROM (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(o) ORDER BY o.mdm_id)
+                    FROM mdm_out.recompile_canary o))
+              INTO state
+              FROM mdm_internal.entities e
+              JOIN mdm_internal.graph_bindings b USING (entity_id)
+              CROSS JOIN public.recompile_canary_snapshot s
+             WHERE e.entity_name = 'recompile_canary'
+             GROUP BY e.entity_id, e.desired_version, e.publication_revision,
+                      s.publication_revision, s.graph_generation, s.output;
+            IF state IS DISTINCT FROM pg_catalog.jsonb_build_object(
+                'definition_version', 1, 'publication_revision', 1,
+                'previous_publication_revision', 1,
+                'graph_generation', (state->>'previous_graph_generation')::bigint + 1,
+                'previous_graph_generation', (state->>'previous_graph_generation')::bigint,
+                'compiler_versions', '[8, 9]'::jsonb,
+                'terminal_consumers', 2, 'output_equal', true) THEN
+                RAISE EXCEPTION 'compiler v8 to v9 canary state is invalid: %', state;
+            END IF;
+        END \$\$;"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; SELECT mdm_admin.drop_entity('recompile_canary', 'recompile_canary');"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "DROP TABLE public.recompile_canary_snapshot;
+        DROP TABLE public.recompile_canary_source;"
 current_revision=$(docker exec "$container" psql -X -At -U postgres -d foundation \
     -c "SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer'")
 expected_revision=$((current_revision + 1))
@@ -391,7 +491,12 @@ expected_revision=$((current_revision + 1))
 if ! docker exec -e PGAPPNAME=mdm_directive_race_apply "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation \
     -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
         result := mdm.refresh('customer', 'ALLOW');
-        IF result->>'changed' <> 'true' OR (result->>'publication_revision')::bigint <> $expected_revision THEN
+        IF result->>'changed' <> 'true'
+           OR NOT (
+               (result->>'resolver_strategy' = 'affected' AND result->'resolver_fallback_reason' = 'null'::jsonb)
+               OR (result->>'resolver_strategy' = 'full'
+                   AND result->>'resolver_fallback_reason' = 'delta_full_invalidation'))
+           OR (result->>'publication_revision')::bigint <> $expected_revision THEN
             RAISE EXCEPTION 'golden override was not applied by the next refresh: %', result;
         END IF;
     END \$\$;" >"$work_dir/directive_race_apply.log" 2>&1; then
@@ -463,6 +568,23 @@ if [[ $pair_decision_blocked != true ]]; then
     echo 'FAIL: pair decision did not contend with publication on the entity lock' >&2
     exit 1
 fi
+current_revision=$expected_revision
+expected_revision=$((current_revision + 1))
+if ! docker exec -e PGAPPNAME=mdm_pair_decision_apply "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation \
+    -c "SET ROLE mdm_administrator; DO \$\$ DECLARE result jsonb; BEGIN
+        result := mdm.refresh('customer', 'ALLOW');
+        IF result->>'changed' <> 'true'
+           OR NOT (
+               (result->>'resolver_strategy' = 'affected' AND result->'resolver_fallback_reason' = 'null'::jsonb)
+               OR (result->>'resolver_strategy' = 'full'
+                   AND result->>'resolver_fallback_reason' = 'delta_full_invalidation'))
+           OR (result->>'publication_revision')::bigint <> $expected_revision THEN
+            RAISE EXCEPTION 'pair decision was not applied by affected resolution: %', result;
+        END IF;
+    END \$\$;" >"$work_dir/pair_decision_apply.log" 2>&1; then
+    cat "$work_dir/pair_decision_apply.log"
+    exit 1
+fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "DO \$\$
         DECLARE state jsonb;
@@ -478,7 +600,11 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
                 'operation_kind', o.operation_kind, 'status', o.status, 'result_code', o.result_code,
                 'actor_name', o.actor_name, 'actor_role_name', o.actor_role_name,
                 'decision_id_matches', o.outcome->>'decision_id' = d.decision_id::text,
-                'outcome_epoch', (o.outcome->>'decision_epoch')::bigint)
+                'outcome_epoch', (o.outcome->>'decision_epoch')::bigint,
+                'merged_output', (SELECT count(DISTINCT m.mdm_id) = 1
+                    FROM mdm_out.customer_members m
+                    JOIN public.e2e_source_records(ARRAY[4, 6]::bigint[]) r USING (source_record_id)
+                    WHERE m.active))
               INTO state
               FROM mdm_internal.steward_decisions d
               JOIN mdm_internal.entities e USING (entity_id)
@@ -486,12 +612,12 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
              WHERE e.entity_name = 'customer' AND d.reason = 'pair decision publication race';
             IF state IS DISTINCT FROM pg_catalog.jsonb_build_object(
                 'row_count', 1, 'decision', 'MATCH', 'decision_version', 1,
-                'decision_epoch', 5, 'base_publication_revision', $expected_revision,
+                'decision_epoch', 5, 'base_publication_revision', $current_revision,
                 'reason', 'pair decision publication race', 'created_by_name', 'mdm_test_login',
                 'created_as_role_name', 'mdm_administrator', 'is_current', true,
                 'operation_kind', 'steward_decide', 'status', 'succeeded', 'result_code', 'MDM_OK',
                 'actor_name', 'mdm_test_login', 'actor_role_name', 'mdm_administrator',
-                'decision_id_matches', true, 'outcome_epoch', 5) THEN
+                'decision_id_matches', true, 'outcome_epoch', 5, 'merged_output', true) THEN
                 RAISE EXCEPTION 'pair-decision publication race left unexpected durable audit: %', state;
             END IF;
         END \$\$;"
@@ -868,3 +994,5 @@ echo 'PASS: physical backup recovery with populated and pending graph state'
 echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies'
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'PASS: Delta V1 consumer registration, resnapshot, acknowledgement, and observability'
+echo 'PASS: compiler v8 to v9 canary adoption preserves the complete publication'
+echo 'PASS: decision and golden-override intervals use affected resolution or the invalidation fallback'

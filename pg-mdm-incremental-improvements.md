@@ -1,6 +1,6 @@
 # pg-mdm incremental improvements
 
-**Status:** Proposed  
+**Status:** Implemented  
 **Date:** 2026-09-15  
 **Target:** pg-mdm 0.13.0, based on pg-trickle 0.106.1  
 **Owners:** pg-mdm maintainers

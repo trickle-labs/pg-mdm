@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0
+
+- Stop unchanged refreshes from rewriting helper rows.
+- Qualify compiler v9 graph nodes for differential refresh and add explicit recompilation.
+- Consume the public Delta V1 contract with transactional acknowledgement and recovery.
+- Resolve and publish only a proved affected scope, with full resolution as the fallback.
+- Add generated full-result equivalence, compiler canary, control-interval, rollback, upgrade, and restore coverage.
+
 ## 0.12.0
 
 - Admit the checksummed `pg_trickle` 0.105.2 PostgreSQL 18 package.

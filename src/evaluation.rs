@@ -14,14 +14,14 @@ use crate::resolver::{self, Resolution, ResolverInput, ResolverLimits, ResolverR
 use crate::review::{Review, ReviewCandidate, ReviewStatus, Subject};
 
 #[derive(Clone, Debug)]
-pub(crate) struct EvaluationRecord {
+pub struct EvaluationRecord {
     pub source_record_id: Uuid,
     pub source_name: String,
     pub source_sort_key: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct GoldenRow {
+pub struct GoldenRow {
     pub source_record_id: Uuid,
     pub source_name: String,
     pub field: String,
@@ -32,7 +32,7 @@ pub(crate) struct GoldenRow {
     pub canonical_bytes: Option<Vec<u8>>,
 }
 
-pub(crate) struct EvaluationResult {
+pub struct EvaluationResult {
     pub resolution: Resolution,
     pub identity: IdentityState,
     pub golden: BTreeMap<(Uuid, String), GoldenSelection>,
@@ -40,7 +40,7 @@ pub(crate) struct EvaluationResult {
     pub changed: bool,
 }
 
-pub(crate) struct EvaluationInput<'a> {
+pub struct EvaluationInput<'a> {
     pub entity: &'a Entity,
     pub definition_version: i64,
     pub publication_revision: i64,
@@ -196,7 +196,7 @@ fn issue_candidates(
     result
 }
 
-pub(crate) fn semantic_identity(state: &IdentityState) -> Value {
+pub fn semantic_identity(state: &IdentityState) -> Value {
     let mut registry = state.registry.iter().collect::<Vec<_>>();
     registry.sort_by_key(|row| row.mdm_id);
     let mut memberships = state.memberships.iter().collect::<Vec<_>>();
@@ -229,7 +229,7 @@ pub(crate) fn semantic_identity(state: &IdentityState) -> Value {
     })
 }
 
-pub(crate) fn semantic_reviews(reviews: &[Review]) -> Value {
+pub fn semantic_reviews(reviews: &[Review]) -> Value {
     let mut ordered = reviews.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|row| (row.issue_key, row.occurrence));
     json!(
@@ -251,7 +251,7 @@ pub(crate) fn semantic_reviews(reviews: &[Review]) -> Value {
     )
 }
 
-pub(crate) fn semantic_golden(golden: &BTreeMap<(Uuid, String), GoldenSelection>) -> Value {
+pub fn semantic_golden(golden: &BTreeMap<(Uuid, String), GoldenSelection>) -> Value {
     json!(
         golden
             .iter()
@@ -274,7 +274,7 @@ pub(crate) fn semantic_golden(golden: &BTreeMap<(Uuid, String), GoldenSelection>
     )
 }
 
-pub(crate) fn semantic_resolution_facts(resolution: &Resolution) -> Value {
+pub fn semantic_resolution_facts(resolution: &Resolution) -> Value {
     let mut facts = resolution
         .accepted
         .iter()
@@ -296,8 +296,7 @@ pub(crate) fn semantic_resolution_facts(resolution: &Resolution) -> Value {
     json!(facts)
 }
 
-#[cfg(test)]
-pub(crate) fn semantic_projection(
+pub fn semantic_projection(
     identity: &IdentityState,
     golden: &BTreeMap<(Uuid, String), GoldenSelection>,
     reviews: &[Review],
@@ -311,9 +310,7 @@ pub(crate) fn semantic_projection(
     })
 }
 
-pub(crate) fn resolve_and_compare(
-    input: EvaluationInput<'_>,
-) -> Result<EvaluationResult, MdmError> {
+pub fn resolve_and_compare(input: EvaluationInput<'_>) -> Result<EvaluationResult, MdmError> {
     let EvaluationInput {
         entity,
         definition_version,

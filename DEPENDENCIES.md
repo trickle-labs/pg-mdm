@@ -26,7 +26,7 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Pair-precedence fixture SHA-256 | `ed2324ebcb1744ed5cf945189b7a5b30bb1838a38cd1c6f537a206f79986bd33` |
 | Organization-quality fixture SHA-256 | `f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb` |
 
-The baseline capability response contains `external_graph_refresh 1.1 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. V1 uses Graph V1 and deliberately leaves Delta V1 unused.
+The baseline capability response contains `external_graph_refresh 1.1 enabled=true` and `output_delta_consumer 1.0 enabled=true`, both with stable status. v0.13 uses Graph V1 and Delta V1.
 
 The pg-trickle 0.106.1 release includes package/runtime qualification and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
 
