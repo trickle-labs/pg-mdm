@@ -296,6 +296,7 @@ pub(crate) fn semantic_resolution_facts(resolution: &Resolution) -> Value {
     json!(facts)
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_projection(
     identity: &IdentityState,
     golden: &BTreeMap<(Uuid, String), GoldenSelection>,

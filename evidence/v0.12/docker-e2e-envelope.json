@@ -7,24 +7,24 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:134af84bb947eb321002b9517887aac74fa90d844c070f2cc6ba81526f3d5042",
+    "docker_image_id": "sha256:fd0d1f1cc012f23da7380858a1321c8907f11057018b7e1c256037a3507f4b00",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 481341440,
-      "visible_available_bytes": 3495956480,
+      "cgroup_peak_bytes": 646344704,
+      "visible_available_bytes": 6604140544,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 74627182592 853519097856   9% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 74535038976 853611241472   9% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "inputs": {
-    "archived_pg_mdm_0_13_0_sha256": "1d3a78902e5e94bdd8839319246bc3939b0e2fdced9d51d415a02e7c38ccbb7b",
+    "archived_pg_mdm_0_13_0_sha256": "a69736661a3622ef42caaaa16a8f80bf386380b674145046a0b412384d314083",
     "cargo_lock_sha256": "be6a542cdd760d89e7c7419e63854375afc73d3831e5ff46c73ae188c95595da",
-    "e2e_sql_sha256": "badc96e0c1c365d907960e6c03507b790772f6a541fa6c966477252a9571c386",
+    "e2e_sql_sha256": "9e651c90e7c521b7764b2b8405adc82049f7ccbb5a7012ccf11def1bcc797459",
     "operating_envelope_sql_sha256": "dd1abd9dd9e993cbe6851f426969e5dafbe47141ea19e742ebd8c760002edec8",
     "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
-    "pg_mdm_package_manifest_sha256": "c977e2a627ca6672aed1d62c82d576495e9d0db6ca0efe44237b78dcbeee84f9",
+    "pg_mdm_package_manifest_sha256": "6ac91e5d8a1e5b2c9658775e17a9261082d3c8d7e40f0806018344f352e10c9c",
     "pg_trickle_artifact_sha256": "e6976e4e6477b5241008f5ec3b48edb395b600aea4fe78c1944e69e12046d2bf",
     "pg_trickle_version": "0.106.1",
     "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
@@ -37,18 +37,18 @@
   ],
   "metrics": {
     "block_memberships": 0,
-    "component_checks": 1,
+    "component_checks": 0,
     "evidence_comparisons": 0,
     "last_customer_refresh": {
       "active_records": 9,
-      "component_checks": 1,
-      "elapsed_ms": 3599,
+      "component_checks": 0,
+      "elapsed_ms": 2053,
       "publication_revision": 14,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 705,
-        "graph_refresh": 690,
-        "mdm_resolution": 2,
-        "publication": 3
+        "elapsed_before_operation_completion": 362,
+        "graph_refresh": 352,
+        "mdm_resolution": 0,
+        "publication": 4
       }
     },
     "max_block_records": 0,
@@ -70,15 +70,15 @@
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
     "repeated_pair_discoveries": 0,
     "retained_history_rows_customer": 52,
-    "retained_history_table_bytes_database_wide": 303104,
+    "retained_history_table_bytes_database_wide": 294912,
     "scope": "customer entity state after Docker E2E; temp_bytes is cumulative for foundation database",
     "source_rows": 9,
     "temporary_bytes": 0,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-16T19:39:06.325415+00:00",
+  "recorded_at_utc": "2026-09-17T05:55:57.658978+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
-  "source_commit": "2466dfba2702c145fb897cf20c59bf76d2a6ad92"
+  "source_commit": "1def217294d3e4c1dccb437facb568823bc2f026"
 }

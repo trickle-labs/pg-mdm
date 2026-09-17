@@ -1719,7 +1719,9 @@ DECLARE result jsonb;
 BEGIN
     PERFORM public.e2e_clear_helper_audit();
     result := mdm.refresh('customer', 'ALLOW');
-    IF (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'INSERT') <> 1
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
+       OR (result->>'affected_records')::bigint <> 1
+       OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'INSERT') <> 1
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
         RAISE EXCEPTION 'insert refresh changed unrelated helpers: %', result;
     END IF;
@@ -1737,7 +1739,9 @@ DECLARE result jsonb;
 BEGIN
     PERFORM public.e2e_clear_helper_audit();
     result := mdm.refresh('customer', 'ALLOW');
-    IF (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'UPDATE' AND old_active AND NOT new_active) <> 1
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
+       OR (result->>'affected_records')::bigint <> 1
+       OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'UPDATE' AND old_active AND NOT new_active) <> 1
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
         RAISE EXCEPTION 'delete refresh changed unrelated helpers: %', result;
     END IF;
@@ -1858,7 +1862,7 @@ BEGIN
        OR (result->>'publication_revision')::bigint <> expected_revision THEN
         RAISE EXCEPTION 'post-upgrade populated graph refresh is invalid: %', result;
     END IF;
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'skipped'
        OR result->>'delta_batch_count' IS NULL
        OR result->>'delta_row_count' IS NULL
        OR result->>'delta_acknowledged_token' IS NULL
