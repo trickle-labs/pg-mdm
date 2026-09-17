@@ -1,12 +1,18 @@
 # pg-mdm incremental improvements
 
-**Status:** Implemented  
+**Status:** pg-mdm implementation complete; upstream pg-trickle qualification and production rollout pending  
 **Date:** 2026-09-15  
 **Target:** pg-mdm 0.13.0, based on pg-trickle 0.106.1  
 **Owners:** pg-mdm maintainers
 
 All source, SQL, and test paths in this document are relative to the pg-mdm
 repository root.
+
+The remaining external work is specified in
+[`PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md`](PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md).
+pg-trickle 0.106.1 cannot admit every compiler-version-9 graph node under
+`full_policy = 'ERROR'`, and this repository cannot prove a production soak or
+rollout without the target environment. Those gates are not marked complete.
 
 ## Goal
 

@@ -74,6 +74,7 @@ COPY --from=builder /package/usr/share/postgresql/18/extension/ /usr/share/postg
 COPY --from=builder /tmp/pg_mdm-package-manifest.sha256 /evidence/pg_mdm-package-manifest.sha256
 COPY sql/archive/pg_mdm--0.1.0.sql sql/archive/pg_mdm--0.2.0.sql /usr/share/postgresql/18/extension/
 COPY tests/e2e.sql /tests/e2e.sql
+COPY tests/incremental_qualification.sql /tests/incremental_qualification.sql
 COPY tests/operating_envelope.sql /tests/operating_envelope.sql
 COPY tests/restore.sql /tests/restore.sql
 COPY sql/configure_helper.sql /sql/configure_helper.sql

@@ -134,6 +134,18 @@ Keep `full_policy = 'ALLOW'` during the rollout. Use `ERROR` only in qualificati
 
 Alert when a steady-state refresh reports a full resolver fallback or an unexpected FULL graph node. Recovery refreshes, rebuilds, graph transitions, invalidations, and resnapshots are expected full cases.
 
+The Docker E2E run also executes `tests/incremental_qualification.sql`. It
+measures 30 affected-refresh samples after five warmups at 128 and 2,048
+records, and compares the complete public publication with an administrative
+full rebuild after every sample. The retained report is observational; it has
+no machine-dependent timing threshold.
+
+Strict graph-wide `full_policy = 'ERROR'` qualification still depends on the
+pg-trickle changes in
+[`PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md`](PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md).
+Do not treat the affected-resolver qualification as proof that every graph
+node is differential.
+
 ## Rebind restored entities
 
 Logical dumps preserve entity definitions, source identities, and graph artifacts. Database-local role and relation OIDs are derived bindings and are excluded from dumps.

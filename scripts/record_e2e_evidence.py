@@ -10,10 +10,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if len(sys.argv) != 6:
-    raise SystemExit("usage: record_e2e_evidence.py CONTAINER IMAGE SOURCE_REVISION DB_JSON LOG")
+if len(sys.argv) != 7:
+    raise SystemExit(
+        "usage: record_e2e_evidence.py CONTAINER IMAGE SOURCE_REVISION "
+        "DB_JSON QUALIFICATION_JSON LOG"
+    )
 
-container, image, source_revision, database_json, log_path = sys.argv[1:]
+container, image, source_revision, database_json, qualification_json, log_path = sys.argv[1:]
 
 
 def run(args):
@@ -35,6 +38,7 @@ if run(["git", "status", "--porcelain"]):
     raise SystemExit("commit all source changes before retaining Docker E2E evidence")
 
 metrics = json.loads(Path(database_json).read_text(encoding="utf-8").strip())
+qualification = json.loads(Path(qualification_json).read_text(encoding="utf-8").strip())
 required_metrics = {
     "source_rows", "block_memberships", "max_block_records",
     "repeated_pair_discoveries", "unique_candidate_pairs",
@@ -45,6 +49,27 @@ required_metrics = {
 missing = sorted(required_metrics - metrics.keys())
 if missing or not metrics["last_customer_refresh"].get("stage_timings_ms"):
     raise SystemExit(f"E2E metrics are incomplete: {missing or 'stage timings'}")
+
+if set(qualification) != {
+    "schema_version", "pg_trickle_version", "equivalence_checks", "populations", "scope"
+}:
+    raise SystemExit("incremental qualification fields are incomplete")
+if qualification["schema_version"] != 1 or qualification["pg_trickle_version"] != "0.106.1":
+    raise SystemExit("incremental qualification dependency contract changed")
+if qualification["equivalence_checks"] != 70:
+    raise SystemExit("incremental qualification did not complete all rebuild comparisons")
+if [item.get("population") for item in qualification["populations"]] != [128, 2048]:
+    raise SystemExit("incremental qualification populations changed")
+for item in qualification["populations"]:
+    if set(item) != {
+        "population", "measured_samples", "warmup_samples", "elapsed_ms",
+        "graph_refresh_ms", "mdm_resolution_ms", "publication_ms", "delta_rows",
+    }:
+        raise SystemExit("incremental qualification population fields are incomplete")
+    if item["measured_samples"] != 30 or item["warmup_samples"] != 5:
+        raise SystemExit("incremental qualification sample coverage changed")
+    if any(value < 0 for value in item["elapsed_ms"].values()):
+        raise SystemExit("incremental qualification elapsed timing is invalid")
 
 container_info = json.loads(run(["docker", "inspect", container]))[0]
 image_info = json.loads(run(["docker", "image", "inspect", image]))[0]
@@ -87,10 +112,14 @@ report = {
     "retained_log": str(retained_log.relative_to(ROOT)),
     "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
     "metrics": metrics,
+    "incremental_qualification": qualification,
     "inputs": {
         "organization_fixture_sha256": sha256_file(ROOT / "tests/fixtures/organization_domain_v1.json"),
         "e2e_sql_sha256": sha256_file(ROOT / "tests/e2e.sql"),
         "operating_envelope_sql_sha256": sha256_file(ROOT / "tests/operating_envelope.sql"),
+        "incremental_qualification_sql_sha256": sha256_file(
+            ROOT / "tests/incremental_qualification.sql"
+        ),
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
         "archived_pg_mdm_0_13_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.13.0.sql"),
         "pg_mdm_package_manifest_sha256": sha256_bytes(package_manifest.encode()),
@@ -110,6 +139,7 @@ report = {
     },
     "limitations": [
         "This report measures the small synthetic customer workload in the E2E suite, not a production-scale capacity envelope.",
+        "Incremental p95 values are observational measurements from this Docker host, not timing gates or production SLO evidence.",
         "temporary_bytes is cumulative for the foundation database over the complete E2E run.",
         "retained_history_table_bytes_database_wide includes whole-table sizes for MDM history relations; row counts are scoped to customer.",
     ],

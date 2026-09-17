@@ -10,6 +10,7 @@ physical_data="$work_dir/physical-data"
 missing_graph_data="$work_dir/missing-graph-data"
 missing_log="$work_dir/missing.log"
 e2e_log="$work_dir/e2e-postgres.log"
+qualification_json="$work_dir/incremental-qualification.json"
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 source_revision=$(git -C "$repo_root" rev-parse HEAD)
 
@@ -42,6 +43,8 @@ fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
+docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -f /tests/incremental_qualification.sql > "$qualification_json"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "CREATE TABLE public.recompile_canary_source (
             id bigint PRIMARY KEY,
@@ -986,7 +989,7 @@ docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d found
     -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
 python3 "$repo_root/scripts/record_e2e_evidence.py" \
     "$container" "$image" "$source_revision" \
-    "$work_dir/database-envelope.json" "$e2e_log"
+    "$work_dir/database-envelope.json" "$qualification_json" "$e2e_log"
 
 echo 'PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind'
 echo 'PASS: resolver-limit rollback and retry, backup/restore, and clone isolation'
@@ -995,4 +998,5 @@ echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and r
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'PASS: Delta V1 consumer registration, resnapshot, acknowledgement, and observability'
 echo 'PASS: compiler v8 to v9 canary adoption preserves the complete publication'
+echo 'PASS: affected-resolution qualification matches full rebuilds at 128 and 2,048 records'
 echo 'PASS: decision and golden-override intervals use affected resolution or the invalidation fallback'

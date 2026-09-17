@@ -4152,7 +4152,7 @@ mod tests {
 
     #[test]
     fn delta_protocol_rejects_gaps_and_inconsistent_payloads() {
-        let batch = DeltaBatch {
+        let mut batch = DeltaBatch {
             token: 7,
             row_count: 1,
             rows_inserted: 1,
@@ -4177,6 +4177,36 @@ mod tests {
                 &batch,
             ),
             Err(MdmError::DeltaProtocol("payload action is invalid".into()))
+        );
+
+        batch.mode = "FULL_INVALIDATION".into();
+        batch.row_count = 0;
+        batch.rows_inserted = 0;
+        assert_eq!(validate_delta_batch(&batch, 7, &[1], 2), Ok(()));
+        assert_eq!(validate_delta_payload(&[], &batch), Ok(()));
+
+        batch.rows_inserted = 1;
+        assert_eq!(
+            validate_delta_batch(&batch, 7, &[1], 2),
+            Err(MdmError::DeltaProtocol(
+                "invalid batch metadata for token 7".into()
+            ))
+        );
+        batch.rows_inserted = 0;
+        batch.contract_digest = vec![2];
+        assert_eq!(
+            validate_delta_batch(&batch, 7, &[1], 2),
+            Err(MdmError::DeltaProtocol(
+                "invalid batch metadata for token 7".into()
+            ))
+        );
+        batch.contract_digest = vec![1];
+        batch.row_identity_version = 3;
+        assert_eq!(
+            validate_delta_batch(&batch, 7, &[1], 2),
+            Err(MdmError::DeltaProtocol(
+                "invalid batch metadata for token 7".into()
+            ))
         );
     }
 
