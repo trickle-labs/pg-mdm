@@ -139,7 +139,7 @@ BEGIN
            updated_at = pg_catalog.clock_timestamp()
      WHERE id = 1;
     started := pg_catalog.clock_timestamp();
-    result := mdm.refresh('incremental_qualification', 'ALLOW');
+    result := mdm.refresh('incremental_qualification', 'ERROR');
     elapsed := extract(epoch FROM pg_catalog.clock_timestamp() - started) * 1000;
     actual := pg_catalog.jsonb_build_object(
         'affected_components', result->'affected_components',
@@ -209,7 +209,7 @@ FROM pg_catalog.generate_series(129, 2048) AS id;
 DO $block$
 DECLARE result jsonb;
 BEGIN
-    result := mdm.refresh('incremental_qualification', 'ALLOW');
+    result := mdm.refresh('incremental_qualification', 'ERROR');
     IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
        OR (result->>'affected_records')::integer <> 1920
        OR (result->>'affected_components')::integer <> 1920

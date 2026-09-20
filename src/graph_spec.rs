@@ -9,7 +9,7 @@ use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 9;
+pub const COMPILER_VERSION: i32 = 10;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node_with_refresh_mode(
@@ -244,8 +244,7 @@ fn source_node(entity_name: &str, source: &Source) -> Value {
         Vec::new(),
         sql,
         schema,
-        // encode_row_id_v2 is STABLE, so pg_trickle must choose the safe mode.
-        "AUTO",
+        "DIFFERENTIAL",
     )
 }
 
@@ -332,8 +331,7 @@ fn normalized_node(field: &Field, sources: &[Source]) -> Value {
             "normalized": "text",
             "canonical_bytes": "bytea"
         }),
-        // The normalization function is invoked through unsupported LATERAL SQL.
-        "AUTO",
+        "DIFFERENTIAL",
     )
 }
 
@@ -351,6 +349,25 @@ fn normalized_relation(field: &str) -> String {
 
 fn sql_text(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn immutable_text_join(values: &[String]) -> String {
+    let Some(first) = values.first() else {
+        return "''::text".into();
+    };
+    let mut parts = vec![format!("COALESCE({first}, ''::text)")];
+    for (index, value) in values.iter().enumerate().skip(1) {
+        let prior_non_null = values[..index]
+            .iter()
+            .map(|prior| format!("{prior} IS NOT NULL"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        parts.push(format!(
+            "CASE WHEN {value} IS NULL OR NOT ({prior_non_null}) THEN ''::text ELSE pg_catalog.chr(31) END"
+        ));
+        parts.push(format!("COALESCE({value}, ''::text)"));
+    }
+    parts.join(" || ")
 }
 
 fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
@@ -376,14 +393,8 @@ fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
     }
     let usable = usable.join(" AND ");
     let exact_equal = exact_equal.join(" AND ");
-    let left_text = format!(
-        "pg_catalog.concat_ws(pg_catalog.chr(31), {})",
-        left_values.join(", ")
-    );
-    let right_text = format!(
-        "pg_catalog.concat_ws(pg_catalog.chr(31), {})",
-        right_values.join(", ")
-    );
+    let left_text = immutable_text_join(&left_values);
+    let right_text = immutable_text_join(&right_values);
     let score = if rule.comparison == "exact" {
         "NULL::smallint".into()
     } else {
@@ -850,8 +861,7 @@ pub fn compile(entity: &Entity) -> Value {
             "left_value_digest":"bytea",
             "right_value_digest":"bytea"
         }),
-        // Evidence depends on normalization's unsupported LATERAL shape.
-        "AUTO",
+        "DIFFERENTIAL",
     ));
     let golden_dependencies = entity
         .golden_values
@@ -876,8 +886,7 @@ pub fn compile(entity: &Entity) -> Value {
             "normalized":"text",
             "canonical_bytes":"bytea"
         }),
-        // Dependency guards use scalar subqueries, which are not differential-safe.
-        "AUTO",
+        "DIFFERENTIAL",
     ));
     json!({
         "format_version": ARTIFACT_FORMAT_VERSION,
@@ -926,7 +935,7 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], true);
-        assert_eq!(graph["compiler_version"], 9);
+        assert_eq!(graph["compiler_version"], 10);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
@@ -979,11 +988,15 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing node {logical_id}"))
         };
 
-        assert_eq!(node("records/crm")["refresh_mode"], "AUTO");
-        assert_eq!(node("normalized/name")["refresh_mode"], "AUTO");
-        assert_eq!(node("normalized/email")["refresh_mode"], "AUTO");
-        assert_eq!(node("evidence/customer")["refresh_mode"], "AUTO");
-        assert_eq!(node("golden/customer")["refresh_mode"], "AUTO");
+        for logical_id in [
+            "records/crm",
+            "normalized/name",
+            "normalized/email",
+            "evidence/customer",
+            "golden/customer",
+        ] {
+            assert_eq!(node(logical_id)["refresh_mode"], "DIFFERENTIAL");
+        }
         for logical_id in [
             format!("blocks/{channel_id}"),
             format!("block-stats/{channel_id}"),
@@ -1165,6 +1178,13 @@ mod tests {
                 .unwrap()
                 .contains("FROM @{records/crm}")
         );
+        let evidence_node = nodes
+            .iter()
+            .find(|n| n["logical_id"] == "evidence/customer")
+            .unwrap();
+        let evidence_sql = evidence_node["defining_sql"].as_str().unwrap();
+        assert!(!evidence_sql.contains("concat_ws"));
+        assert!(!evidence_sql.contains("array_to_string"));
 
         for logical_id in [
             "blocks/same_email",
@@ -1180,5 +1200,13 @@ mod tests {
                 .unwrap();
             assert_eq!(node["refresh_mode"], "DIFFERENTIAL", "{logical_id}");
         }
+    }
+
+    #[test]
+    fn immutable_text_join_matches_concat_ws_null_skipping() {
+        assert_eq!(
+            immutable_text_join(&["l0".into(), "l1".into()]),
+            "COALESCE(l0, ''::text) || CASE WHEN l1 IS NULL OR NOT (l0 IS NOT NULL) THEN ''::text ELSE pg_catalog.chr(31) END || COALESCE(l1, ''::text)"
+        );
     }
 }

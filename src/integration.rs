@@ -6,7 +6,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::MdmError;
-use crate::version::{DELTA_CAPABILITY, GRAPH_CAPABILITY, GRAPH_CAPABILITY_MIN_MINOR};
+use crate::version::{
+    DELTA_CAPABILITY, DELTA_CAPABILITY_MIN_MINOR, GRAPH_CAPABILITY, GRAPH_CAPABILITY_MIN_MINOR,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct Capability {
@@ -75,6 +77,18 @@ fn parse_capabilities(
             minimum_minor: GRAPH_CAPABILITY_MIN_MINOR,
         });
     }
+    if graph.enabled
+        && graph.details.get("differential_features")
+            != Some(&serde_json::json!([
+                "stable_row_identity_encoder_v2",
+                "custom_table_srf_out_columns",
+                "lateral_immutable_composite_function"
+            ]))
+    {
+        return Err(MdmError::CapabilityInvalid(
+            "external_graph_refresh is missing required differential features".into(),
+        ));
+    }
 
     Ok(PgTrickleCapabilities {
         external_graph_refresh: graph,
@@ -127,28 +141,39 @@ pub(crate) fn require_graph_v1() -> Result<Capability, MdmError> {
         .ok_or(MdmError::GraphCapabilityDisabled)
 }
 
-pub(crate) fn require_output_delta_v1() -> Result<Option<Capability>, MdmError> {
-    admit_output_delta_v1(integration_capabilities()?.output_delta_consumer)
+pub(crate) fn require_output_delta_v1() -> Result<Capability, MdmError> {
+    admit_output_delta_v1(integration_capabilities()?.output_delta_consumer)?
+        .ok_or(MdmError::CapabilityMissing(DELTA_CAPABILITY))
 }
 
 fn admit_output_delta_v1(capability: Option<Capability>) -> Result<Option<Capability>, MdmError> {
     let Some(capability) = capability else {
         return Ok(None);
     };
-    if capability.major != 1 {
+    if capability.major != 1 || capability.minor < DELTA_CAPABILITY_MIN_MINOR {
         return Err(MdmError::CapabilityVersion {
             capability: DELTA_CAPABILITY.to_string(),
             major: capability.major,
             minor: capability.minor,
-            minimum_minor: 0,
+            minimum_minor: DELTA_CAPABILITY_MIN_MINOR,
         });
     }
     if !capability.enabled {
         return Ok(None);
     }
-    if capability.details.get("status").and_then(Value::as_str) != Some("stable") {
+    if capability.details.get("status").and_then(Value::as_str) != Some("stable")
+        || capability.details.get("consumer_recovery_version") != Some(&Value::from(1))
+        || capability.details.get("public_resnapshot_request") != Some(&Value::from(true))
+        || capability.details.get("public_consumer_validation") != Some(&Value::from(true))
+        || capability
+            .details
+            .get("qualification_api")
+            .and_then(Value::as_str)
+            != Some("qualify_output_delta_recovery")
+        || capability.details.get("typed_delta_encoding_version") != Some(&Value::from(1))
+    {
         return Err(MdmError::CapabilityInvalid(
-            "output_delta_consumer 1.x does not advertise the stable contract".into(),
+            "output_delta_consumer 1.1 is missing required recovery details".into(),
         ));
     }
     Ok(Some(capability))
@@ -296,8 +321,18 @@ mod tests {
     #[test]
     fn delta_requires_the_stable_contract_only_when_enabled() {
         let parsed = parse_capabilities([
-            row(GRAPH_CAPABILITY, 1, true, "{}"),
-            row(DELTA_CAPABILITY, 1, true, r#"{"status":"stable"}"#),
+            row(
+                GRAPH_CAPABILITY,
+                1,
+                true,
+                r#"{"differential_features":["stable_row_identity_encoder_v2","custom_table_srf_out_columns","lateral_immutable_composite_function"]}"#,
+            ),
+            row(
+                DELTA_CAPABILITY,
+                1,
+                true,
+                r#"{"status":"stable","consumer_recovery_version":1,"public_resnapshot_request":true,"public_consumer_validation":true,"qualification_api":"qualify_output_delta_recovery","typed_delta_encoding_version":1}"#,
+            ),
         ])
         .unwrap();
         assert_eq!(
@@ -310,7 +345,7 @@ mod tests {
     fn enabled_delta_rejects_an_unstable_contract() {
         let capability = Capability {
             major: 1,
-            minor: 0,
+            minor: DELTA_CAPABILITY_MIN_MINOR,
             enabled: true,
             details: serde_json::json!({"status": "experimental"}),
         };

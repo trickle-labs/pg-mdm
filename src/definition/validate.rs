@@ -350,7 +350,12 @@ fn semantic_manifest() -> Value {
         "required_pg_trickle_capability": {
             "name": "external_graph_refresh",
             "major": 1,
-            "minimum_minor": 0
+            "minimum_minor": 2,
+            "differential_features": [
+                "stable_row_identity_encoder_v2",
+                "custom_table_srf_out_columns",
+                "lateral_immutable_composite_function"
+            ]
         }
     });
     let runtime_semantics = semantics::semantic_manifest();
@@ -616,7 +621,16 @@ mod tests {
         let manifest = semantic_manifest();
         assert_eq!(
             manifest["required_pg_trickle_capability"],
-            json!({"name": "external_graph_refresh", "major": 1, "minimum_minor": 0})
+            json!({
+                "name": "external_graph_refresh",
+                "major": 1,
+                "minimum_minor": 2,
+                "differential_features": [
+                    "stable_row_identity_encoder_v2",
+                    "custom_table_srf_out_columns",
+                    "lateral_immutable_composite_function"
+                ]
+            })
         );
         assert!(manifest.get("capabilities").is_none());
         let runtime_semantics = semantics::semantic_manifest();

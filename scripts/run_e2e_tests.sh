@@ -84,7 +84,7 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
          WHERE e.entity_name = 'recompile_canary'
          GROUP BY e.entity_id, e.publication_revision;
         UPDATE mdm_internal.definition_artifacts a
-           SET compiler_version = 8,
+           SET compiler_version = 9,
                artifact_digest = pg_catalog.decode(pg_catalog.repeat('00', 32), 'hex')
           FROM mdm_internal.entities e
          WHERE e.entity_id = a.entity_id
@@ -135,9 +135,9 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
                 'previous_publication_revision', 1,
                 'graph_generation', (state->>'previous_graph_generation')::bigint + 1,
                 'previous_graph_generation', (state->>'previous_graph_generation')::bigint,
-                'compiler_versions', '[8, 9]'::jsonb,
+                'compiler_versions', '[9, 10]'::jsonb,
                 'terminal_consumers', 2, 'output_equal', true) THEN
-                RAISE EXCEPTION 'compiler v8 to v9 canary state is invalid: %', state;
+                RAISE EXCEPTION 'compiler v9 to v10 canary state is invalid: %', state;
             END IF;
         END \$\$;"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
@@ -997,6 +997,6 @@ echo 'PASS: physical backup recovery with populated and pending graph state'
 echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies'
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'PASS: Delta V1 consumer registration, resnapshot, acknowledgement, and observability'
-echo 'PASS: compiler v8 to v9 canary adoption preserves the complete publication'
+echo 'PASS: compiler v9 to v10 canary adoption preserves the complete publication'
 echo 'PASS: affected-resolution qualification matches full rebuilds at 128 and 2,048 records'
 echo 'PASS: decision and golden-override intervals use affected resolution or the invalidation fallback'
