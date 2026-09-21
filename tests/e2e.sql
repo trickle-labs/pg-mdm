@@ -244,9 +244,9 @@ $$;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()
-        WHERE capability = 'external_graph_refresh' AND major_version = 1 AND minor_version = 1 AND enabled) <> 1
+        WHERE capability = 'external_graph_refresh' AND major_version = 1 AND minor_version = 2 AND enabled) <> 1
        OR (SELECT count(*) FROM mdm_internal.integration_capabilities()
-        WHERE capability = 'output_delta_consumer' AND major_version = 1 AND minor_version = 0 AND enabled) <> 1 THEN
+        WHERE capability = 'output_delta_consumer' AND major_version = 1 AND minor_version = 1 AND enabled) <> 1 THEN
         RAISE EXCEPTION 'baseline capabilities do not match';
     END IF;
     PERFORM mdm_internal.require_graph_v1();
