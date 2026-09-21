@@ -1,8 +1,8 @@
 # pg-mdm incremental improvements
 
-**Status:** pg-mdm implementation complete; upstream pg-trickle qualification and production rollout pending  
-**Date:** 2026-09-15  
-**Target:** pg-mdm 0.13.0, based on pg-trickle 0.106.1  
+**Status:** pg-mdm implementation complete; pg-trickle v0.108.0 admitted; Docker E2E and production rollout pending  
+**Date:** 2026-09-21  
+**Target:** pg-mdm 0.13.0, based on pg-trickle 0.108.0  
 **Owners:** pg-mdm maintainers
 
 All source, SQL, and test paths in this document are relative to the pg-mdm
@@ -10,9 +10,9 @@ repository root.
 
 The remaining external work is specified in
 [`PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md`](PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md).
-pg-trickle 0.106.1 cannot admit every compiler-version-9 graph node under
-`full_policy = 'ERROR'`, and this repository cannot prove a production soak or
-rollout without the target environment. Those gates are not marked complete.
+pg-trickle 0.108.0 admits the compiler-version-10 graph nodes under
+`full_policy = 'ERROR'`; this repository still cannot prove a production soak or
+rollout without the target environment. That gate remains open.
 
 ## Goal
 
@@ -53,8 +53,8 @@ Two independent problems prevent end-to-end incremental behavior:
    artificial CDC changes when the logical input is unchanged.
 2. `src/api/refresh.rs::persist_refresh_inner()` loads all terminal rows and
    calls `evaluation::resolve_and_compare()` for the whole entity after every
-   graph refresh. pg-mdm discovers the stable `output_delta_consumer` 1.0
-   capability but does not consume it.
+   graph refresh. pg-mdm consumes the stable `output_delta_consumer` 1.1
+   capability when the affected scope is exact.
 
 Existing graph artifacts are immutable. Changing `src/graph_spec.rs` affects
 newly compiled graph generations only. Existing entities need an explicit
@@ -310,7 +310,7 @@ row count, and decoded column types before using a payload.
 Protocol rules:
 
 - A sequence containing only `EXACT` batches can be acknowledged as `APPLIED`.
-- `FULL_INVALIDATION` leaves the v0.106.1 consumer active. Run a full MDM
+- `FULL_INVALIDATION` leaves the v0.108.0 consumer active. Run a full MDM
   baseline and acknowledge through that token as `RESYNCHRONIZED`.
 - Use begin/ack resnapshot only for consumer states `RESNAPSHOT_REQUIRED` or
   `INVALIDATED`.

@@ -2,15 +2,15 @@
 
 ## Scope
 
-pg-mdm 0.13.0 pins pg-trickle 0.106.1 at commit
-`df0e9c1d89dc4ccf920f3e1519d2b7f86990a4bf`. pg-mdm can resolve and publish
-an affected identity component, but several graph nodes still use `AUTO` and
-run as `FULL` because pg-trickle rejects their query shapes in
-`DIFFERENTIAL` mode.
+**Status:** Fulfilled by pg-trickle v0.108.0; retained as the contract and evidence checklist.
 
-This file defines the pg-trickle work required before pg-mdm can require
-`full_policy = 'ERROR'` for its steady-state mutation matrix. It also defines
-the Delta V1 release evidence that pg-mdm needs for recovery qualification.
+pg-mdm 0.13.0 admits pg-trickle 0.108.0 at commit
+`8bd0a4b5eb3e586ebdeea56bd774611aa7907e25`. pg-mdm resolves and publishes
+affected identity components. Remaining `AUTO` and `FULL` execution is an
+intentional bootstrap or recovery fallback.
+
+This file records the pg-trickle work and Delta V1 release evidence used for
+pg-mdm's steady-state mutation and recovery qualification.
 
 ## Required changes
 

@@ -181,6 +181,7 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
                 "DELETE FROM mdm_internal.identity_aliases WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.identity_splits WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.identity_registry WHERE entity_id = $1::pg_catalog.uuid",
+                "DELETE FROM mdm_steward.policy_cases_v1 WHERE entity_name = (SELECT entity_name FROM mdm_internal.entities WHERE entity_id = $1::pg_catalog.uuid)",
                 "DELETE FROM mdm_internal.reviews WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.golden_override_directives WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.steward_decisions WHERE entity_id = $1::pg_catalog.uuid",

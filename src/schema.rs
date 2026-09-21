@@ -77,6 +77,8 @@ CREATE TABLE mdm_internal.entities (
     CHECK (publication_revision >= 0)
 );
 
+CREATE SEQUENCE mdm_internal.policy_case_key_seq AS bigint START WITH 1;
+
 CREATE TABLE mdm_internal.definitions (
     entity_id uuid NOT NULL REFERENCES mdm_internal.entities(entity_id),
     definition_version bigint NOT NULL CHECK (definition_version > 0),
@@ -404,6 +406,46 @@ CREATE TABLE mdm_internal.reviews (
     CHECK ((status = 'resolved') = (resolved_revision IS NOT NULL))
 );
 
+CREATE TABLE mdm_steward.policy_cases_v1 (
+    case_key bigint PRIMARY KEY CHECK (case_key > 0),
+    review_id uuid NOT NULL UNIQUE REFERENCES mdm_internal.reviews(review_id),
+    entity_name pg_catalog.name NOT NULL,
+    issue_key bytea NOT NULL CHECK (octet_length(issue_key) = 32),
+    occurrence integer NOT NULL CHECK (occurrence > 0),
+    status text NOT NULL CHECK (status IN ('open', 'resolved')),
+    severity text NOT NULL,
+    reason_code text NOT NULL,
+    approved_metadata jsonb NOT NULL,
+    permitted_actions text[] NOT NULL,
+    assigned_queue pg_catalog.name,
+    due_at timestamptz,
+    escalation_level integer NOT NULL CHECK (escalation_level >= 0),
+    manual_assignment_protected boolean NOT NULL,
+    opened_at timestamptz,
+    opened_at_source text NOT NULL CHECK (opened_at_source IN ('publication', 'administrator', 'unknown')),
+    resolved_at timestamptz,
+    review_version bigint NOT NULL CHECK (review_version > 0),
+    definition_version bigint NOT NULL CHECK (definition_version > 0),
+    publication_revision bigint NOT NULL CHECK (publication_revision >= 0),
+    stewardship_epoch bigint NOT NULL CHECK (stewardship_epoch >= 0),
+    evidence_basis_digest bytea NOT NULL CHECK (octet_length(evidence_basis_digest) = 32),
+    action_revision bigint NOT NULL CHECK (action_revision > 0),
+    pending_stewardship boolean NOT NULL,
+    last_observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    UNIQUE (entity_name, issue_key, occurrence),
+    CHECK (
+        permitted_actions = '{}'::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'ESCALATE']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['ESCALATE']::text[]
+        OR permitted_actions = ARRAY['ESCALATE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['SET_DUE_AT']::text[]
+    ),
+    CHECK ((status = 'resolved') = (cardinality(permitted_actions) = 0))
+);
+
 CREATE TABLE mdm_internal.resolution_facts (
     entity_id uuid NOT NULL,
     publication_revision bigint NOT NULL,
@@ -540,6 +582,7 @@ SELECT pg_catalog.pg_extension_config_dump(
 );
 
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.entities'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.policy_case_key_seq'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definitions'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_records'::pg_catalog.regclass, '');
@@ -558,11 +601,14 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.identity_splits'::pg_ca
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_fields'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.golden_provenance'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.reviews'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_cases_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.resolution_facts'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.golden_override_directives'::pg_catalog.regclass, '');
 
 REVOKE ALL ON SCHEMA mdm_internal FROM PUBLIC;
+REVOKE ALL ON SEQUENCE mdm_internal.policy_case_key_seq FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA mdm_internal FROM PUBLIC;
+REVOKE ALL ON TABLE mdm_steward.policy_cases_v1 FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.validate_golden_override_chain() FROM PUBLIC;
 REVOKE CREATE ON SCHEMA mdm, mdm_out, mdm_steward, mdm_admin, mdm_graph FROM PUBLIC;
 REVOKE ALL ON SCHEMA mdm_graph FROM PUBLIC;
@@ -590,6 +636,7 @@ REVOKE ALL ON FUNCTION mdm_internal.prepare_rebind(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_rebind(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.drop_entity(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) FROM PUBLIC;
@@ -598,6 +645,7 @@ REVOKE ALL ON FUNCTION mdm_internal.validate_steward_decision_chain() FROM PUBLI
 REVOKE ALL ON FUNCTION mdm_internal.persist_decision(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_golden_override(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_drop_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_refresh(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.preview_entity(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.refresh_access(internal) FROM PUBLIC;

@@ -116,6 +116,8 @@ pub enum MdmError {
     GoldenConflict(String),
     #[error("invalid review history: {0}")]
     ReviewInvalid(String),
+    #[error("invalid policy projection: {0}")]
+    PolicyProjection(String),
     #[error("invalid output schema: {0}")]
     OutputInvalid(String),
     #[error("explanation is not retained: {0}")]
@@ -172,6 +174,7 @@ impl MdmError {
             Self::GoldenInvalid(_) => "MDM_GOLDEN_INVALID",
             Self::GoldenConflict(_) => "MDM_GOLDEN_OVERRIDE_CONFLICT",
             Self::ReviewInvalid(_) => "MDM_REVIEW_INVALID",
+            Self::PolicyProjection(_) => "MDM_POLICY_PROJECTION",
             Self::OutputInvalid(_) => "MDM_OUTPUT_INVALID",
             Self::ExplanationNotRetained(_) => "MDM_EXPLANATION_NOT_RETAINED",
             Self::ExplanationInvalid(_) => "MDM_EXPLANATION_INVALID",

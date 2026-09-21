@@ -20,6 +20,7 @@ pub mod integration;
 pub mod normalization;
 pub mod output;
 pub mod pair;
+pub mod policy;
 pub mod presets;
 pub mod resolver;
 pub mod review;

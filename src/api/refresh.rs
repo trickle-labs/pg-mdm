@@ -7,6 +7,7 @@ use pgrx::{Internal, JsonB, Uuid, default};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::api::policy::project_policy_cases;
 use crate::candidate::CandidatePair;
 use crate::catalog;
 use crate::constraint::{DecisionEdge, DecisionKind};
@@ -70,6 +71,7 @@ struct Context {
     decision_epoch: i64,
     publication_revision: i64,
     artifact_id: String,
+    artifact_digest: Vec<u8>,
     graph_digest: Vec<u8>,
     graph_contract: Value,
     graph_root: String,
@@ -331,7 +333,7 @@ fn load_context(
 ) -> Result<Context, MdmError> {
     let suffix = if lock { " FOR UPDATE OF e" } else { "" };
     let query = format!(
-        "SELECT e.entity_id::text, e.desired_version, e.decision_epoch, e.publication_revision, e.execution_role_name, b.role_oid, d.expanded_definition, a.artifact_id::text FROM mdm_internal.entities e JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version JOIN LATERAL (SELECT artifact_id FROM mdm_internal.definition_artifacts x WHERE x.entity_id = d.entity_id AND x.definition_version = d.definition_version ORDER BY x.artifact_id DESC LIMIT 1) a ON true WHERE e.entity_name = $1::pg_catalog.name{suffix}"
+        "SELECT e.entity_id::text, e.desired_version, e.decision_epoch, e.publication_revision, e.execution_role_name, b.role_oid, d.expanded_definition, a.artifact_id::text, a.artifact_digest FROM mdm_internal.entities e JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version JOIN LATERAL (SELECT artifact_id, artifact_digest FROM mdm_internal.definition_artifacts x WHERE x.entity_id = d.entity_id AND x.definition_version = d.definition_version ORDER BY x.artifact_id DESC LIMIT 1) a ON true WHERE e.entity_name = $1::pg_catalog.name{suffix}"
     );
     let rows = client
         .select(&query, Some(1), &[entity_name.into()])
@@ -379,6 +381,10 @@ fn load_context(
         .get::<String>(8)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Spi("artifact ID is NULL".into()))?;
+    let artifact_digest = row
+        .get::<Vec<u8>>(9)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("artifact digest is NULL".into()))?;
     let binding = client
         .select(
             "SELECT b.graph_binding_id::text, b.graph_digest, gm.relation_name, b.graph_contract FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.logical_id = $3 WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 AND b.artifact_id = $4::pg_catalog.uuid ORDER BY b.graph_generation DESC LIMIT 1",
@@ -456,6 +462,7 @@ fn load_context(
         decision_epoch,
         publication_revision,
         artifact_id,
+        artifact_digest,
         graph_digest,
         graph_contract,
         graph_root,
@@ -2537,6 +2544,18 @@ fn persist_refresh_inner(
             let mdm_resolution_ms = resolution_started.elapsed().as_millis() as u64;
             let publication_started = Instant::now();
             client.update("INSERT INTO mdm_internal.publication_observations (entity_id, publication_revision, decision_epoch, artifact_id, operation_id, graph_refresh_id, source_boundary, source_boundary_digest, node_results) VALUES ($1::pg_catalog.uuid, $2, $3, $4::pg_catalog.uuid, $5::pg_catalog.uuid, $6, $7, $8, $9)", None, &[context.entity_id.clone().into(), context.publication_revision.into(), context.decision_epoch.into(), context.artifact_id.clone().into(), operation_id.clone().into(), graph.id.into(), JsonB(graph.boundary.clone()).into(), graph.boundary_digest.clone().into(), JsonB(graph.node_results.clone()).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            let reviews = load_reviews(client, &context)?;
+            project_policy_cases(
+                client,
+                &context.entity_id,
+                &context.entity.name,
+                &context.artifact_digest,
+                context.definition_version,
+                context.publication_revision,
+                context.decision_epoch,
+                &graph.boundary_digest,
+                &reviews,
+            )?;
             if delta_admitted {
                 finish_delta(client, &mut delta)?;
             }
@@ -2729,6 +2748,17 @@ fn persist_refresh_inner(
             client.update("UPDATE mdm_internal.entities SET active_version = desired_version, publication_revision = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into(), revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
         client.update("INSERT INTO mdm_internal.publication_observations (entity_id, publication_revision, decision_epoch, artifact_id, operation_id, graph_refresh_id, source_boundary, source_boundary_digest, node_results) VALUES ($1::pg_catalog.uuid, $2, $3, $4::pg_catalog.uuid, $5::pg_catalog.uuid, $6, $7, $8, $9)", None, &[context.entity_id.clone().into(), publication_revision.into(), context.decision_epoch.into(), context.artifact_id.clone().into(), operation_id.clone().into(), graph.id.into(), JsonB(graph.boundary.clone()).into(), graph.boundary_digest.clone().into(), JsonB(graph.node_results.clone()).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+        project_policy_cases(
+            client,
+            &context.entity_id,
+            &context.entity.name,
+            &context.artifact_digest,
+            context.definition_version,
+            publication_revision,
+            context.decision_epoch,
+            &graph.boundary_digest,
+            if changed { next_reviews } else { &[] },
+        )?;
         if delta_admitted {
             finish_delta(client, &mut delta)?;
         }
@@ -4652,6 +4682,7 @@ mod tests {
             decision_epoch: 0,
             publication_revision: 0,
             artifact_id: String::new(),
+            artifact_digest: Vec::new(),
             graph_digest: Vec::new(),
             graph_contract: Value::Null,
             graph_root: String::new(),

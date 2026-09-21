@@ -4,7 +4,7 @@
 
 **Status:** Post-v0.11 design with a recommended delivery scope; optional capabilities remain proposals
 **Reviewed:** 15 September 2026
-**Baseline:** Released `pg_mdm` v0.12.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). The v0.12 tag admitted pg-trickle v0.105.2; main qualifies v0.106.1.
+**Baseline:** Released `pg_mdm` v0.12.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). The v0.12 tag admitted pg-trickle v0.105.2; main qualifies v0.108.0.
 **Foundation:** [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) remains the incremental relational engine
 **Goal:** Add deeper source, matching, stewardship, history, integration, and operational capabilities without changing the small product model established by V1  
 **Product contract:** The same five nouns, five actions, and three primary public outputs
@@ -34,15 +34,15 @@ The released code and upstream contracts establish the following boundary:
 | Item | State after the releases | Consequence for V2 |
 |---|---|---|
 | pg-mdm v0.11.0 | Synchronous strict graph refresh, full MDM resolution, identity history, and atomic publication | Reuse the compiler, resolver, and publication code |
-| pg-mdm dependency | v0.12.0 pins pg-trickle v0.105.2; main locks the v0.106.1 package and runtime version | Admit v0.106.1 only after its exact-package cumulative and populated-upgrade checks pass |
-| Graph V1 and Delta V1 | Upstream v0.106.1 advertises `external_graph_refresh` 1.1 and `output_delta_consumer` 1.0 as stable and enabled | Graph V1 is sufficient for the first scope. Delta consumption still needs MDM implementation and equivalence proof |
-| Prepared generations and prepared delta binding | Neither capability appears in the v0.106.1 manifest. The upstream design remains a post-1.0 proposal | Sections 3 and 4 specify a future contract, not callable released APIs |
+| pg-mdm dependency | v0.12.0 pins pg-trickle v0.105.2; main locks the v0.108.0 package and runtime version | Local archive and upgrade-path checks pass; Docker E2E remains rollout evidence |
+| Graph V1 and Delta V1 | Upstream v0.108.0 advertises `external_graph_refresh` 1.2 and `output_delta_consumer` 1.1 as stable and enabled | pg-mdm consumes Delta V1.1 for exact affected scopes; full fallback remains the recovery path |
+| Prepared generations and prepared delta binding | Neither capability appears in the v0.108.0 manifest. The upstream design remains a post-1.0 proposal | Sections 3 and 4 specify a future contract, not callable released APIs |
 | Capture | Upstream advertises trigger and WAL capture as stable | Keep MDM on trigger capture until its own WAL admission suite passes |
 | Preview | `preview_entity()` currently returns metadata and counts. It labels `scoped` as exact without resolving the requested subproblem | Repair the existing claim, then implement shared resolution and exact impact comparison |
 | Graph strategy | Candidate blocks and candidate-pair joins request `DIFFERENTIAL`; initial bootstrap and safety fallbacks may still use `FULL` | Keep complete-result and FULL-reference regressions around the differential stages |
 | Release qualification | The [v0.11 plan](plans/v0.11.md) covers paired AUTO/FULL probes, compiled MDM histories, rollback, and cumulative operational checks | Audit the broader V1 criteria and record missing quality and workload evidence before declaring v1.0 |
 
-Upstream facts come from the [v0.106.1 capability manifest](https://github.com/trickle-labs/pg-trickle/blob/v0.106.1/docs/capability-manifest.json), [release notes](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.106.1), and [prepared-generation proposal](https://github.com/trickle-labs/pg-trickle/blob/v0.106.1/plans/PROPOSAL_V2_PREPARED_GRAPH_GENERATIONS.md). The release qualifies packages, upgrades, runtime behavior, and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred. Package qualification does not prove MDM-specific semantics or make prepared execution available.
+Upstream facts come from the [v0.108.0 capability manifest](https://github.com/trickle-labs/pg-trickle/blob/v0.108.0/docs/capability-manifest.json), [release notes](https://github.com/trickle-labs/pg-trickle/releases/tag/v0.108.0), and [prepared-generation proposal](https://github.com/trickle-labs/pg-trickle/blob/v0.108.0/plans/PROPOSAL_V2_PREPARED_GRAPH_GENERATIONS.md). The release qualifies packages, upgrades, runtime behavior, and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred. Package qualification does not prove MDM-specific semantics or make prepared execution available.
 
 The remaining sections describe target behavior unless explicitly identified as released. A release tag is evidence of delivery, not evidence that every earlier design assertion has been implemented.
 
@@ -499,7 +499,7 @@ Public-schema changes remain conservative. Additive metadata and new optional ta
 
 ### 23.1 Admit the new baseline and close V1 gaps
 
-Qualify the main branch's pg-trickle v0.106.1 pin against pg-mdm's compiled graphs, authorization rules, and publication transaction. The populated upgrade and cumulative E2E must pass before calling the artifact admitted. Keep the bytea candidate-block and multi-row candidate-pair insert histories checked against complete SQL expectations and a FULL reference while their normal refresh strategy is `DIFFERENTIAL`.
+The main branch's pg-trickle v0.108.0 pin is locked and locally checked against pg-mdm's compiled archive and upgrade paths. Run the populated upgrade and cumulative Docker E2E before production rollout. Keep the bytea candidate-block and multi-row candidate-pair insert histories checked against complete SQL expectations and a FULL reference while their normal refresh strategy is `DIFFERENTIAL`.
 
 Audit the V1 acceptance criteria against executable tests and retained release results. Correct the current scoped-preview exactness claim and complete its promised subproblem behavior. Connect the organization corpus to runnable quality checks, add held-out cases, and measure the synchronous operating envelope. These are baseline obligations; a V2 feature cannot substitute for them.
 

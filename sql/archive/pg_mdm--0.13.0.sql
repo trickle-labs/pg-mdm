@@ -58,6 +58,8 @@ CREATE TABLE mdm_internal.entities (
     CHECK (publication_revision >= 0)
 );
 
+CREATE SEQUENCE mdm_internal.policy_case_key_seq AS bigint START WITH 1;
+
 CREATE TABLE mdm_internal.definitions (
     entity_id uuid NOT NULL REFERENCES mdm_internal.entities(entity_id),
     definition_version bigint NOT NULL CHECK (definition_version > 0),
@@ -385,6 +387,46 @@ CREATE TABLE mdm_internal.reviews (
     CHECK ((status = 'resolved') = (resolved_revision IS NOT NULL))
 );
 
+CREATE TABLE mdm_steward.policy_cases_v1 (
+    case_key bigint PRIMARY KEY CHECK (case_key > 0),
+    review_id uuid NOT NULL UNIQUE REFERENCES mdm_internal.reviews(review_id),
+    entity_name pg_catalog.name NOT NULL,
+    issue_key bytea NOT NULL CHECK (octet_length(issue_key) = 32),
+    occurrence integer NOT NULL CHECK (occurrence > 0),
+    status text NOT NULL CHECK (status IN ('open', 'resolved')),
+    severity text NOT NULL,
+    reason_code text NOT NULL,
+    approved_metadata jsonb NOT NULL,
+    permitted_actions text[] NOT NULL,
+    assigned_queue pg_catalog.name,
+    due_at timestamptz,
+    escalation_level integer NOT NULL CHECK (escalation_level >= 0),
+    manual_assignment_protected boolean NOT NULL,
+    opened_at timestamptz,
+    opened_at_source text NOT NULL CHECK (opened_at_source IN ('publication', 'administrator', 'unknown')),
+    resolved_at timestamptz,
+    review_version bigint NOT NULL CHECK (review_version > 0),
+    definition_version bigint NOT NULL CHECK (definition_version > 0),
+    publication_revision bigint NOT NULL CHECK (publication_revision >= 0),
+    stewardship_epoch bigint NOT NULL CHECK (stewardship_epoch >= 0),
+    evidence_basis_digest bytea NOT NULL CHECK (octet_length(evidence_basis_digest) = 32),
+    action_revision bigint NOT NULL CHECK (action_revision > 0),
+    pending_stewardship boolean NOT NULL,
+    last_observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    UNIQUE (entity_name, issue_key, occurrence),
+    CHECK (
+        permitted_actions = '{}'::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'ESCALATE']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['ESCALATE']::text[]
+        OR permitted_actions = ARRAY['ESCALATE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['SET_DUE_AT']::text[]
+    ),
+    CHECK ((status = 'resolved') = (cardinality(permitted_actions) = 0))
+);
+
 CREATE TABLE mdm_internal.resolution_facts (
     entity_id uuid NOT NULL,
     publication_revision bigint NOT NULL,
@@ -521,6 +563,7 @@ SELECT pg_catalog.pg_extension_config_dump(
 );
 
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.entities'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_internal.policy_case_key_seq'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.definitions'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_identities'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.source_records'::pg_catalog.regclass, '');
@@ -539,11 +582,14 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.identity_splits'::pg_ca
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.output_fields'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.golden_provenance'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.reviews'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_cases_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.resolution_facts'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.golden_override_directives'::pg_catalog.regclass, '');
 
 REVOKE ALL ON SCHEMA mdm_internal FROM PUBLIC;
+REVOKE ALL ON SEQUENCE mdm_internal.policy_case_key_seq FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA mdm_internal FROM PUBLIC;
+REVOKE ALL ON TABLE mdm_steward.policy_cases_v1 FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.validate_golden_override_chain() FROM PUBLIC;
 REVOKE CREATE ON SCHEMA mdm, mdm_out, mdm_steward, mdm_admin, mdm_graph FROM PUBLIC;
 REVOKE ALL ON SCHEMA mdm_graph FROM PUBLIC;
@@ -604,7 +650,7 @@ CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:157
+-- src/integration.rs:182
 -- pg_mdm::integration::capability_report_sql
 CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb) STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'capability_report_sql_wrapper';
 /* </end connected objects> */
@@ -634,13 +680,25 @@ CREATE FUNCTION mdm_internal.normalized_levenshtein_score(left_value text, right
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/steward.rs:128
+-- src/api/policy.rs:518
+-- pg_mdm::api::policy::persist_backfill_policy_case_opened_at
+CREATE FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_backfill_policy_case_opened_at_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/policy.rs:483
+-- pg_mdm::api::policy::backfill_policy_case_opened_at
+CREATE FUNCTION mdm_admin.backfill_policy_case_opened_at(case_key bigint, opened_at timestamptz, reason text) RETURNS TABLE (operation_id uuid, action_revision bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'backfill_policy_case_opened_at_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/steward.rs:129
 -- pg_mdm::api::steward::persist_decision
 CREATE FUNCTION mdm_internal.persist_decision(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_decision_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/steward.rs:80
+-- src/api/steward.rs:81
 -- pg_mdm::api::steward::decide
 CREATE FUNCTION mdm_steward.decide(entity_name text, left_source_record_id uuid, right_source_record_id uuid, decision text, expected_version bigint, reason text) RETURNS TABLE (operation_id uuid, decision_id uuid, decision_version bigint, decision_epoch bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'decide_wrapper';
 /* </end connected objects> */
@@ -670,19 +728,19 @@ CREATE FUNCTION mdm.create(definition jsonb, expected_version bigint DEFAULT NUL
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/steward.rs:464
+-- src/api/steward.rs:466
 -- pg_mdm::api::steward::persist_golden_override
 CREATE FUNCTION mdm_internal.persist_golden_override(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_golden_override_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/steward.rs:379
+-- src/api/steward.rs:381
 -- pg_mdm::api::steward::override_golden
 CREATE FUNCTION mdm_steward.override_golden(entity_name text, anchor_source_record_id uuid, field_name text, value jsonb, expected_version bigint, reason text) RETURNS TABLE (operation_id uuid, override_id uuid, override_version bigint, decision_epoch bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'override_golden_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/steward.rs:422
+-- src/api/steward.rs:424
 -- pg_mdm::api::steward::clear_golden_override
 CREATE FUNCTION mdm_steward.clear_golden_override(entity_name text, anchor_source_record_id uuid, field_name text, expected_version bigint, reason text) RETURNS TABLE (operation_id uuid, override_id uuid, override_version bigint, decision_epoch bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'clear_golden_override_wrapper';
 /* </end connected objects> */
@@ -700,7 +758,7 @@ CREATE FUNCTION mdm_internal.persist_recompile(request internal) RETURNS jsonb S
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2823
+-- src/api/refresh.rs:2853
 -- pg_mdm::api::refresh::persist_refresh
 CREATE FUNCTION mdm_internal.persist_refresh(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_refresh_wrapper';
 /* </end connected objects> */
@@ -712,13 +770,13 @@ CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:4084
+-- src/api/refresh.rs:4114
 -- pg_mdm::api::refresh::preview_entity
 CREATE FUNCTION mdm_internal.preview_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'preview_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2848
+-- src/api/refresh.rs:2878
 -- pg_mdm::api::refresh::preview
 CREATE FUNCTION mdm.preview(entity_name text, mode text DEFAULT 'validation', options jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'preview_wrapper';
 /* </end connected objects> */
@@ -730,7 +788,7 @@ CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS '
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2807
+-- src/api/refresh.rs:2837
 -- pg_mdm::api::refresh::rebuild
 CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';
 /* </end connected objects> */
@@ -742,19 +800,19 @@ CREATE FUNCTION mdm_admin.recompile(entity_name text) RETURNS jsonb LANGUAGE c A
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2791
+-- src/api/refresh.rs:2821
 -- pg_mdm::api::refresh::refresh
 CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:589
+-- src/api/refresh.rs:596
 -- pg_mdm::api::refresh::refresh_access
 CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_access_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:196
+-- src/integration.rs:221
 -- pg_mdm::integration::require_graph_v1_sql
 CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'require_graph_v1_sql_wrapper';
 /* </end connected objects> */
@@ -772,7 +830,7 @@ CREATE FUNCTION mdm_admin.verify_installation() RETURNS text STRICT SECURITY DEF
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/schema.rs:580
+-- src/schema.rs:626
 -- requires:
 --   verify_installation
 --   normalize_text
@@ -791,6 +849,7 @@ REVOKE ALL ON FUNCTION mdm_internal.prepare_rebind(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_rebind(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.drop_entity(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) FROM PUBLIC;
@@ -799,6 +858,7 @@ REVOKE ALL ON FUNCTION mdm_internal.validate_steward_decision_chain() FROM PUBLI
 REVOKE ALL ON FUNCTION mdm_internal.persist_decision(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_golden_override(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_drop_entity(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_refresh(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.preview_entity(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.refresh_access(internal) FROM PUBLIC;

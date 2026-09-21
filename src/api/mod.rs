@@ -3,6 +3,7 @@ pub(crate) mod create;
 pub(crate) mod describe;
 pub(crate) mod explain;
 pub(crate) mod lifecycle;
+pub(crate) mod policy;
 pub(crate) mod rebind;
 pub(crate) mod refresh;
 pub(crate) mod steward;

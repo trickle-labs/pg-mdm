@@ -26,7 +26,7 @@ WHERE rolname = :'helper_owner'
 \endif
 
 BEGIN;
-GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_graph TO :"helper_owner";
+GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_steward, mdm_graph TO :"helper_owner";
 GRANT USAGE, CREATE ON SCHEMA mdm_out TO :"helper_owner";
 GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
 SELECT pg_catalog.format(
@@ -68,6 +68,7 @@ GRANT EXECUTE ON FUNCTION mdm_internal.normalize_text(text, text, integer, text,
 GRANT EXECUTE ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) TO :"helper_owner";
 ALTER TABLE mdm_internal.operations OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.entities OWNER TO :"helper_owner";
+ALTER SEQUENCE mdm_internal.policy_case_key_seq OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.definitions OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.source_identities OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.source_bindings OWNER TO :"helper_owner";
@@ -88,6 +89,7 @@ ALTER TABLE mdm_internal.identity_splits OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.output_fields OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.golden_provenance OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.reviews OWNER TO :"helper_owner";
+ALTER TABLE mdm_steward.policy_cases_v1 OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.resolution_facts OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.golden_override_directives OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_admin.verify_installation() OWNER TO :"helper_owner";
@@ -105,6 +107,7 @@ ALTER FUNCTION mdm_internal.persist_golden_override(internal) OWNER TO :"helper_
 ALTER FUNCTION mdm_admin.drop_entity(text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_admin.rebuild(text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_drop_entity(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.evidence_digest(text) OWNER TO :"helper_owner";
 ALTER SCHEMA mdm_graph OWNER TO :"helper_owner";

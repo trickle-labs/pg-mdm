@@ -3,6 +3,7 @@ use pgrx::{Internal, JsonB, Uuid};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::api::policy::mark_pending_cases;
 use crate::catalog;
 use crate::constraint::{DecisionEdge, DecisionKind, validate_proposed_decision};
 use crate::decision::{edge, next_version, validate_reason};
@@ -332,6 +333,7 @@ pub(crate) fn persist_decision(request: Internal) -> JsonB {
                     &[entity_id.into(), new_epoch.into()],
                 )
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
+            mark_pending_cases(client, &request.entity_name)?;
             client
                 .update(
                     "UPDATE mdm_internal.operations SET status = 'succeeded', result_code = 'MDM_OK', outcome = outcome || $2, completed_at = pg_catalog.statement_timestamp() WHERE operation_id = $1::pg_catalog.uuid AND status = 'running'",
@@ -612,6 +614,7 @@ pub(crate) fn persist_golden_override(request: Internal) -> JsonB {
                 .map_err(|e| MdmError::Spi(e.to_string()))?
                 .ok_or_else(|| MdmError::OperationState("override ID is NULL".into()))?;
             client.update("UPDATE mdm_internal.entities SET decision_epoch = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[entity_id.into(), new_epoch.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+            mark_pending_cases(client, &request.entity_name)?;
             client.update("UPDATE mdm_internal.operations SET status = 'succeeded', result_code = 'MDM_OK', outcome = outcome || $2, completed_at = pg_catalog.statement_timestamp() WHERE operation_id = $1::pg_catalog.uuid AND status = 'running'", None, &[operation_id.clone().into(), JsonB(json!({"override_id": override_id, "decision_epoch": new_epoch})).into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
             Ok(JsonB(
                 json!({"operation_id": operation_id, "override_id": override_id, "override_version": version, "decision_epoch": new_epoch}),
