@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub(crate) const BASIS_DOMAIN_TAG: &str = "pg_mdm/policy-case-basis/v1";
+pub(crate) const INTENT_DOMAIN_TAG: &str = "pg_mdm/policy-intent/v1";
 
 #[derive(Debug, Serialize)]
 pub(crate) struct PolicySubject {
@@ -69,6 +70,107 @@ pub(crate) fn next_action_revision(
     } else {
         previous.checked_add(1)
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum IntentArguments {
+    AssignQueue(String),
+    SetDueAt(String),
+    Escalate(i32),
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PolicyIntentBody {
+    pub(crate) action: String,
+    pub(crate) arguments: Value,
+    pub(crate) binding_id: String,
+    pub(crate) case_key: i64,
+    pub(crate) evaluation_ref: String,
+    pub(crate) expected_action_revision: i64,
+    pub(crate) expected_definition_version: i64,
+    pub(crate) expected_evidence_basis_digest: String,
+    pub(crate) expected_policy_digest: String,
+    pub(crate) expected_publication_revision: i64,
+    pub(crate) expected_review_version: i64,
+    pub(crate) expected_stewardship_epoch: i64,
+    pub(crate) policy_revision: String,
+    pub(crate) work_ref: String,
+}
+
+pub(crate) fn validate_reference(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 256 || value.as_bytes().contains(&0) {
+        return Err(format!("{label} must be 1..256 UTF-8 bytes"));
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_intent_arguments(
+    action: &str,
+    arguments: &Value,
+) -> Result<IntentArguments, String> {
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| "arguments must be a JSON object".to_owned())?;
+    match action {
+        "ASSIGN_QUEUE" => {
+            if object.len() != 1 {
+                return Err("ASSIGN_QUEUE arguments must contain only queue".into());
+            }
+            let queue = object
+                .get("queue")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "queue must be a non-empty string".to_owned())?;
+            if queue.is_empty() || queue.len() > 63 || queue.as_bytes().contains(&0) {
+                return Err("queue must be 1..63 UTF-8 bytes".into());
+            }
+            Ok(IntentArguments::AssignQueue(queue.to_owned()))
+        }
+        "SET_DUE_AT" => {
+            if object.len() != 1 {
+                return Err("SET_DUE_AT arguments must contain only due_at".into());
+            }
+            let due_at = object
+                .get("due_at")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "due_at must be a timestamp string".to_owned())?;
+            if due_at.is_empty() {
+                return Err("due_at must not be empty".into());
+            }
+            Ok(IntentArguments::SetDueAt(due_at.to_owned()))
+        }
+        "ESCALATE" => {
+            if object.len() != 1 {
+                return Err("ESCALATE arguments must contain only level".into());
+            }
+            let level = object
+                .get("level")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| "level must be a positive integer".to_owned())?;
+            if level <= 0 {
+                return Err("level must be a positive integer".into());
+            }
+            Ok(IntentArguments::Escalate(level))
+        }
+        _ => Err("action must be ASSIGN_QUEUE, SET_DUE_AT, or ESCALATE".into()),
+    }
+}
+
+pub(crate) fn queue_is_allowed(queue: &str, allowed_queues: &[String]) -> bool {
+    allowed_queues.is_empty() || allowed_queues.iter().any(|allowed| allowed == queue)
+}
+
+pub(crate) fn intent_canonical_json(body: &PolicyIntentBody) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::to_value(body).expect("policy intent is serializable"))
+        .expect("policy intent JSON is serializable")
+}
+
+pub(crate) fn intent_digest(body: &PolicyIntentBody) -> [u8; 32] {
+    let body = intent_canonical_json(body);
+    let mut hasher = Sha256::new();
+    write_part(&mut hasher, INTENT_DOMAIN_TAG.as_bytes());
+    write_part(&mut hasher, &body);
+    hasher.finalize().into()
 }
 
 fn write_part(hasher: &mut Sha256, bytes: &[u8]) {

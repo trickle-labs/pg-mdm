@@ -121,7 +121,7 @@ report = {
             ROOT / "tests/incremental_qualification.sql"
         ),
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
-        "archived_pg_mdm_0_13_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.13.0.sql"),
+        "archived_pg_mdm_0_14_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.14.0.sql"),
         "pg_mdm_package_manifest_sha256": sha256_bytes(package_manifest.encode()),
         "pg_trickle_version": "0.108.0",
         "pg_trickle_artifact_sha256": "016ad89fc83172b66b3b3518a00a7182c6206770f755d504195487fdbff406a0",

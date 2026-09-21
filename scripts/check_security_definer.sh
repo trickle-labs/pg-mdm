@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-archive=${1:-sql/archive/pg_mdm--0.13.0.sql}
+archive=${1:-sql/archive/pg_mdm--0.14.0.sql}
 
 test -f "$archive"
 
@@ -25,6 +25,9 @@ assert set(helpers) == {
     'mdm_internal.explain_entity', 'mdm_internal.persist_golden_override',
     'mdm_internal.persist_drop_entity', 'mdm_internal.persist_backfill_policy_case_opened_at',
     'mdm_internal.persist_refresh',
+    'mdm_internal.persist_create_policy_binding', 'mdm_internal.persist_pause_policy_binding',
+    'mdm_internal.persist_replace_policy_binding', 'mdm_internal.persist_set_case_controls',
+    'mdm_internal.persist_policy_intent',
     'mdm_internal.preview_entity', 'mdm_internal.refresh_access',
     'mdm_graph.normalize_text',
     'mdm_graph.normalize_date', 'mdm_graph.normalized_levenshtein_score',

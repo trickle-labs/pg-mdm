@@ -118,6 +118,14 @@ pub enum MdmError {
     ReviewInvalid(String),
     #[error("invalid policy projection: {0}")]
     PolicyProjection(String),
+    #[error("invalid policy intent: {0}")]
+    PolicyIntent(String),
+    #[error("invalid policy binding: {0}")]
+    PolicyBinding(String),
+    #[error("invalid policy control: {0}")]
+    PolicyControl(String),
+    #[error("policy idempotency failure: {0}")]
+    PolicyIdempotency(String),
     #[error("invalid output schema: {0}")]
     OutputInvalid(String),
     #[error("explanation is not retained: {0}")]
@@ -175,6 +183,10 @@ impl MdmError {
             Self::GoldenConflict(_) => "MDM_GOLDEN_OVERRIDE_CONFLICT",
             Self::ReviewInvalid(_) => "MDM_REVIEW_INVALID",
             Self::PolicyProjection(_) => "MDM_POLICY_PROJECTION",
+            Self::PolicyIntent(_) => "MDM_POLICY_INTENT",
+            Self::PolicyBinding(_) => "MDM_POLICY_BINDING",
+            Self::PolicyControl(_) => "MDM_POLICY_CONTROL",
+            Self::PolicyIdempotency(_) => "MDM_POLICY_IDEMPOTENCY",
             Self::OutputInvalid(_) => "MDM_OUTPUT_INVALID",
             Self::ExplanationNotRetained(_) => "MDM_EXPLANATION_NOT_RETAINED",
             Self::ExplanationInvalid(_) => "MDM_EXPLANATION_INVALID",

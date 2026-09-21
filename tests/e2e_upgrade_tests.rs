@@ -16,6 +16,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_10_11 = root.join("sql").join("pg_mdm--0.10.0--0.11.0.sql");
     let upgrade_11_12 = root.join("sql").join("pg_mdm--0.11.0--0.12.0.sql");
     let upgrade_12_13 = root.join("sql").join("pg_mdm--0.12.0--0.13.0.sql");
+    let upgrade_13_14 = root.join("sql").join("pg_mdm--0.13.0--0.14.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -65,6 +66,10 @@ fn test_upgrade_scripts_exist() {
         upgrade_12_13.is_file(),
         "0.12.0 -> 0.13.0 upgrade script must exist"
     );
+    assert!(
+        upgrade_13_14.is_file(),
+        "0.13.0 -> 0.14.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -108,4 +113,9 @@ fn test_upgrade_scripts_exist() {
     assert!(!delta_table.contains("output_contract_digest"));
     assert!(!delta_table.contains("REFERENCES mdm_internal.graph_bindings"));
     assert!(sql_12_13.contains("mdm_admin.recompile"));
+    let sql_13_14 = fs::read_to_string(&upgrade_13_14).expect("read 0.13.0 to 0.14.0");
+    assert!(sql_13_14.contains("mdm_steward.policy_bindings_v1"));
+    assert!(sql_13_14.contains("mdm_internal.policy_binding_runtime"));
+    assert!(sql_13_14.contains("mdm_steward.policy_receipts_v1"));
+    assert!(sql_13_14.contains("mdm_steward.submit_policy_intent"));
 }
