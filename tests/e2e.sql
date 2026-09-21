@@ -267,6 +267,7 @@ GRANT USAGE ON SCHEMA mdm_admin TO mdm_administrator;
 GRANT USAGE ON SCHEMA mdm TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_admin.drop_entity(text, text) TO mdm_administrator;
+GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle TO mdm_administrator;
 
 \connect postgres postgres
 CREATE DATABASE graph_conformance;
