@@ -82,7 +82,7 @@ RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_t
 LANGUAGE c AS 'MODULE_PATHNAME', 'persist_policy_intent_wrapper';
 
 CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[])
-RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'register_policy_binding_wrapper';
+RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';
 CREATE FUNCTION mdm_steward.pause_policy_binding(binding_id uuid)
 RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'pause_policy_binding_wrapper';
 CREATE FUNCTION mdm_steward.replace_policy_binding(binding_id uuid, principal_role name, policy_digest bytea, allowed_actions text[])

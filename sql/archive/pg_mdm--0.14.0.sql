@@ -919,7 +919,7 @@ CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECU
 /* <begin connected objects> */
 -- src/api/policy_intent.rs:356
 -- pg_mdm::api::policy_intent::create_policy_binding
-CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'register_policy_binding_wrapper';
+CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

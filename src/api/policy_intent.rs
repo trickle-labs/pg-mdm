@@ -356,7 +356,7 @@ fn register_binding(request: &BindingRequest) -> Result<Value, MdmError> {
 #[pg_extern(
     name = "register_policy_binding",
     requires = [persist_create_policy_binding],
-    sql = "CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'register_policy_binding_wrapper';"
+    sql = "CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';"
 )]
 pub(crate) fn create_policy_binding(
     scope: String,
