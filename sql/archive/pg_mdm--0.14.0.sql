@@ -1005,3 +1005,4 @@ REVOKE ALL ON FUNCTION mdm_internal.refresh_access(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.recompile(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_steward.decide(text, uuid, uuid, text, bigint, text) FROM PUBLIC;
 /* </end connected objects> */
+
