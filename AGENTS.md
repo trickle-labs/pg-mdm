@@ -66,3 +66,16 @@ Never read a file end-to-end when exploring. Structure first, drill second.
 - **Code Block Integrity:** Never break out of inline code blocks (` `) or structural lines without closing them.
 - **Confirm:** Make sure that PR body is not garbled. If so fix it. Then confirm one more time.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues; use `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context domain docs use root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
