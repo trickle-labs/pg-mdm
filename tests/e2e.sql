@@ -215,7 +215,7 @@ SELECT public.assert_adapter_error('MDM_PGT_CAPABILITY_VERSION');
 CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
 RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
 LANGUAGE sql
-AS $$ SELECT 'external_graph_refresh', 1::smallint, 1::smallint, false, '{}'::jsonb $$;
+AS $$ SELECT 'external_graph_refresh', 1::smallint, 2::smallint, false, '{}'::jsonb $$;
 DO $$
 BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()) <> 1 THEN
@@ -229,7 +229,7 @@ RETURNS TABLE (capability text, major_version smallint, minor_version smallint, 
 LANGUAGE sql
 AS $$
     VALUES
-        ('external_graph_refresh', 1::smallint, 1::smallint, false, '{}'::jsonb),
+        ('external_graph_refresh', 1::smallint, 2::smallint, false, '{}'::jsonb),
         ('future_capability', 9::smallint, 0::smallint, true, '{}'::jsonb)
 $$;
 DO $$
@@ -2684,7 +2684,7 @@ CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
 RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
 LANGUAGE sql
 AS $$
-    VALUES ('external_graph_refresh', 1::smallint, 1::smallint, true, '{"changed":true}'::jsonb),
+    VALUES ('external_graph_refresh', 1::smallint, 2::smallint, true, '{"changed":true}'::jsonb),
            ('output_delta_consumer', 1::smallint, 1::smallint, false, '{}'::jsonb)
 $$;
 SET SESSION AUTHORIZATION mdm_test_login;
@@ -2708,7 +2708,7 @@ CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
 RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
 LANGUAGE sql
 AS $$
-    VALUES ('external_graph_refresh', 1::smallint, 1::smallint, false, '{}'::jsonb),
+    VALUES ('external_graph_refresh', 1::smallint, 2::smallint, false, '{}'::jsonb),
            ('output_delta_consumer', 1::smallint, 1::smallint, false, '{}'::jsonb)
 $$;
 SET SESSION AUTHORIZATION mdm_test_login;
