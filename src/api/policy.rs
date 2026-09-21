@@ -243,9 +243,10 @@ pub(crate) fn project_policy_cases(
                 },
             )
         } else {
+            let opened_at = publication_time(client, entity_id, review.opened_revision)?;
             (
-                publication_time(client, entity_id, review.opened_revision)?,
-                publication_time(client, entity_id, review.opened_revision)?
+                opened_at.clone(),
+                opened_at
                     .map(|_| "publication".into())
                     .unwrap_or_else(|| "unknown".into()),
                 review
@@ -479,6 +480,17 @@ pub(crate) fn mark_pending_cases(
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
     Ok(())
+}
+
+#[pg_extern(
+    name = "policy_case_basis_digest",
+    requires = ["pg_mdm_foundation"],
+    sql = "CREATE FUNCTION mdm_internal.policy_case_basis_digest(basis jsonb) RETURNS bytea IMMUTABLE STRICT PARALLEL SAFE SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'policy_case_basis_digest_wrapper';"
+)]
+#[search_path(pg_catalog, mdm_internal, pg_temp)]
+pub(crate) fn policy_case_basis_digest(basis: JsonB) -> Vec<u8> {
+    let body = serde_json::to_vec(&basis.0).expect("policy basis is serializable");
+    crate::definition::canonical::digest(crate::policy::BASIS_DOMAIN_TAG, &[&body])
 }
 
 #[pg_extern(

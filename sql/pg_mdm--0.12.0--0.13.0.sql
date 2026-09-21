@@ -56,6 +56,11 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_cases_v1'::pg_cat
 REVOKE ALL ON SEQUENCE mdm_internal.policy_case_key_seq FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_cases_v1 FROM PUBLIC;
 
+CREATE FUNCTION mdm_internal.policy_case_basis_digest(basis jsonb)
+RETURNS bytea IMMUTABLE STRICT PARALLEL SAFE
+SET search_path TO pg_catalog, mdm_internal, pg_temp
+LANGUAGE c AS 'MODULE_PATHNAME', 'policy_case_basis_digest_wrapper';
+
 INSERT INTO mdm_steward.policy_cases_v1 (
     case_key, review_id, entity_name, issue_key, occurrence, status, severity,
     reason_code, approved_metadata, permitted_actions, assigned_queue, due_at,
@@ -89,8 +94,22 @@ SELECT
     definition_version,
     opened_revision,
     stewardship_epoch,
-    mdm_internal.evidence_digest(
-        review_id::text || ':' || issue_key::text || ':' || occurrence::text
+    mdm_internal.policy_case_basis_digest(
+        pg_catalog.jsonb_build_object(
+            'approved_metadata', '{}'::jsonb,
+            'artifact_digest', pg_catalog.encode(artifact_digest, 'hex'),
+            'canonical_encoding_version', 1,
+            'definition_version', definition_version,
+            'entity_name', entity_name,
+            'issue_key', pg_catalog.encode(issue_key, 'hex'),
+            'observed_decision_epoch', stewardship_epoch,
+            'occurrence', occurrence,
+            'reason_code', reason_code,
+            'semantic_versions', pg_catalog.jsonb_build_object('candidate', 1, 'clustering', 1, 'normalization', 1),
+            'source_boundary_digest', pg_catalog.encode(source_boundary_digest, 'hex'),
+            'status', status,
+            'subjects', subjects
+        )
     ),
     1,
     current_decision_epoch <> stewardship_epoch
@@ -103,6 +122,7 @@ FROM (
         r.status,
         r.severity,
         r.reason_code,
+        r.subjects,
         r.concurrency_version,
         r.opened_revision,
         r.resolved_revision,
@@ -110,15 +130,32 @@ FROM (
         COALESCE(opened.publication_decision_epoch, 0) AS stewardship_epoch,
         e.decision_epoch AS current_decision_epoch,
         opened.published_at AS opened_at,
-        resolved.published_at AS resolved_at
+        resolved.published_at AS resolved_at,
+        COALESCE(opened.artifact_digest, pg_catalog.decode(pg_catalog.repeat('00', 32), 'hex')) AS artifact_digest,
+        COALESCE(opened_observation.source_boundary_digest, pg_catalog.decode(pg_catalog.repeat('00', 32), 'hex')) AS source_boundary_digest
     FROM mdm_internal.reviews r
     JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
     LEFT JOIN LATERAL (
         SELECT p.published_at, p.definition_version AS publication_definition_version,
+               a.artifact_digest,
                p.decision_epoch AS publication_decision_epoch
         FROM mdm_internal.publications p
+        LEFT JOIN LATERAL (
+            SELECT artifact_digest
+            FROM mdm_internal.definition_artifacts a
+            WHERE a.entity_id = p.entity_id AND a.definition_version = p.definition_version
+            ORDER BY a.artifact_id DESC
+            LIMIT 1
+        ) a ON true
         WHERE p.entity_id = r.entity_id AND p.publication_revision = r.opened_revision
     ) opened ON true
+    LEFT JOIN LATERAL (
+        SELECT o.source_boundary_digest
+        FROM mdm_internal.publication_observations o
+        WHERE o.entity_id = r.entity_id AND o.publication_revision = r.opened_revision
+        ORDER BY o.observed_at
+        LIMIT 1
+    ) opened_observation ON true
     LEFT JOIN LATERAL (
         SELECT p.published_at
         FROM mdm_internal.publications p
@@ -154,6 +191,7 @@ CREATE FUNCTION mdm_admin.backfill_policy_case_opened_at(case_key bigint, opened
 CREATE FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_backfill_policy_case_opened_at_wrapper';
 
 REVOKE ALL ON FUNCTION mdm_internal.persist_recompile(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.policy_case_basis_digest(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.recompile(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(internal) FROM PUBLIC;

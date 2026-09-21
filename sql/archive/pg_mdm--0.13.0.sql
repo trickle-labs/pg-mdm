@@ -680,13 +680,13 @@ CREATE FUNCTION mdm_internal.normalized_levenshtein_score(left_value text, right
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:518
+-- src/api/policy.rs:531
 -- pg_mdm::api::policy::persist_backfill_policy_case_opened_at
 CREATE FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_backfill_policy_case_opened_at_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:483
+-- src/api/policy.rs:496
 -- pg_mdm::api::policy::backfill_policy_case_opened_at
 CREATE FUNCTION mdm_admin.backfill_policy_case_opened_at(case_key bigint, opened_at timestamptz, reason text) RETURNS TABLE (operation_id uuid, action_revision bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'backfill_policy_case_opened_at_wrapper';
 /* </end connected objects> */
@@ -758,9 +758,15 @@ CREATE FUNCTION mdm_internal.persist_recompile(request internal) RETURNS jsonb S
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2853
+-- src/api/refresh.rs:2858
 -- pg_mdm::api::refresh::persist_refresh
 CREATE FUNCTION mdm_internal.persist_refresh(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_refresh_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/policy.rs:485
+-- pg_mdm::api::policy::policy_case_basis_digest
+CREATE FUNCTION mdm_internal.policy_case_basis_digest(basis jsonb) RETURNS bytea IMMUTABLE STRICT PARALLEL SAFE SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'policy_case_basis_digest_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -770,13 +776,13 @@ CREATE FUNCTION mdm_internal.prepare_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:4114
+-- src/api/refresh.rs:4119
 -- pg_mdm::api::refresh::preview_entity
 CREATE FUNCTION mdm_internal.preview_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'preview_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2878
+-- src/api/refresh.rs:2883
 -- pg_mdm::api::refresh::preview
 CREATE FUNCTION mdm.preview(entity_name text, mode text DEFAULT 'validation', options jsonb DEFAULT '{}'::jsonb) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'preview_wrapper';
 /* </end connected objects> */
@@ -788,7 +794,7 @@ CREATE FUNCTION mdm_admin.rebind(entity_name text) RETURNS jsonb LANGUAGE c AS '
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2837
+-- src/api/refresh.rs:2842
 -- pg_mdm::api::refresh::rebuild
 CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';
 /* </end connected objects> */
@@ -800,7 +806,7 @@ CREATE FUNCTION mdm_admin.recompile(entity_name text) RETURNS jsonb LANGUAGE c A
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/refresh.rs:2821
+-- src/api/refresh.rs:2826
 -- pg_mdm::api::refresh::refresh
 CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';
 /* </end connected objects> */
@@ -854,6 +860,7 @@ REVOKE ALL ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, js
 REVOKE ALL ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.evidence_digest(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.policy_case_basis_digest(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.validate_steward_decision_chain() FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_decision(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_golden_override(internal) FROM PUBLIC;

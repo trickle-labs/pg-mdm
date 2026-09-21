@@ -108,6 +108,7 @@ ALTER FUNCTION mdm_admin.drop_entity(text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_admin.rebuild(text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_drop_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_internal.policy_case_basis_digest(jsonb) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.evidence_digest(text) OWNER TO :"helper_owner";
 ALTER SCHEMA mdm_graph OWNER TO :"helper_owner";

@@ -43,6 +43,7 @@ fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql
 docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/incremental_qualification.sql > "$qualification_json"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \

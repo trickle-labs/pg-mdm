@@ -2748,6 +2748,11 @@ fn persist_refresh_inner(
             client.update("UPDATE mdm_internal.entities SET active_version = desired_version, publication_revision = $2 WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into(), revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
         client.update("INSERT INTO mdm_internal.publication_observations (entity_id, publication_revision, decision_epoch, artifact_id, operation_id, graph_refresh_id, source_boundary, source_boundary_digest, node_results) VALUES ($1::pg_catalog.uuid, $2, $3, $4::pg_catalog.uuid, $5::pg_catalog.uuid, $6, $7, $8, $9)", None, &[context.entity_id.clone().into(), publication_revision.into(), context.decision_epoch.into(), context.artifact_id.clone().into(), operation_id.clone().into(), graph.id.into(), JsonB(graph.boundary.clone()).into(), graph.boundary_digest.clone().into(), JsonB(graph.node_results.clone()).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+        let policy_reviews = if changed {
+            next_reviews.clone()
+        } else {
+            load_reviews(client, &context)?
+        };
         project_policy_cases(
             client,
             &context.entity_id,
@@ -2757,7 +2762,7 @@ fn persist_refresh_inner(
             publication_revision,
             context.decision_epoch,
             &graph.boundary_digest,
-            if changed { next_reviews } else { &[] },
+            &policy_reviews,
         )?;
         if delta_admitted {
             finish_delta(client, &mut delta)?;

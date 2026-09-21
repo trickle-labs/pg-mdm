@@ -641,6 +641,7 @@ REVOKE ALL ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, js
 REVOKE ALL ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.evidence_digest(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.policy_case_basis_digest(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.validate_steward_decision_chain() FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_decision(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_golden_override(internal) FROM PUBLIC;
