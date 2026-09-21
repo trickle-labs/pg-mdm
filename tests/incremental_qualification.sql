@@ -136,6 +136,7 @@ DECLARE
 BEGIN
     UPDATE public.incremental_qualification_source
        SET display_name = 'Qualification ' || sample_population || '-' || sample_number,
+           email_address = 'qualification-' || sample_population || '-' || sample_number || '@example.test',
            updated_at = pg_catalog.clock_timestamp()
      WHERE id = 1;
     started := pg_catalog.clock_timestamp();
