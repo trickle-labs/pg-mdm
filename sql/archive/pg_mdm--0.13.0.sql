@@ -650,7 +650,7 @@ CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:182
+-- src/integration.rs:181
 -- pg_mdm::integration::capability_report_sql
 CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb) STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'capability_report_sql_wrapper';
 /* </end connected objects> */
@@ -818,7 +818,7 @@ CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:221
+-- src/integration.rs:220
 -- pg_mdm::integration::require_graph_v1_sql
 CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'require_graph_v1_sql_wrapper';
 /* </end connected objects> */
