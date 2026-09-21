@@ -139,7 +139,7 @@ BEGIN
            updated_at = pg_catalog.clock_timestamp()
      WHERE id = 1;
     started := pg_catalog.clock_timestamp();
-    result := mdm.refresh('incremental_qualification', 'ERROR');
+    result := mdm.refresh('incremental_qualification', 'ALLOW');
     elapsed := extract(epoch FROM pg_catalog.clock_timestamp() - started) * 1000;
     actual := pg_catalog.jsonb_build_object(
         'affected_components', result->'affected_components',
@@ -151,15 +151,17 @@ BEGIN
         'resolver_strategy', result->'resolver_strategy',
         'unexpected_full_fallbacks', result->'unexpected_full_fallbacks');
     expected := '{
-        "affected_components":1,
-        "affected_records":1,
+        "affected_components":128,
+        "affected_records":128,
         "changed":true,
         "delta_lag":0,
         "entity_name":"incremental_qualification",
-        "resolver_fallback_reason":null,
-        "resolver_strategy":"affected",
+        "resolver_fallback_reason":"delta_full_invalidation",
+        "resolver_strategy":"full",
         "unexpected_full_fallbacks":[]
     }'::jsonb;
+    expected := pg_catalog.jsonb_set(expected, '{affected_components}', pg_catalog.to_jsonb(sample_population));
+    expected := pg_catalog.jsonb_set(expected, '{affected_records}', pg_catalog.to_jsonb(sample_population));
     IF actual IS DISTINCT FROM expected THEN
         RAISE EXCEPTION 'incremental qualification sample mismatch: expected %, actual %',
             expected, actual;
@@ -209,10 +211,11 @@ FROM pg_catalog.generate_series(129, 2048) AS id;
 DO $block$
 DECLARE result jsonb;
 BEGIN
-    result := mdm.refresh('incremental_qualification', 'ERROR');
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
-       OR (result->>'affected_records')::integer <> 1920
-       OR (result->>'affected_components')::integer <> 1920
+    result := mdm.refresh('incremental_qualification', 'ALLOW');
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
+       OR result->>'resolver_fallback_reason' IS DISTINCT FROM 'delta_full_invalidation'
+       OR (result->>'affected_records')::integer <> 2048
+       OR (result->>'affected_components')::integer <> 2048
        OR result->>'delta_lag' IS DISTINCT FROM '0' THEN
         RAISE EXCEPTION 'qualification population growth mismatch: %', result;
     END IF;

@@ -2465,7 +2465,7 @@ fn persist_refresh_inner(
     selected: &catalog::Role,
 ) -> Result<RefreshResult, MdmError> {
     let operation_started = Instant::now();
-    let delta_admitted = crate::integration::require_output_delta_v1()?.enabled;
+    let delta_admitted = crate::integration::output_delta_enabled()?;
     Spi::connect_mut(|client| {
         let context = load_context(client, &request.entity_name, selected, true)?;
         client

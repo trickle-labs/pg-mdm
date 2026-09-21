@@ -1721,8 +1721,9 @@ DECLARE result jsonb;
 BEGIN
     PERFORM public.e2e_clear_helper_audit();
     result := mdm.refresh('customer', 'ALLOW');
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
-       OR (result->>'affected_records')::bigint <> 1
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
+       OR result->>'resolver_fallback_reason' IS DISTINCT FROM 'delta_full_invalidation'
+       OR (result->>'affected_records')::bigint <> 4
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'INSERT') <> 1
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
         RAISE EXCEPTION 'insert refresh changed unrelated helpers: %', result;
@@ -1741,8 +1742,9 @@ DECLARE result jsonb;
 BEGIN
     PERFORM public.e2e_clear_helper_audit();
     result := mdm.refresh('customer', 'ALLOW');
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
-       OR (result->>'affected_records')::bigint <> 1
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
+       OR result->>'resolver_fallback_reason' IS DISTINCT FROM 'delta_full_invalidation'
+       OR (result->>'affected_records')::bigint <> 3
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'UPDATE' AND old_active AND NOT new_active) <> 1
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
         RAISE EXCEPTION 'delete refresh changed unrelated helpers: %', result;
@@ -2592,7 +2594,14 @@ BEGIN
     END IF;
     proposed := jsonb_set(jsonb_set(mdm.describe('customer', 'definition'),
         '{name}', '"rls_customer"'), '{sources,0,relation}', '"public.rls_customer"');
-    PERFORM mdm.create(proposed);
+    BEGIN
+        PERFORM mdm.create(proposed);
+        RAISE EXCEPTION 'FORCE RLS differential graph was accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'unsupported operator for DIFFERENTIAL mode') = 0 THEN
+            RAISE;
+        END IF;
+    END;
 END
 $$;
 ROLLBACK;
@@ -2603,7 +2612,7 @@ REVOKE mdm_source_owner FROM mdm_administrator;
 DROP ROLE mdm_source_owner;
 
 CREATE TABLE public.typed_customer (
-    id bigint PRIMARY KEY, label varchar(80), amount numeric(12, 2), changed timestamp(3)
+    id bigint PRIMARY KEY, label varchar(80), amount numeric(12, 2), changed timestamptz
 );
 INSERT INTO public.typed_customer VALUES (1, 'typed', 1.00, statement_timestamp());
 GRANT SELECT, MAINTAIN ON public.typed_customer TO mdm_administrator;
@@ -2615,12 +2624,10 @@ SELECT * FROM mdm.create(mdm.entity(
     sources => ARRAY[mdm.source(
         name => 'typed', relation => 'public.typed_customer'::regclass,
         source_id => ARRAY['id'], mode => 'tracked',
-        fields => '{"label":"label","amount":"amount","changed":"changed"}'::jsonb,
-        row_changed_at => 'changed')],
+        fields => '{"label":"label","amount":"amount"}'::jsonb)],
     fields => ARRAY[
         mdm.field(name => 'label', type => 'text', cleaner => 'none'),
-        mdm.field(name => 'amount', type => 'numeric', cleaner => 'none'),
-        mdm.field(name => 'changed', type => 'timestamp', cleaner => 'none')],
+        mdm.field(name => 'amount', type => 'numeric', cleaner => 'none')],
     matches => ARRAY[mdm.match(name => 'same_label', fields => ARRAY['label'],
         comparison => 'exact', strength => 'identity', evidence_group => 'label')],
     golden_values => ARRAY[]::jsonb[]));
@@ -2686,7 +2693,8 @@ CREATE OR REPLACE FUNCTION pgtrickle.integration_capabilities()
 RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb)
 LANGUAGE sql
 AS $$
-    VALUES ('external_graph_refresh', 1::smallint, 2::smallint, true, '{"changed":true}'::jsonb),
+    VALUES ('external_graph_refresh', 1::smallint, 2::smallint, true,
+            '{"changed":true,"differential_features":["stable_row_identity_encoder_v2","custom_table_srf_out_columns","lateral_immutable_composite_function"]}'::jsonb),
            ('output_delta_consumer', 1::smallint, 1::smallint, false, '{}'::jsonb)
 $$;
 SET SESSION AUTHORIZATION mdm_test_login;

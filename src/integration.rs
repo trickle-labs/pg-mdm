@@ -141,9 +141,8 @@ pub(crate) fn require_graph_v1() -> Result<Capability, MdmError> {
         .ok_or(MdmError::GraphCapabilityDisabled)
 }
 
-pub(crate) fn require_output_delta_v1() -> Result<Capability, MdmError> {
-    admit_output_delta_v1(integration_capabilities()?.output_delta_consumer)?
-        .ok_or(MdmError::CapabilityMissing(DELTA_CAPABILITY))
+pub(crate) fn output_delta_enabled() -> Result<bool, MdmError> {
+    Ok(admit_output_delta_v1(integration_capabilities()?.output_delta_consumer)?.is_some())
 }
 
 fn admit_output_delta_v1(capability: Option<Capability>) -> Result<Option<Capability>, MdmError> {

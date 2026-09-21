@@ -706,7 +706,7 @@ fn persist(
     }
     let capabilities = crate::integration::integration_capabilities()?;
     let graph_enabled = capabilities.external_graph_refresh.enabled;
-    let delta_enabled = crate::integration::require_output_delta_v1()?.enabled;
+    let delta_enabled = crate::integration::output_delta_enabled()?;
     let outcome = JsonB(
         json!({"definition_digest": digest_hex(&prepared.definition_digest), "artifact_digest": digest_hex(&prepared.artifact_digest), "graph_executable": graph_enabled, "capabilities": capabilities}),
     );
