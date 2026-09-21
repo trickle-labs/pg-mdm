@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use crate::catalog;
 use crate::error::MdmError;
 use crate::policy::{
-    IntentArguments, PolicyIntentBody, intent_digest, parse_intent_arguments, validate_reference,
+    IntentArguments, PolicyIntentBody, intent_digest, parse_intent_arguments, queue_is_allowed,
+    validate_reference,
 };
 use crate::source_record::quote_identifier;
 
@@ -271,6 +272,24 @@ fn binding_result(value: Value) -> Result<Uuid, MdmError> {
     )
 }
 
+fn grant_binding_role(client: &mut SpiClient<'_>, principal_role: &str) -> Result<(), MdmError> {
+    let role = quote_identifier(principal_role);
+    for sql in [
+        format!("GRANT USAGE ON SCHEMA mdm_steward TO {role}"),
+        format!(
+            "GRANT SELECT ON TABLE mdm_steward.policy_cases_v1, mdm_steward.policy_receipts_v1 TO {role}"
+        ),
+        format!(
+            "GRANT EXECUTE ON FUNCTION mdm_steward.submit_policy_intent(uuid, bytea, bigint, text, jsonb, bigint, bigint, bigint, bigint, bytea, bigint, bytea, text, text, text) TO {role}"
+        ),
+    ] {
+        client
+            .update(&sql, None, &[])
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+    }
+    Ok(())
+}
+
 fn register_binding(request: &BindingRequest) -> Result<Value, MdmError> {
     validate_actions(&request.allowed_actions)?;
     if request.policy_digest.len() != 32 {
@@ -327,20 +346,7 @@ fn register_binding(request: &BindingRequest) -> Result<Value, MdmError> {
                 &[binding_id.clone().into(), database_oid.into(), principal_oid.into()],
             )
             .map_err(|error| MdmError::Spi(error.to_string()))?;
-        let role = quote_identifier(&request.principal_role);
-        for sql in [
-            format!("GRANT USAGE ON SCHEMA mdm_steward TO {role}"),
-            format!(
-                "GRANT SELECT ON TABLE mdm_steward.policy_cases_v1, mdm_steward.policy_receipts_v1 TO {role}"
-            ),
-            format!(
-                "GRANT EXECUTE ON FUNCTION mdm_steward.submit_policy_intent(uuid, bytea, bigint, text, jsonb, bigint, bigint, bigint, bigint, bytea, bigint, bytea, text, text, text) TO {role}"
-            ),
-        ] {
-            client
-                .update(&sql, None, &[])
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-        }
+        grant_binding_role(client, &request.principal_role)?;
         operation(
             client,
             "policy_binding_register",
@@ -588,6 +594,7 @@ pub(crate) fn persist_replace_policy_binding(request: Internal) -> JsonB {
                     &[new_id.clone().into(), database_oid.into(), principal_oid.into()],
                 )
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
+            grant_binding_role(client, &request.principal_role)?;
             operation(
                 client,
                 "policy_binding_replace",
@@ -1017,6 +1024,10 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
             .get::<Vec<String>>(3)
             .map_err(|error| MdmError::Spi(error.to_string()))?
             .unwrap_or_default();
+        let allowed_queues = binding
+            .get::<Vec<String>>(4)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .unwrap_or_default();
         let max_due_interval = binding
             .get::<String>(5)
             .map_err(|error| MdmError::Spi(error.to_string()))?;
@@ -1211,6 +1222,14 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
         }
         let (next_queue, next_due, next_level) = match parsed_arguments {
             IntentArguments::AssignQueue(queue) => {
+                if !queue_is_allowed(&queue, &allowed_queues) {
+                    return output_receipt(finish!(
+                        "ACTION_DENIED",
+                        "QUEUE_NOT_ALLOWED",
+                        action_revision,
+                        current_control,
+                    )?);
+                }
                 if protected {
                     return output_receipt(finish!(
                         "MANUAL_PROTECTION",

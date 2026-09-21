@@ -4,7 +4,7 @@ mod policy;
 use policy::{
     IntentArguments, PolicyActionTuple, PolicyCaseBasis, PolicyIntentBody, PolicySubject,
     basis_canonical_json, basis_digest, intent_canonical_json, intent_digest, next_action_revision,
-    parse_intent_arguments, validate_reference,
+    parse_intent_arguments, queue_is_allowed, validate_reference,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -127,4 +127,13 @@ fn intent_matches_signed_fixture_bytes_and_digest() {
         Ok(IntentArguments::AssignQueue("priority".into()))
     );
     assert!(validate_reference("work-1", "work_ref").is_ok());
+    assert!(queue_is_allowed(
+        "priority",
+        &["priority".to_owned(), "standard".to_owned()]
+    ));
+    assert!(!queue_is_allowed(
+        "blocked",
+        &["priority".to_owned(), "standard".to_owned()]
+    ));
+    assert!(queue_is_allowed("priority", &[]));
 }

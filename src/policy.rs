@@ -156,6 +156,10 @@ pub(crate) fn parse_intent_arguments(
     }
 }
 
+pub(crate) fn queue_is_allowed(queue: &str, allowed_queues: &[String]) -> bool {
+    allowed_queues.is_empty() || allowed_queues.iter().any(|allowed| allowed == queue)
+}
+
 pub(crate) fn intent_canonical_json(body: &PolicyIntentBody) -> Vec<u8> {
     serde_json::to_vec(&serde_json::to_value(body).expect("policy intent is serializable"))
         .expect("policy intent JSON is serializable")
