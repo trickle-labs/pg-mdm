@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.0
+
+- Add bound policy intents for queue assignment, due dates, and escalation.
+- Record immutable, idempotent policy receipts with fail-closed freshness checks.
+- Add binding pause/replacement and human control APIs with manual assignment protection.
+- Add the 0.13.0 to 0.14.0 upgrade path.
+
 ## 0.13.0
 
 - Stop unchanged refreshes from rewriting helper rows.
