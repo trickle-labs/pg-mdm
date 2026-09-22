@@ -327,6 +327,11 @@ SELECT :original_operations::bigint AS original_operations,
        :original_policy_max::bigint AS original_policy_max,
        :'original_policy_digest'::text AS original_policy_digest,
        :'restore_issue_key'::text AS restore_issue_key;
+CREATE TEMP TABLE e2e_restore_policy_snapshot AS
+SELECT c.case_key, pg_catalog.to_jsonb(c) - 'last_observed_at' AS state
+FROM mdm_steward.policy_cases_v1 c
+WHERE c.entity_name = 'policy_qualification'
+  AND c.case_key <= :original_policy_max;
 UPDATE public.policy_qualification_source
 SET email_address = 'restore-pair@example.test', updated_at = statement_timestamp()
 WHERE id = 202;
@@ -361,7 +366,7 @@ SELECT :original_operations::bigint AS original_operations,
        :'original_policy_digest'::text AS original_policy_digest,
        :'restore_issue_key'::text AS restore_issue_key;
 DO $$
-DECLARE new_case record; old_case record; opening_at timestamptz;
+DECLARE new_case record; old_case record; opening_at timestamptz; changed_rows jsonb;
 BEGIN
     SELECT c.case_key, c.review_id, c.issue_key, c.occurrence, c.opened_at,
            c.opened_at_source, c.action_revision, c.status, r.opened_revision
@@ -396,12 +401,17 @@ BEGIN
        OR new_case.opened_at IS DISTINCT FROM opening_at THEN
         RAISE EXCEPTION 'post-restore recurrence changed identity or opening time: old %, new %', old_case, new_case;
     END IF;
-    IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
-                     FROM mdm_steward.policy_cases_v1 c
-                     WHERE c.entity_name = 'policy_qualification'
-                       AND c.case_key <= (SELECT original_policy_max FROM e2e_restore_vars)), '[]'::jsonb)::text)
-           <> (SELECT original_policy_digest FROM e2e_restore_vars) THEN
-        RAISE EXCEPTION 'restored policy rows changed while publishing the new recurrence';
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+               'case_key', c.case_key,
+               'before', s.state,
+               'after', pg_catalog.to_jsonb(c) - 'last_observed_at')
+           ORDER BY c.case_key)
+    INTO changed_rows
+    FROM mdm_steward.policy_cases_v1 c
+    JOIN e2e_restore_policy_snapshot s USING (case_key)
+    WHERE pg_catalog.to_jsonb(c) - 'last_observed_at' IS DISTINCT FROM s.state;
+    IF changed_rows IS NOT NULL THEN
+        RAISE EXCEPTION 'restored policy rows changed while publishing the new recurrence: %', changed_rows;
     END IF;
 END
 $$;
