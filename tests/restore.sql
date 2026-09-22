@@ -210,7 +210,7 @@ $$;
 
 GRANT USAGE ON SCHEMA public, mdm, mdm_admin, mdm_steward TO mdm_legacy_administrator;
 GRANT SELECT, MAINTAIN ON public.policy_qualification_source TO mdm_legacy_administrator;
-GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text), mdm_admin.recompile(text), mdm_admin.rebuild(text), mdm.refresh(text, text),
+GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text), mdm_admin.recompile(text), mdm_admin.rebuild(text, text), mdm.refresh(text, text),
     mdm_admin.verify_installation(),
     mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text)
     TO mdm_legacy_administrator;
