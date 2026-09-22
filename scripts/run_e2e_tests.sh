@@ -958,15 +958,21 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v helper_owner=mdm_helper_owner -f /sql/configure_helper.sql >/dev/null
 restored_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d restored -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
 test "$original_policy_digest" = "$restored_policy_digest"
+restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
+if [[ "$original_artifacts" != "$restored_artifacts" ]]; then
+    echo 'FAIL: definition artifacts changed during logical restore' >&2
+    exit 1
+fi
+restored_source_identities=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$source_identity_query")
+if [[ "$original_source_identities" != "$restored_source_identities" ]]; then
+    echo 'FAIL: source identities or records changed during logical restore' >&2
+    exit 1
+fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v original_source_oid="$original_source_oid" -v original_role_oid="$original_role_oid" \
     -v original_operations="$original_operations" -v original_policy_digest="$original_policy_digest" \
     -v original_policy_max="$original_policy_max" -v restore_issue_key="$restore_issue_key" \
     -f /tests/restore.sql
-restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
-test "$original_artifacts" = "$restored_artifacts"
-restored_source_identities=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$source_identity_query")
-test "$original_source_identities" = "$restored_source_identities"
 
 docker exec "$container" createdb -U postgres --template=restored pg_mdm_clone
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d pg_mdm_clone <<'SQL'
