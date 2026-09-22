@@ -103,10 +103,10 @@ fn graph_contract_stale(
         return Ok(true);
     }
     let current = match client.select(
-            "SELECT contract_version, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
-            Some(1),
-            &[relation.into()],
-        ) {
+        "SELECT contract_version, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+        Some(1),
+        &[relation.into()],
+    ) {
         Ok(rows) => rows,
         Err(_) => return Ok(true),
     };
