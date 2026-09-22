@@ -931,7 +931,6 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
         SET ROLE mdm_helper_owner;
         REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         RESET ROLE;
-        ALTER FUNCTION mdm_admin.rebuild(text, text) OWNER TO mdm_helper_owner;
         DROP OWNED BY mdm_administrator;
         DROP ROLE mdm_administrator;
         CREATE ROLE mdm_administrator NOLOGIN NOSUPERUSER NOBYPASSRLS;

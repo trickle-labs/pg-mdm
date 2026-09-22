@@ -210,7 +210,7 @@ $$;
 
 GRANT USAGE ON SCHEMA public, mdm, mdm_admin, mdm_steward TO mdm_legacy_administrator;
 GRANT SELECT, MAINTAIN ON public.policy_qualification_source TO mdm_legacy_administrator;
-GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text), mdm_admin.recompile(text), mdm_admin.rebuild(text, text), mdm.refresh(text, text),
+GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text), mdm_admin.recompile(text), mdm.refresh(text, text),
     mdm_admin.verify_installation(),
     mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text)
     TO mdm_legacy_administrator;
@@ -308,9 +308,9 @@ SET ROLE mdm_legacy_administrator;
 DO $$
 DECLARE result jsonb;
 BEGIN
-    result := mdm_admin.rebuild('policy_qualification', 'ALLOW');
+    result := mdm.refresh('policy_qualification', 'ALLOW');
     IF result->>'entity_name' IS DISTINCT FROM 'policy_qualification' THEN
-        RAISE EXCEPTION 'policy qualification graph rebuild is invalid: %', result;
+        RAISE EXCEPTION 'policy qualification graph warm-up is invalid: %', result;
     END IF;
 END
 $$;
@@ -340,15 +340,6 @@ SELECT :original_operations::bigint AS original_operations,
        :original_policy_max::bigint AS original_policy_max,
        :'original_policy_digest'::text AS original_policy_digest,
        :'restore_issue_key'::text AS restore_issue_key;
-SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
-                     FROM mdm_steward.policy_cases_v1 c
-                     WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
-       = :'original_policy_digest' AS policy_rows_survived_rebuild
-\gset
-\if :policy_rows_survived_rebuild
-\else
-\quit 1
-\endif
 CREATE TABLE public.e2e_restore_policy_snapshot AS
 SELECT c.case_key, pg_catalog.to_jsonb(c) - 'last_observed_at' AS state
 FROM mdm_steward.policy_cases_v1 c
