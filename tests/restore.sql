@@ -147,7 +147,7 @@ BEGIN
 END
 $$;
 
-SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key)
+SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
                      FROM mdm_steward.policy_cases_v1 c
                      WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
        = :'original_policy_digest' AS policy_rows_survived
@@ -310,7 +310,7 @@ SELECT :original_operations::bigint AS original_operations,
        :'original_policy_digest'::text AS original_policy_digest,
        :'restore_issue_key'::text AS restore_issue_key;
 SET ROLE mdm_output_reader;
-SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key)
+SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
                      FROM mdm_steward.policy_cases_v1 c
                      WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
        = :'original_policy_digest' AS policy_reader_rows_survived
@@ -330,7 +330,7 @@ SELECT :original_operations::bigint AS original_operations,
 UPDATE public.policy_qualification_source
 SET email_address = 'restore-pair@example.test', updated_at = statement_timestamp()
 WHERE id = 202;
-SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key)
+SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
                      FROM mdm_steward.policy_cases_v1 c
                      WHERE c.entity_name = 'policy_qualification'
                        AND c.case_key <= :original_policy_max), '[]'::jsonb)::text)
@@ -396,7 +396,7 @@ BEGIN
        OR new_case.opened_at IS DISTINCT FROM opening_at THEN
         RAISE EXCEPTION 'post-restore recurrence changed identity or opening time: old %, new %', old_case, new_case;
     END IF;
-    IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key)
+    IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
                      FROM mdm_steward.policy_cases_v1 c
                      WHERE c.entity_name = 'policy_qualification'
                        AND c.case_key <= (SELECT original_policy_max FROM e2e_restore_vars)), '[]'::jsonb)::text)

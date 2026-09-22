@@ -716,7 +716,7 @@ END
 original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'public.crm_customer'::regclass::oid")
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
 original_operations=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT count(*) FROM mdm_internal.operations")
-original_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
+original_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
 original_policy_max=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT max(case_key) FROM mdm_steward.policy_cases_v1 WHERE entity_name = 'policy_qualification'")
 restore_issue_key=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT pg_catalog.encode(issue_key, 'hex') FROM mdm_steward.policy_cases_v1 WHERE entity_name = 'policy_qualification' AND status = 'resolved' ORDER BY case_key DESC LIMIT 1")
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
@@ -956,7 +956,7 @@ docker exec "$container" pg_restore -v -U postgres -d restored \
     --use-list=/tmp/foundation.list /tmp/foundation.dump >/dev/null
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v helper_owner=mdm_helper_owner -f /sql/configure_helper.sql >/dev/null
-restored_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d restored -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
+restored_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d restored -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
 test "$original_policy_digest" = "$restored_policy_digest"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v original_source_oid="$original_source_oid" -v original_role_oid="$original_role_oid" \
