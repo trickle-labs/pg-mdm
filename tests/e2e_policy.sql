@@ -283,7 +283,8 @@ INSERT INTO public.policy_qualification_source VALUES
     (101, 'Known One', 'known-one@example.test', statement_timestamp()),
     (102, 'Known One', 'known-pair@example.test', statement_timestamp()),
     (103, 'Known Two', 'known-two@example.test', statement_timestamp()),
-    (104, 'Known Two', 'known-pair@example.test', statement_timestamp());
+    (104, 'Known Two', 'known-pair@example.test', statement_timestamp()),
+    (105, 'Publication One', 'publication-one@example.test', statement_timestamp());
 \connect foundation mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
 DO $$
@@ -356,8 +357,8 @@ WHERE c.case_key = :known_case_key;
 REVOKE ALL ON public.e2e_policy_lifecycle_snapshot FROM PUBLIC;
 
 UPDATE public.policy_qualification_source
-SET display_name = 'Known One Updated', updated_at = statement_timestamp()
-WHERE id = 101;
+SET display_name = 'Publication One Updated', updated_at = statement_timestamp()
+WHERE id = 105;
 \connect foundation mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
 DO $$
