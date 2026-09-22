@@ -304,6 +304,12 @@ END
 $$;
 RESET ROLE;
 
+\connect restored postgres
+CREATE TABLE public.e2e_restore_warmup_snapshot AS
+SELECT c.case_key, pg_catalog.to_jsonb(c) - 'last_observed_at' AS state
+FROM mdm_steward.policy_cases_v1 c
+WHERE c.entity_name = 'policy_qualification';
+
 \connect restored mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
 DO $$
@@ -318,6 +324,24 @@ $$;
 RESET ROLE;
 
 \connect restored postgres
+DO $$
+DECLARE changed_rows jsonb;
+BEGIN
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+               'case_key', c.case_key,
+               'before', s.state,
+               'after', pg_catalog.to_jsonb(c) - 'last_observed_at')
+           ORDER BY c.case_key)
+    INTO changed_rows
+    FROM mdm_steward.policy_cases_v1 c
+    JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
+    WHERE pg_catalog.to_jsonb(c) - 'last_observed_at' IS DISTINCT FROM s.state;
+    IF changed_rows IS NOT NULL THEN
+        RAISE EXCEPTION 'graph warm-up changed restored policy rows: %', changed_rows;
+    END IF;
+END
+$$;
+DROP TABLE public.e2e_restore_warmup_snapshot;
 CREATE TEMP TABLE e2e_restore_vars AS
 SELECT :original_operations::bigint AS original_operations,
        :original_policy_max::bigint AS original_policy_max,
