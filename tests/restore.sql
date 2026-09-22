@@ -327,7 +327,7 @@ SELECT :original_operations::bigint AS original_operations,
        :original_policy_max::bigint AS original_policy_max,
        :'original_policy_digest'::text AS original_policy_digest,
        :'restore_issue_key'::text AS restore_issue_key;
-CREATE TEMP TABLE e2e_restore_policy_snapshot AS
+CREATE TABLE public.e2e_restore_policy_snapshot AS
 SELECT c.case_key, pg_catalog.to_jsonb(c) - 'last_observed_at' AS state
 FROM mdm_steward.policy_cases_v1 c
 WHERE c.entity_name = 'policy_qualification'
@@ -408,13 +408,14 @@ BEGIN
            ORDER BY c.case_key)
     INTO changed_rows
     FROM mdm_steward.policy_cases_v1 c
-    JOIN e2e_restore_policy_snapshot s USING (case_key)
+    JOIN public.e2e_restore_policy_snapshot s USING (case_key)
     WHERE pg_catalog.to_jsonb(c) - 'last_observed_at' IS DISTINCT FROM s.state;
     IF changed_rows IS NOT NULL THEN
         RAISE EXCEPTION 'restored policy rows changed while publishing the new recurrence: %', changed_rows;
     END IF;
 END
 $$;
+DROP TABLE public.e2e_restore_policy_snapshot;
 
 \connect restored mdm_test_login
 SET ROLE mdm_administrator;
