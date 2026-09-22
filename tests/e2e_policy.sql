@@ -522,10 +522,6 @@ $$;
 
 
 \connect foundation postgres
-INSERT INTO public.policy_qualification_source
-VALUES (202, 'Restore One', 'restore-unique@example.test', statement_timestamp());
-
-\connect foundation postgres
 DO $$
 BEGIN
     IF (SELECT status FROM mdm_steward.policy_cases_v1
