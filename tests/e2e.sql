@@ -1,5 +1,10 @@
 \set ON_ERROR_STOP on
 
+\connect postgres postgres
+CREATE ROLE mdm_legacy_helper NOLOGIN NOSUPERUSER NOBYPASSRLS;
+CREATE ROLE mdm_legacy_administrator NOLOGIN NOSUPERUSER NOBYPASSRLS;
+CREATE ROLE mdm_legacy_login LOGIN NOSUPERUSER NOBYPASSRLS;
+GRANT mdm_legacy_administrator TO mdm_legacy_login WITH SET TRUE, INHERIT FALSE;
 CREATE DATABASE foundation;
 \connect foundation postgres
 CREATE EXTENSION pg_trickle VERSION '0.105.1';
@@ -36,6 +41,239 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.11.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
+
+CREATE TABLE public.policy_qualification_source (
+    id bigint PRIMARY KEY,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+GRANT USAGE ON SCHEMA public TO mdm_legacy_administrator;
+GRANT SELECT, MAINTAIN ON public.policy_qualification_source TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA mdm, mdm_admin TO mdm_legacy_administrator;
+GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA pgtrickle TO mdm_legacy_administrator;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_legacy_administrator;
+GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA pgtrickle_changes TO mdm_legacy_administrator;
+GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle_changes TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA pgtrickle_changes TO mdm_legacy_helper;
+GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle_changes TO mdm_legacy_helper;
+ALTER DEFAULT PRIVILEGES FOR ROLE mdm_legacy_administrator IN SCHEMA pgtrickle_changes
+GRANT SELECT ON TABLES TO mdm_legacy_administrator, mdm_legacy_helper;
+ALTER DEFAULT PRIVILEGES FOR ROLE mdm_legacy_helper IN SCHEMA pgtrickle_changes
+GRANT SELECT ON TABLES TO mdm_legacy_administrator, mdm_legacy_helper;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA pgtrickle_changes
+GRANT SELECT ON TABLES TO mdm_legacy_administrator, mdm_legacy_helper;
+GRANT USAGE ON SCHEMA mdm_internal, mdm_graph, mdm_steward
+TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA mdm_steward TO mdm_legacy_helper;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mdm_steward
+TO mdm_legacy_administrator, mdm_legacy_helper;
+GRANT EXECUTE ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, jsonb) TO mdm_legacy_administrator;
+GRANT EXECUTE ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) TO mdm_legacy_administrator;
+GRANT EXECUTE ON FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) TO mdm_legacy_administrator;
+GRANT EXECUTE ON FUNCTION mdm_internal.evidence_digest(text) TO mdm_legacy_administrator;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mdm_graph TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_graph TO mdm_legacy_helper;
+GRANT USAGE, CREATE ON SCHEMA mdm_out TO mdm_legacy_helper;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mdm_graph TO mdm_legacy_helper;
+GRANT USAGE ON SCHEMA pgtrickle TO mdm_legacy_helper;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_legacy_helper;
+GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle TO mdm_legacy_helper;
+-- The current extension library needs this v0.13 catalog relation while constructing the v0.12 fixture.
+CREATE TABLE mdm_internal.graph_delta_consumers (
+    graph_binding_id uuid NOT NULL,
+    logical_id text NOT NULL,
+    consumer_id uuid NOT NULL UNIQUE,
+    delta_relation_name text NOT NULL,
+    row_identity_version smallint NOT NULL CHECK (row_identity_version > 0),
+    PRIMARY KEY (graph_binding_id, logical_id),
+    FOREIGN KEY (graph_binding_id, logical_id)
+        REFERENCES mdm_internal.graph_members(graph_binding_id, logical_id)
+);
+CREATE SEQUENCE mdm_internal.policy_case_key_seq AS bigint START WITH 1;
+CREATE TABLE mdm_steward.policy_cases_v1 (
+    case_key bigint PRIMARY KEY CHECK (case_key > 0),
+    review_id uuid NOT NULL UNIQUE REFERENCES mdm_internal.reviews(review_id),
+    entity_name pg_catalog.name NOT NULL,
+    issue_key bytea NOT NULL CHECK (octet_length(issue_key) = 32),
+    occurrence integer NOT NULL CHECK (occurrence > 0),
+    status text NOT NULL CHECK (status IN ('open', 'resolved')),
+    severity text NOT NULL,
+    reason_code text NOT NULL,
+    approved_metadata jsonb NOT NULL,
+    permitted_actions text[] NOT NULL,
+    assigned_queue pg_catalog.name,
+    due_at timestamptz,
+    escalation_level integer NOT NULL CHECK (escalation_level >= 0),
+    manual_assignment_protected boolean NOT NULL,
+    opened_at timestamptz,
+    opened_at_source text NOT NULL CHECK (opened_at_source IN ('publication', 'administrator', 'unknown')),
+    resolved_at timestamptz,
+    review_version bigint NOT NULL CHECK (review_version > 0),
+    definition_version bigint NOT NULL CHECK (definition_version > 0),
+    publication_revision bigint NOT NULL CHECK (publication_revision >= 0),
+    stewardship_epoch bigint NOT NULL CHECK (stewardship_epoch >= 0),
+    evidence_basis_digest bytea NOT NULL CHECK (octet_length(evidence_basis_digest) = 32),
+    action_revision bigint NOT NULL CHECK (action_revision > 0),
+    pending_stewardship boolean NOT NULL,
+    last_observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    UNIQUE (entity_name, issue_key, occurrence),
+    CHECK (
+        permitted_actions = '{}'::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'ESCALATE']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['ASSIGN_QUEUE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['ESCALATE']::text[]
+        OR permitted_actions = ARRAY['ESCALATE', 'SET_DUE_AT']::text[]
+        OR permitted_actions = ARRAY['SET_DUE_AT']::text[]
+    ),
+    CHECK ((status = 'resolved') = (cardinality(permitted_actions) = 0))
+);
+GRANT USAGE, SELECT ON SEQUENCE mdm_internal.policy_case_key_seq
+TO mdm_legacy_administrator, mdm_legacy_helper;
+GRANT SELECT, INSERT, UPDATE, DELETE ON mdm_steward.policy_cases_v1
+TO mdm_legacy_administrator, mdm_legacy_helper;
+ALTER SCHEMA mdm_graph OWNER TO mdm_legacy_helper;
+DO $$
+DECLARE object record;
+BEGIN
+    FOR object IN
+        SELECT c.oid::pg_catalog.regclass AS relation, c.relkind
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname IN ('mdm_internal', 'mdm_graph')
+          AND c.relkind IN ('r', 'S')
+    LOOP
+        EXECUTE pg_catalog.format(
+            'ALTER %s %s OWNER TO mdm_legacy_helper',
+            CASE object.relkind WHEN 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+            object.relation
+        );
+    END LOOP;
+    FOR object IN
+        SELECT p.oid::pg_catalog.regprocedure AS procedure
+        FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname IN ('mdm_admin', 'mdm_internal')
+          AND p.prosecdef
+    LOOP
+        EXECUTE pg_catalog.format('ALTER FUNCTION %s OWNER TO mdm_legacy_helper', object.procedure);
+    END LOOP;
+END
+$$;
+
+\connect foundation mdm_legacy_login
+SET ROLE mdm_legacy_administrator;
+WITH proposed AS (
+    SELECT mdm.entity(
+        name => 'policy_qualification',
+        sources => ARRAY[mdm.source(
+            name => 'policy',
+            relation => 'public.policy_qualification_source'::regclass,
+            source_id => ARRAY['id'],
+            mode => 'tracked',
+            fields => jsonb_build_object('name', 'display_name', 'email', 'email_address'),
+            row_changed_at => 'updated_at')],
+        fields => ARRAY[
+            mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
+            mdm.field(name => 'email', type => 'text', cleaner => 'email')],
+        matches => ARRAY[
+            mdm.match(
+                name => 'same_name', fields => ARRAY['name'], comparison => 'exact',
+                strength => 'identity', evidence_group => 'name',
+                candidate => jsonb_build_object('kind', 'exact', 'field', 'name')),
+            mdm.match(
+                name => 'same_email', fields => ARRAY['email'], comparison => 'exact',
+                strength => 'strong', evidence_group => 'email',
+                candidate => jsonb_build_object('kind', 'exact', 'field', 'email'))],
+        golden_values => ARRAY[mdm.golden_value(
+            field => 'name', policy => 'prefer_source', sources => ARRAY['policy'])],
+        execution_role => 'mdm_legacy_administrator') AS definition
+)
+SELECT * FROM mdm.create((SELECT definition FROM proposed), NULL, 'pg-react policy qualification legacy fixture');
+GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle_changes
+TO mdm_legacy_administrator, mdm_legacy_helper;
+
+\connect foundation postgres
+INSERT INTO public.policy_qualification_source VALUES
+    (1, 'Legacy A', 'legacy-cross-a@example.test', statement_timestamp()),
+    (2, 'Legacy A', 'legacy-a-2@example.test', statement_timestamp()),
+    (3, 'Legacy B', 'legacy-cross-a@example.test', statement_timestamp()),
+    (4, 'Legacy B', 'legacy-b-2@example.test', statement_timestamp()),
+    (5, 'Legacy C', 'legacy-cross-b@example.test', statement_timestamp()),
+    (6, 'Legacy C', 'legacy-c-2@example.test', statement_timestamp()),
+    (7, 'Legacy D', 'legacy-cross-b@example.test', statement_timestamp()),
+    (8, 'Legacy D', 'legacy-d-2@example.test', statement_timestamp());
+
+\connect foundation mdm_legacy_login
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('policy_qualification', 'ALLOW');
+    IF result->>'changed' IS DISTINCT FROM 'true'
+       OR (result->>'publication_revision')::bigint <> 1 THEN
+        RAISE EXCEPTION 'legacy policy fixture did not publish: %', result;
+    END IF;
+END
+$$;
+
+\connect foundation postgres
+UPDATE public.policy_qualification_source
+SET display_name = CASE id
+        WHEN 1 THEN 'Legacy A Updated'
+        WHEN 2 THEN 'Legacy A Updated'
+    END,
+    updated_at = statement_timestamp() + interval '2 seconds'
+WHERE id IN (1, 2);
+\connect foundation mdm_legacy_login
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('policy_qualification', 'ALLOW');
+    IF result->>'changed' IS DISTINCT FROM 'true'
+       OR (result->>'publication_revision')::bigint <> 2 THEN
+        RAISE EXCEPTION 'legacy policy fixture observation did not publish: %', result;
+    END IF;
+END
+$$;
+
+\connect foundation postgres
+-- Legacy fixture only: model a v0.12 retention gap by removing unavailable opening evidence before the v0.13 upgrade.
+DELETE FROM mdm_internal.golden_provenance
+ WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'policy_qualification')
+   AND publication_revision = 1;
+DELETE FROM mdm_internal.resolution_facts
+ WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'policy_qualification')
+   AND publication_revision = 1;
+DELETE FROM mdm_internal.publication_observations
+ WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'policy_qualification')
+   AND publication_revision = 1;
+DELETE FROM mdm_internal.publications
+ WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'policy_qualification')
+   AND publication_revision = 1;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM mdm_internal.reviews r
+        JOIN mdm_internal.entities e USING (entity_id)
+        WHERE e.entity_name = 'policy_qualification') <> 2
+       OR EXISTS (SELECT 1 FROM mdm_internal.publications p
+                  JOIN mdm_internal.entities e USING (entity_id)
+                  WHERE e.entity_name = 'policy_qualification' AND p.publication_revision = 1)
+       OR (SELECT count(*) FROM mdm_internal.publications p
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'policy_qualification' AND p.publication_revision = 2) <> 1 THEN
+        RAISE EXCEPTION 'legacy policy fixture did not preserve the intended missing opening publication';
+    END IF;
+END
+$$;
+DROP TABLE mdm_internal.graph_delta_consumers;
+DROP TABLE mdm_steward.policy_cases_v1;
+DROP SEQUENCE mdm_internal.policy_case_key_seq;
 ALTER EXTENSION pg_mdm UPDATE TO '0.13.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.14.0';
 DO $$
@@ -264,7 +502,8 @@ CREATE ROLE mdm_explanation_reader NOLOGIN NOSUPERUSER NOBYPASSRLS;
 CREATE ROLE mdm_bypass NOLOGIN NOSUPERUSER BYPASSRLS;
 CREATE ROLE mdm_test_login LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT mdm_administrator, mdm_configurator, mdm_steward_role, mdm_output_reader,
-      mdm_explanation_reader, mdm_bypass TO mdm_test_login WITH SET TRUE, INHERIT FALSE;
+      mdm_explanation_reader, mdm_bypass, mdm_legacy_administrator
+TO mdm_test_login WITH SET TRUE, INHERIT FALSE;
 GRANT USAGE ON SCHEMA mdm_admin TO mdm_administrator;
 GRANT USAGE ON SCHEMA mdm TO mdm_administrator;
 GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO mdm_administrator;
@@ -979,6 +1218,44 @@ SELECT NOT has_schema_privilege('mdm_configurator', 'mdm_internal', 'USAGE') AS 
 \quit 1
 \endif
 
+GRANT EXECUTE ON FUNCTION mdm_admin.recompile(text), mdm_admin.rebind(text)
+TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA mdm_out TO mdm_legacy_administrator, mdm_legacy_helper;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+    mdm_out.policy_qualification,
+    mdm_out.policy_qualification_members,
+    mdm_out.policy_qualification_review
+TO mdm_legacy_administrator, mdm_legacy_helper;
+\connect foundation mdm_legacy_login
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm_admin.recompile('policy_qualification');
+    IF result->>'entity_name' IS DISTINCT FROM 'policy_qualification'
+       OR result->>'graph_recompiled' IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'legacy policy qualification recompile is invalid: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm_admin.rebind('policy_qualification');
+    IF result->>'entity_name' IS DISTINCT FROM 'policy_qualification'
+       OR result->>'rebound_sources' IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'legacy policy qualification rebind is invalid: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+
 CREATE SCHEMA attacker AUTHORIZATION mdm_test_login;
 
 \connect foundation mdm_test_login
@@ -1412,12 +1689,17 @@ BEGIN
     IF definition_count <> 3 OR artifact_count <> 3 THEN
         RAISE EXCEPTION 'unexpected definition history: % / %', definition_count, artifact_count;
     END IF;
-    IF (SELECT count(DISTINCT definition_digest) FROM mdm_internal.definitions) <> 2 THEN
+    IF (SELECT count(DISTINCT d.definition_digest)
+        FROM mdm_internal.definitions d
+        JOIN mdm_internal.entities e USING (entity_id)
+        WHERE e.entity_name = 'customer') <> 2 THEN
         RAISE EXCEPTION 'A to B to A did not preserve definition identity';
     END IF;
-    IF (SELECT count(*) FROM mdm_internal.operations) <> 5
-       OR (SELECT count(*) FROM mdm_internal.operations
-           WHERE operation_kind = 'create' AND status = 'succeeded'
+    IF (SELECT count(*) FROM mdm_internal.operations
+        WHERE entity_name = 'customer') <> 5
+        OR (SELECT count(*) FROM mdm_internal.operations
+           WHERE entity_name = 'customer'
+             AND operation_kind = 'create' AND status = 'succeeded'
              AND actor_name = 'mdm_test_login' AND actor_role_name = 'mdm_administrator') <> 5 THEN
         RAISE EXCEPTION 'unexpected operation count after v0.2 create';
     END IF;

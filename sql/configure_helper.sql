@@ -28,6 +28,16 @@ WHERE rolname = :'helper_owner'
 BEGIN;
 GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_steward, mdm_graph TO :"helper_owner";
 GRANT USAGE, CREATE ON SCHEMA mdm_out TO :"helper_owner";
+SELECT pg_catalog.format(
+    'ALTER TABLE %I.%I OWNER TO %I',
+    n.nspname,
+    c.relname,
+    :'helper_owner'
+)
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = 'mdm_out' AND c.relkind = 'r';
+\gexec
 GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
 SELECT pg_catalog.format(
     'GRANT USAGE ON SCHEMA %I TO %I',
@@ -58,6 +68,7 @@ GRANT EXECUTE ON FUNCTION pgtrickle.graph_contract(regclass[]) TO :"helper_owner
 GRANT EXECUTE ON FUNCTION pgtrickle.refresh_graph_strict(regclass[], bytea, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.register_output_delta_consumer(oid, text, bytea, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.output_delta_consumer_status() TO :"helper_owner";
+GRANT SELECT ON pgtrickle.stream_tables_info TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.output_delta_batches(uuid, bigint) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.ack_output_delta(uuid, bigint, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.begin_output_delta_resnapshot(uuid) TO :"helper_owner";

@@ -48,6 +48,85 @@ struct RecompileRequest {
     version: i64,
 }
 
+fn stable_graph_contract(contract: &Value) -> Value {
+    let mut stable = contract.clone();
+    if let Some(object) = stable.as_object_mut() {
+        object.remove("graph_digest");
+    }
+    if let Some(members) = stable.get_mut("members").and_then(Value::as_array_mut) {
+        for member in members {
+            if let Some(member) = member.as_object_mut() {
+                member.remove("contract_generation");
+            }
+        }
+    }
+    stable
+}
+
+fn graph_contract_stale(
+    client: &SpiClient<'_>,
+    entity_id: &str,
+    definition_version: i64,
+) -> Result<bool, MdmError> {
+    let binding = client
+        .select(
+            "SELECT b.graph_contract, gm.relation_name FROM mdm_internal.graph_bindings b JOIN mdm_internal.graph_members gm ON gm.graph_binding_id = b.graph_binding_id AND gm.relation_oid = ANY(b.root_relation_oids) WHERE b.entity_id = $1::pg_catalog.uuid AND b.definition_version = $2 ORDER BY b.graph_generation DESC LIMIT 1",
+            Some(1),
+            &[entity_id.into(), definition_version.into()],
+        )
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?;
+    if binding.is_empty() {
+        return Ok(true);
+    }
+    let row = binding.first();
+    let installed = row
+        .get::<JsonB>(1)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("graph contract is NULL".into()))?
+        .0;
+    let relation = row
+        .get::<String>(2)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .ok_or_else(|| MdmError::GraphContract("graph root relation is NULL".into()))?;
+    let registered = client
+        .select(
+            "SELECT EXISTS (SELECT FROM pgtrickle.stream_tables_info WHERE pgt_relid = pg_catalog.to_regclass($1)::pg_catalog.oid)",
+            Some(1),
+            &[relation.clone().into()],
+        )
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .first()
+        .get::<bool>(1)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .unwrap_or(false);
+    if !registered {
+        return Ok(true);
+    }
+    let current = match client.select(
+            "SELECT contract_version, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
+            Some(1),
+            &[relation.into()],
+        ) {
+        Ok(rows) => rows,
+        Err(_) => return Ok(true),
+    };
+    if current.is_empty() {
+        return Ok(true);
+    }
+    let current_row = current.first();
+    let version = current_row
+        .get::<i16>(1)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?;
+    let current = current_row
+        .get::<JsonB>(2)
+        .map_err(|error| MdmError::GraphContract(error.to_string()))?
+        .map(|value| value.0);
+    Ok(version != Some(1)
+        || current.is_none_or(|current| {
+            stable_graph_contract(&current) != stable_graph_contract(&installed)
+        }))
+}
+
 fn call_persist(request: CreateRequest) -> Result<CreateResult, MdmError> {
     let result = catalog::call_helper("persist_entity", request)?;
     serde_json::from_value(result.0).map_err(|error| MdmError::OperationState(error.to_string()))
@@ -380,7 +459,7 @@ fn install_graph(
             ],
         )
         .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
-    if !existing.is_empty() {
+    if !existing.is_empty() && !graph_contract_stale(client, entity_id, definition_version)? {
         return Ok(());
     }
 
@@ -714,6 +793,7 @@ fn persist(
     let mut version = 1_i64;
     let mut changed = true;
     let mut graph_changed = true;
+    let mut graph_reinstall = false;
     Spi::connect_mut(|client| {
         let existing = client.update(
             "SELECT e.entity_id::text, e.desired_version, e.execution_role_name, b.role_oid FROM mdm_internal.entities e LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE e.entity_name = $1::pg_catalog.name FOR UPDATE OF e",
@@ -851,6 +931,9 @@ fn persist(
                 }
             }
         }
+        if !graph_changed {
+            graph_reinstall = graph_contract_stale(client, &entity_id, version)?;
+        }
         if changed {
             for output in &prepared.output_names {
                 let reserved = client
@@ -961,7 +1044,7 @@ fn persist(
         if graph_changed {
             client.update("INSERT INTO mdm_internal.definition_artifacts (entity_id, definition_version, compiler_version, artifact_format_version, artifact_bytes, artifact_digest, created_by_name) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7)", None, &[entity_id.clone().into(), version.into(), graph_spec::COMPILER_VERSION.into(), graph_spec::ARTIFACT_FORMAT_VERSION.into(), prepared.artifact_bytes.clone().into(), prepared.artifact_digest.clone().into(), session_name.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
         }
-        if graph_enabled {
+        if graph_enabled && (graph_changed || graph_reinstall) {
             install_graph(
                 client,
                 &entity_id,
@@ -973,7 +1056,12 @@ fn persist(
         }
         complete_operation(client, &operation_id)
     })?;
-    Ok((operation_id, version, changed, graph_changed))
+    Ok((
+        operation_id,
+        version,
+        changed,
+        graph_changed || graph_reinstall,
+    ))
 }
 
 fn selected_oid() -> pg_sys::Oid {

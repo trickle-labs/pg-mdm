@@ -212,6 +212,43 @@ pub(crate) fn persist_rebind(request: Internal) -> JsonB {
                     &[identity.source_identity_id.clone().into(), source.relation_oid.into(), JsonB(source.binding_fingerprint.clone()).into()],
                 ).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
+            let missing_graph_member = client
+                .select(
+                    "SELECT EXISTS (SELECT FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id) WHERE b.entity_id = $1::pg_catalog.uuid AND pg_catalog.to_regclass(m.relation_name) IS NULL)",
+                    Some(1),
+                    &[current.entity_id.clone().into()],
+                )
+                .map_err(|error| MdmError::GraphBinding(error.to_string()))?
+                .first()
+                .get::<bool>(1)
+                .map_err(|error| MdmError::GraphBinding(error.to_string()))?
+                .unwrap_or(false);
+            if missing_graph_member {
+                return Err(MdmError::GraphBinding(
+                    "a graph member relation is missing".into(),
+                ));
+            }
+            client
+                .update(
+                    "UPDATE mdm_internal.graph_bindings b SET root_relation_oids = ARRAY(SELECT pg_catalog.to_regclass(m.relation_name)::pg_catalog.oid FROM mdm_internal.graph_members m WHERE m.graph_binding_id = b.graph_binding_id AND m.relation_oid = ANY(b.root_relation_oids) ORDER BY m.topological_ordinal) WHERE b.entity_id = $1::pg_catalog.uuid",
+                    None,
+                    &[current.entity_id.clone().into()],
+                )
+                .map_err(|error| MdmError::GraphBinding(error.to_string()))?;
+            client
+                .update(
+                    "UPDATE mdm_internal.graph_members m SET relation_oid = pg_catalog.to_regclass(m.relation_name)::pg_catalog.oid FROM mdm_internal.graph_bindings b WHERE m.graph_binding_id = b.graph_binding_id AND b.entity_id = $1::pg_catalog.uuid",
+                    None,
+                    &[current.entity_id.clone().into()],
+                )
+                .map_err(|error| MdmError::GraphBinding(error.to_string()))?;
+            client
+                .update(
+                    "DELETE FROM mdm_internal.graph_delta_consumers WHERE graph_binding_id IN (SELECT graph_binding_id FROM mdm_internal.graph_bindings WHERE entity_id = $1::pg_catalog.uuid)",
+                    None,
+                    &[current.entity_id.clone().into()],
+                )
+                .map_err(|error| MdmError::GraphBinding(error.to_string()))?;
             let outcome = JsonB(json!({
                 "entity_name": current.entity_name,
                 "desired_version": current.desired_version,
