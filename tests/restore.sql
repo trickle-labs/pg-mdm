@@ -354,7 +354,7 @@ BEGIN
             (SELECT jsonb_agg(r.source_record_id ORDER BY r.source_record_id)
              FROM mdm_internal.source_records r
              JOIN mdm_internal.source_identities s USING (source_identity_id)
-             JOIN mdm_internal.entities e USING (entity_id)
+             JOIN mdm_internal.entities e ON e.entity_id = s.entity_id
              WHERE e.entity_name = 'policy_qualification' AND r.active);
     END IF;
 END
