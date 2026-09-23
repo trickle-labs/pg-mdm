@@ -103,20 +103,12 @@ fn graph_summary(
         }));
     }
     if let Some(root_oid) = root_oid {
-        let registered = Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS (SELECT FROM pgtrickle.stream_tables_info WHERE pgt_relid = $1)",
+        let current_digest = match Spi::get_one_with_args::<Vec<u8>>(
+            "SELECT graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
             &[root_oid.into()],
-        )
-        .map_err(|error| MdmError::Spi(error.to_string()))?
-        .unwrap_or(false);
-        let current_digest = if registered {
-            Spi::get_one_with_args::<Vec<u8>>(
-                "SELECT graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
-                &[root_oid.into()],
-            )
-            .map_err(|error| MdmError::Spi(error.to_string()))?
-        } else {
-            None
+        ) {
+            Ok(digest) => digest,
+            Err(_) => None,
         };
         if current_digest.as_deref().map(hex) != Some(graph_digest.clone()) {
             errors.push(json!({

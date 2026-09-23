@@ -88,20 +88,6 @@ fn graph_contract_stale(
         .get::<String>(2)
         .map_err(|error| MdmError::GraphContract(error.to_string()))?
         .ok_or_else(|| MdmError::GraphContract("graph root relation is NULL".into()))?;
-    let registered = client
-        .select(
-            "SELECT EXISTS (SELECT FROM pgtrickle.stream_tables_info WHERE pgt_relid = pg_catalog.to_regclass($1)::pg_catalog.oid)",
-            Some(1),
-            &[relation.clone().into()],
-        )
-        .map_err(|error| MdmError::GraphContract(error.to_string()))?
-        .first()
-        .get::<bool>(1)
-        .map_err(|error| MdmError::GraphContract(error.to_string()))?
-        .unwrap_or(false);
-    if !registered {
-        return Ok(true);
-    }
     let current = match client.select(
         "SELECT contract_version, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
         Some(1),

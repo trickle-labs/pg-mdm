@@ -284,7 +284,8 @@ INSERT INTO public.policy_qualification_source VALUES
     (102, 'Known One', 'known-pair@example.test', statement_timestamp()),
     (103, 'Known Two', 'known-two@example.test', statement_timestamp()),
     (104, 'Known Two', 'known-pair@example.test', statement_timestamp()),
-    (105, 'Publication One', 'publication-one@example.test', statement_timestamp());
+    (105, 'Publication One', 'publication-one@example.test', statement_timestamp()),
+    (106, 'Publication Two', 'publication-two@example.test', statement_timestamp());
 \connect foundation mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
 DO $$
@@ -345,11 +346,11 @@ CREATE TABLE public.e2e_policy_lifecycle_snapshot (
     case_key bigint PRIMARY KEY,
     state jsonb NOT NULL,
     resolved_state jsonb,
-    publication_count bigint NOT NULL
+    publication_revision bigint NOT NULL
 );
 INSERT INTO public.e2e_policy_lifecycle_snapshot
 SELECT c.case_key, pg_catalog.to_jsonb(c), NULL,
-       (SELECT count(*) FROM mdm_internal.publications p
+       (SELECT max(p.publication_revision) FROM mdm_internal.publications p
         JOIN mdm_internal.entities e USING (entity_id)
         WHERE e.entity_name = 'policy_qualification')
 FROM mdm_steward.policy_cases_v1 c
@@ -357,7 +358,7 @@ WHERE c.case_key = :known_case_key;
 REVOKE ALL ON public.e2e_policy_lifecycle_snapshot FROM PUBLIC;
 
 UPDATE public.policy_qualification_source
-SET display_name = 'Publication One Updated', updated_at = statement_timestamp()
+SET display_name = 'Publication Two', updated_at = statement_timestamp()
 WHERE id = 105;
 \connect foundation mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
@@ -382,9 +383,9 @@ BEGIN
     FROM mdm_steward.policy_cases_v1 c
     WHERE c.case_key = (SELECT known_case_key FROM public.e2e_policy_vars);
     IF after_state - 'last_observed_at' IS DISTINCT FROM before_state - 'last_observed_at'
-       OR (SELECT publication_count FROM public.e2e_policy_lifecycle_snapshot
-           WHERE case_key = (SELECT known_case_key FROM public.e2e_policy_vars)) >=
-          (SELECT count(*) FROM mdm_internal.publications p
+       OR (SELECT publication_revision FROM public.e2e_policy_lifecycle_snapshot
+           WHERE case_key = (SELECT known_case_key FROM public.e2e_policy_vars)) + 1 <>
+          (SELECT max(p.publication_revision) FROM mdm_internal.publications p
            JOIN mdm_internal.entities e USING (entity_id)
            WHERE e.entity_name = 'policy_qualification')
        OR (after_state->>'last_observed_at')::timestamptz < (before_state->>'last_observed_at')::timestamptz THEN
