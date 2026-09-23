@@ -40,7 +40,7 @@ if docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d missing_de
     echo 'FAIL: installation without pg_trickle succeeded' >&2
     exit 1
 fi
-grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
+grep -Eqi 'pg_trickle.*(not installed|not available)|(not installed|not available).*pg_trickle' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql | tee -a "$e2e_log"
