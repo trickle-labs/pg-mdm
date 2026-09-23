@@ -103,13 +103,11 @@ fn graph_summary(
         }));
     }
     if let Some(root_oid) = root_oid {
-        let current_digest = match Spi::get_one_with_args::<Vec<u8>>(
+        let current_digest = Spi::get_one_with_args::<Vec<u8>>(
             "SELECT graph_digest FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
             &[root_oid.into()],
-        ) {
-            Ok(digest) => digest,
-            Err(_) => None,
-        };
+        )
+        .unwrap_or_default();
         if current_digest.as_deref().map(hex) != Some(graph_digest.clone()) {
             errors.push(json!({
                 "code": "MDM_GRAPH_CONTRACT_DRIFT",
