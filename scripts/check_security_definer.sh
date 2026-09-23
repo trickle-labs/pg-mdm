@@ -40,7 +40,8 @@ if rg -n 'Spi::(run|run_with_args)\(&|client\.(select|update)\(&' src; then
     exit 1
 fi
 
-if rg -n 'pgtrickle_changes|pgt_[a-z_]+|set_orchestration_mode' src sql; then
+# Keep catalog objects and gated functions blocked while allowing public stream_tables_info columns.
+if rg -n -i 'pgtrickle_changes|pgtrickle\.pgt_[a-z_]+|pgt_[a-z_]+[[:space:]]*\(|\b(from|join|update|into)[[:space:]]+pgt_[a-z_]+|set_orchestration_mode' src sql; then
     echo 'private or gated pg_trickle API referenced' >&2
     exit 1
 fi

@@ -8,30 +8,63 @@ SELECT 'public.crm_customer'::regclass::oid <> :original_source_oid
 \quit 1
 \endif
 
+CREATE TEMP TABLE e2e_restore_vars AS
+SELECT :original_operations::bigint AS original_operations,
+       :original_policy_max::bigint AS original_policy_max,
+       :'original_policy_digest'::text AS original_policy_digest,
+       :'restore_issue_key'::text AS restore_issue_key;
+
+SELECT pgtrickle.recover_capture_instance();
+
 DO $$
 DECLARE actual jsonb;
 BEGIN
     actual := jsonb_build_object(
         'customer', (SELECT to_jsonb(e) FROM mdm_internal.entities e WHERE entity_name = 'customer'),
-        'definitions', (SELECT count(*) FROM mdm_internal.definitions),
-        'definition_artifacts', (SELECT count(*) FROM mdm_internal.definition_artifacts),
-        'source_identities', (SELECT count(*) FROM mdm_internal.source_identities),
-        'output_names', (SELECT count(*) FROM mdm_internal.output_names),
-        'steward_decisions', (SELECT count(*) FROM mdm_internal.steward_decisions),
+        'definitions', (SELECT count(*) FROM mdm_internal.definitions d
+                        JOIN mdm_internal.entities e USING (entity_id)
+                        WHERE e.entity_name = 'customer'),
+        'definition_artifacts', (SELECT count(*) FROM mdm_internal.definition_artifacts a
+                                 JOIN mdm_internal.entities e USING (entity_id)
+                                 WHERE e.entity_name = 'customer'),
+        'source_identities', (SELECT count(*) FROM mdm_internal.source_identities s
+                              JOIN mdm_internal.entities e USING (entity_id)
+                              WHERE e.entity_name = 'customer'),
+        'output_names', (SELECT count(*) FROM mdm_internal.output_names o
+                         JOIN mdm_internal.entities e USING (entity_id)
+                         WHERE e.entity_name = 'customer'),
+        'steward_decisions', (SELECT count(*) FROM mdm_internal.steward_decisions d
+                              JOIN mdm_internal.entities e USING (entity_id)
+                              WHERE e.entity_name = 'customer'),
         'succeeded_operations', (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login'),
-        'active_source_records', (SELECT count(*) FROM mdm_internal.source_records WHERE active)
+        'active_source_records', (SELECT count(*) FROM mdm_internal.source_records r
+                                  JOIN mdm_internal.entities e USING (entity_id)
+                                  WHERE e.entity_name = 'customer' AND r.active)
     );
     -- The directive and pair-decision races add two active records and six successful operations.
     IF (SELECT count(*) FROM mdm_internal.entities WHERE entity_name = 'customer' AND desired_version = 4) <> 1
-       OR (SELECT count(*) FROM mdm_internal.definitions) <> 4
-       OR (SELECT count(*) FROM mdm_internal.definition_artifacts) <> 4
-       OR (SELECT count(*) FROM mdm_internal.source_identities) <> 1
-       OR (SELECT count(*) FROM mdm_internal.output_names) <> 3
-       OR (SELECT count(*) FROM mdm_internal.steward_decisions) <> 4
+       OR (SELECT count(*) FROM mdm_internal.definitions d
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer') <> 4
+       OR (SELECT count(*) FROM mdm_internal.definition_artifacts a
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer') <> 4
+       OR (SELECT count(*) FROM mdm_internal.source_identities s
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer') <> 1
+       OR (SELECT count(*) FROM mdm_internal.output_names o
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer') <> 3
+       OR (SELECT count(*) FROM mdm_internal.steward_decisions d
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer') <> 4
        OR (SELECT decision_epoch FROM mdm_internal.entities WHERE entity_name = 'customer') <> 5
        OR (SELECT publication_revision FROM mdm_internal.entities WHERE entity_name = 'customer') <> 14
-       OR (SELECT count(*) FROM mdm_internal.operations WHERE status = 'succeeded' AND actor_name = 'mdm_test_login') <> 32
-       OR (SELECT count(*) FROM mdm_internal.source_records WHERE active) <> 9 THEN
+       OR (SELECT count(*) FROM mdm_internal.operations) <>
+          (SELECT original_operations FROM e2e_restore_vars)
+       OR (SELECT count(*) FROM mdm_internal.source_records r
+           JOIN mdm_internal.entities e USING (entity_id)
+           WHERE e.entity_name = 'customer' AND r.active) <> 9 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;
     IF (SELECT count(*) FROM mdm_internal.steward_decisions WHERE is_current) <> 3
@@ -113,6 +146,77 @@ BEGIN
     END IF;
 END
 $$;
+
+DO $$
+BEGIN
+    IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
+                     FROM mdm_steward.policy_cases_v1 c
+                     WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
+       IS DISTINCT FROM (SELECT original_policy_digest FROM e2e_restore_vars) THEN
+        RAISE EXCEPTION 'restored policy rows changed before graph recompile';
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM mdm_steward.policy_cases_v1
+        WHERE entity_name = 'policy_qualification'
+          AND status = 'open'
+          AND occurrence = 2
+    ) OR NOT EXISTS (
+        SELECT 1 FROM mdm_steward.policy_cases_v1
+        WHERE entity_name = 'policy_qualification'
+          AND status = 'resolved'
+          AND occurrence = 1
+    ) OR NOT EXISTS (
+        SELECT 1 FROM mdm_steward.policy_cases_v1
+        WHERE entity_name = 'policy_qualification'
+          AND opened_at_source = 'administrator'
+          AND opened_at = '2020-01-02 00:00:00+00'::timestamptz
+          AND action_revision = 2
+    ) OR EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        LEFT JOIN mdm_internal.reviews r ON r.review_id = c.review_id
+        WHERE c.entity_name = 'policy_qualification'
+          AND r.review_id IS NULL
+    ) OR EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        JOIN mdm_internal.reviews r ON r.review_id = c.review_id
+        WHERE c.entity_name = 'policy_qualification'
+          AND c.opened_at_source = 'publication'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM mdm_internal.publications p
+              JOIN mdm_internal.entities e USING (entity_id)
+              WHERE e.entity_name = c.entity_name
+                AND p.publication_revision = r.opened_revision)
+    ) OR EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        JOIN mdm_internal.reviews r ON r.review_id = c.review_id
+        LEFT JOIN mdm_internal.publications p
+          ON p.entity_id = r.entity_id AND p.publication_revision = r.resolved_revision
+        WHERE c.entity_name = 'policy_qualification'
+          AND c.status = 'resolved'
+          AND (p.publication_revision IS NULL OR c.resolved_at IS DISTINCT FROM p.published_at)
+    ) THEN
+        RAISE EXCEPTION 'restored policy cases lost their retained review or opening publication';
+    END IF;
+END
+$$;
+
+GRANT USAGE ON SCHEMA public, mdm, mdm_admin, mdm_steward TO mdm_legacy_administrator;
+GRANT SELECT, MAINTAIN ON public.policy_qualification_source TO mdm_legacy_administrator;
+GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text), mdm_admin.recompile(text), mdm.refresh(text, text),
+    mdm_admin.verify_installation(),
+    mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text)
+    TO mdm_legacy_administrator;
+GRANT USAGE ON SCHEMA mdm_steward TO mdm_output_reader;
+GRANT SELECT ON mdm_steward.policy_cases_v1 TO mdm_output_reader;
 GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text) TO mdm_administrator;
 
 \connect restored mdm_test_login
@@ -169,6 +273,196 @@ BEGIN
     IF (SELECT role_oid FROM mdm_internal.execution_role_bindings) IS DISTINCT FROM 'mdm_administrator'::regrole::oid
        OR (SELECT relation_oid FROM mdm_internal.source_bindings) IS DISTINCT FROM 'public.crm_customer'::regclass::oid THEN
         RAISE EXCEPTION 'rebind did not record current database-local OIDs';
+    END IF;
+END
+$$;
+
+\connect restored postgres
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm_admin.rebind('policy_qualification');
+    IF result->>'entity_name' IS DISTINCT FROM 'policy_qualification'
+       OR result->>'rebound_sources' IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'policy qualification rebind result is invalid: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect restored mdm_legacy_login
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm_admin.recompile('policy_qualification');
+    IF result->>'graph_recompiled' IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'policy qualification graph was not recompiled after restore: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect restored postgres
+CREATE TABLE public.e2e_restore_warmup_snapshot AS
+SELECT c.case_key, pg_catalog.to_jsonb(c) - 'last_observed_at' AS state
+FROM mdm_steward.policy_cases_v1 c
+WHERE c.entity_name = 'policy_qualification';
+
+\connect restored mdm_legacy_login
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('policy_qualification', 'ALLOW');
+    IF result->>'entity_name' IS DISTINCT FROM 'policy_qualification' THEN
+        RAISE EXCEPTION 'policy qualification graph warm-up is invalid: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect restored postgres
+DO $$
+DECLARE changed_rows jsonb; refresh_outcome jsonb;
+BEGIN
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+               'case_key', c.case_key,
+               'before', s.state,
+               'after', pg_catalog.to_jsonb(c) - 'last_observed_at')
+           ORDER BY c.case_key)
+    INTO changed_rows
+    FROM mdm_steward.policy_cases_v1 c
+    JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
+    WHERE pg_catalog.to_jsonb(c) - 'last_observed_at' IS DISTINCT FROM s.state;
+    IF changed_rows IS NOT NULL THEN
+        SELECT o.outcome INTO STRICT refresh_outcome
+        FROM mdm_internal.operations o
+        WHERE o.entity_name = 'policy_qualification'
+          AND o.operation_kind = 'refresh'
+          AND o.status = 'succeeded'
+        ORDER BY o.completed_at DESC, o.operation_id DESC
+        LIMIT 1;
+        RAISE EXCEPTION 'graph warm-up changed restored policy rows: %, refresh %, source rows %, active source records %',
+            changed_rows,
+            jsonb_build_object('active_records', refresh_outcome->'active_records',
+                               'open_reviews', refresh_outcome->'open_reviews',
+                               'resolver_strategy', refresh_outcome->'resolver_strategy',
+                               'node_results', refresh_outcome->'node_results'),
+            (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM public.policy_qualification_source p),
+            (SELECT jsonb_agg(r.source_record_id ORDER BY r.source_record_id)
+             FROM mdm_internal.source_records r
+             JOIN mdm_internal.source_identities s USING (source_identity_id)
+             JOIN mdm_internal.entities e ON e.entity_id = s.entity_id
+             WHERE e.entity_name = 'policy_qualification' AND r.active);
+    END IF;
+END
+$$;
+DROP TABLE public.e2e_restore_warmup_snapshot;
+CREATE TEMP TABLE e2e_restore_vars AS
+SELECT :original_operations::bigint AS original_operations,
+       :original_policy_max::bigint AS original_policy_max,
+       :'original_policy_digest'::text AS original_policy_digest,
+       :'restore_issue_key'::text AS restore_issue_key;
+SET ROLE mdm_output_reader;
+SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
+                     FROM mdm_steward.policy_cases_v1 c
+                     WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
+       AS policy_reader_digest
+\gset
+RESET ROLE;
+CREATE TEMP TABLE e2e_policy_reader_digest AS
+SELECT :'policy_reader_digest'::text AS digest;
+DO $$
+BEGIN
+    IF (SELECT digest FROM e2e_policy_reader_digest)
+       IS DISTINCT FROM (SELECT original_policy_digest FROM e2e_restore_vars) THEN
+        RAISE EXCEPTION 'policy reader rows changed after graph warm-up';
+    END IF;
+END
+$$;
+
+\connect restored postgres
+CREATE TEMP TABLE e2e_restore_vars AS
+SELECT :original_operations::bigint AS original_operations,
+       :original_policy_max::bigint AS original_policy_max,
+       :'original_policy_digest'::text AS original_policy_digest,
+       :'restore_issue_key'::text AS restore_issue_key;
+INSERT INTO public.policy_qualification_source
+VALUES (202, 'Restore One', 'restore-pair@example.test', statement_timestamp());
+DO $$
+BEGIN
+    IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
+                     FROM mdm_steward.policy_cases_v1 c
+                     WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
+       IS DISTINCT FROM (SELECT original_policy_digest FROM e2e_restore_vars) THEN
+        RAISE EXCEPTION 'restored policy rows changed before recurrence publication';
+    END IF;
+END
+$$;
+
+\connect restored mdm_test_login
+SET ROLE mdm_legacy_administrator;
+DO $$
+DECLARE result jsonb;
+BEGIN
+    result := mdm.refresh('policy_qualification', 'ALLOW');
+    IF result->>'changed' IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'post-restore recurrence did not publish: %', result;
+    END IF;
+END
+$$;
+RESET ROLE;
+
+\connect restored postgres
+CREATE TEMP TABLE e2e_restore_vars AS
+SELECT :original_operations::bigint AS original_operations,
+       :original_policy_max::bigint AS original_policy_max,
+       :'original_policy_digest'::text AS original_policy_digest,
+       :'restore_issue_key'::text AS restore_issue_key;
+DO $$
+DECLARE new_case record; old_case record; opening_at timestamptz;
+BEGIN
+    SELECT c.case_key, c.review_id, c.issue_key, c.occurrence, c.opened_at,
+           c.opened_at_source, c.action_revision, c.status, r.opened_revision
+    INTO STRICT new_case
+    FROM mdm_steward.policy_cases_v1 c
+    JOIN mdm_internal.reviews r USING (review_id)
+    WHERE c.entity_name = 'policy_qualification'
+      AND c.issue_key = pg_catalog.decode(
+          (SELECT restore_issue_key FROM e2e_restore_vars), 'hex')
+      AND c.occurrence = 2;
+    SELECT c.case_key, c.review_id, c.issue_key, c.occurrence
+    INTO STRICT old_case
+    FROM mdm_steward.policy_cases_v1 c
+    WHERE c.entity_name = 'policy_qualification'
+      AND c.issue_key = pg_catalog.decode(
+          (SELECT restore_issue_key FROM e2e_restore_vars), 'hex')
+      AND c.occurrence = 1;
+    SELECT p.published_at INTO STRICT opening_at
+    FROM mdm_internal.publications p
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'policy_qualification'
+      AND p.publication_revision = new_case.opened_revision;
+    IF new_case.case_key <= (SELECT original_policy_max FROM e2e_restore_vars)
+       OR old_case.review_id = new_case.review_id
+       OR new_case.issue_key IS DISTINCT FROM pg_catalog.decode(
+           (SELECT restore_issue_key FROM e2e_restore_vars), 'hex')
+       OR old_case.occurrence <> 1
+       OR new_case.occurrence <> 2
+       OR new_case.status <> 'open'
+       OR new_case.opened_at_source <> 'publication'
+       OR new_case.action_revision <> 1
+       OR new_case.opened_at IS DISTINCT FROM opening_at THEN
+        RAISE EXCEPTION 'post-restore recurrence changed identity or opening time: old %, new %', old_case, new_case;
+    END IF;
+    IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
+                     FROM mdm_steward.policy_cases_v1 c
+                     WHERE c.entity_name = 'policy_qualification'
+                       AND c.case_key <= (SELECT original_policy_max FROM e2e_restore_vars)), '[]'::jsonb)::text)
+       IS DISTINCT FROM (SELECT original_policy_digest FROM e2e_restore_vars) THEN
+        RAISE EXCEPTION 'restored policy rows changed while publishing the new recurrence';
     END IF;
 END
 $$;

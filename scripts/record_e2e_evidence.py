@@ -110,12 +110,14 @@ report = {
     "command": "scripts/run_e2e_tests.sh",
     "result": "passed",
     "retained_log": str(retained_log.relative_to(ROOT)),
-    "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
+    "retained_log_scope": "Main PostgreSQL script output plus policy qualification output and a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
     "metrics": metrics,
     "incremental_qualification": qualification,
     "inputs": {
         "organization_fixture_sha256": sha256_file(ROOT / "tests/fixtures/organization_domain_v1.json"),
         "e2e_sql_sha256": sha256_file(ROOT / "tests/e2e.sql"),
+        "e2e_policy_sql_sha256": sha256_file(ROOT / "tests/e2e_policy.sql"),
+        "restore_sql_sha256": sha256_file(ROOT / "tests/restore.sql"),
         "operating_envelope_sql_sha256": sha256_file(ROOT / "tests/operating_envelope.sql"),
         "incremental_qualification_sql_sha256": sha256_file(
             ROOT / "tests/incremental_qualification.sql"

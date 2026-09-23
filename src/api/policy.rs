@@ -555,7 +555,7 @@ pub(crate) fn persist_backfill_policy_case_opened_at(request: Internal) -> JsonB
         Spi::connect_mut(|client| {
             let row = client
                 .select(
-                    "SELECT c.entity_name::text, c.opened_at::text, c.opened_at_source, c.status, c.action_revision, e.execution_role_name, b.role_oid, r.opened_revision, (SELECT min(o.observed_at)::text FROM mdm_internal.publication_observations o WHERE o.entity_id = e.entity_id AND o.publication_revision >= r.opened_revision) FROM mdm_steward.policy_cases_v1 c JOIN mdm_internal.reviews r ON r.review_id = c.review_id JOIN mdm_internal.entities e ON e.entity_name = c.entity_name LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE c.case_key = $1 FOR UPDATE",
+                    "SELECT c.entity_name::text, c.opened_at::text, c.opened_at_source, c.status, c.action_revision, e.execution_role_name, b.role_oid, r.opened_revision, (SELECT min(o.observed_at)::text FROM mdm_internal.publication_observations o WHERE o.entity_id = e.entity_id AND o.publication_revision >= r.opened_revision) FROM mdm_steward.policy_cases_v1 c JOIN mdm_internal.reviews r ON r.review_id = c.review_id JOIN mdm_internal.entities e ON e.entity_name = c.entity_name LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE c.case_key = $1 FOR UPDATE OF c",
                     Some(1),
                     &[request.case_key.into()],
                 )

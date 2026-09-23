@@ -7,20 +7,20 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:0e90e3814c1105ecb361c88db7c17f66d6efb60affc69a5aea64efb6a8e87609",
+    "docker_image_id": "sha256:f4337450d4867c621c6ad4264223c8a1a0a57760aec26639e1f243ab52f9191c",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 1389789184,
-      "visible_available_bytes": 6146818048,
+      "cgroup_peak_bytes": 1444630528,
+      "visible_available_bytes": 5826789376,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 74787168256 853359112192   9% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 85469372416 842676908032  10% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "incremental_qualification": {
     "equivalence_checks": 70,
-    "pg_trickle_version": "0.106.1",
+    "pg_trickle_version": "0.108.0",
     "populations": [
       {
         "delta_rows": {
@@ -28,20 +28,20 @@
           "min": 2
         },
         "elapsed_ms": {
-          "max": 518.625,
-          "p50": 410.024,
-          "p95": 436.938
+          "max": 805.727,
+          "p50": 731.424,
+          "p95": 802.638
         },
         "graph_refresh_ms": {
-          "p95": 411.2
+          "p95": 706.55
         },
         "mdm_resolution_ms": {
-          "p95": 3
+          "p95": 6
         },
         "measured_samples": 30,
         "population": 128,
         "publication_ms": {
-          "p95": 8
+          "p95": 66.55
         },
         "warmup_samples": 5
       },
@@ -51,20 +51,20 @@
           "min": 2
         },
         "elapsed_ms": {
-          "max": 936.756,
-          "p50": 853.748,
-          "p95": 895.603
+          "max": 2115.606,
+          "p50": 2048.158,
+          "p95": 2099.503
         },
         "graph_refresh_ms": {
-          "p95": 778.2
+          "p95": 1130.55
         },
         "mdm_resolution_ms": {
-          "p95": 20
+          "p95": 75.55
         },
         "measured_samples": 30,
         "population": 2048,
         "publication_ms": {
-          "p95": 65
+          "p95": 878.5
         },
         "warmup_samples": 5
       }
@@ -73,16 +73,18 @@
     "scope": "synthetic exact-email graph; p95 is observational and has no timing gate"
   },
   "inputs": {
-    "archived_pg_mdm_0_13_0_sha256": "ab10455c6123a5d23959bb731e998dfac22ef526f418c5262aaf423294c6e118",
-    "cargo_lock_sha256": "be6a542cdd760d89e7c7419e63854375afc73d3831e5ff46c73ae188c95595da",
-    "e2e_sql_sha256": "9e651c90e7c521b7764b2b8405adc82049f7ccbb5a7012ccf11def1bcc797459",
-    "incremental_qualification_sql_sha256": "f0a4663eee716079535378702457e818690bf6595cdd8116e7368c0c951a3970",
+    "archived_pg_mdm_0_14_0_sha256": "edd325df47e7623ef5ff09ef7cf91a0559055186c826cf7d132859b2f3bceda3",
+    "cargo_lock_sha256": "699add5f72d8b47a825b84bc19754629e240f8302d613089b334e408c0c35cee",
+    "e2e_policy_sql_sha256": "2ec434830df66fc37bd60dab17f156d680a47de8e8a2f942a16eef86ed34edb4",
+    "e2e_sql_sha256": "d31d33315ebac56b5d92dcb54e4bcc932ee7657dc5d52a3c4e50e3fb4031fb9f",
+    "incremental_qualification_sql_sha256": "5d4479140127b8466f90e4c2530a31fa05a3e8cc9f18fe04f0a899e823f34072",
     "operating_envelope_sql_sha256": "dd1abd9dd9e993cbe6851f426969e5dafbe47141ea19e742ebd8c760002edec8",
     "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
-    "pg_mdm_package_manifest_sha256": "86b0995b5e65f9bc4a18ba316b2706294b9c15afbc6f25daa4c07046c924d29a",
-    "pg_trickle_artifact_sha256": "e6976e4e6477b5241008f5ec3b48edb395b600aea4fe78c1944e69e12046d2bf",
-    "pg_trickle_version": "0.106.1",
+    "pg_mdm_package_manifest_sha256": "083d0b9cef1521fb9891d2699e89757779db821cf2806a64127bdab4edea49ae",
+    "pg_trickle_artifact_sha256": "016ad89fc83172b66b3b3518a00a7182c6206770f755d504195487fdbff406a0",
+    "pg_trickle_version": "0.108.0",
     "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
+    "restore_sql_sha256": "5442cc1c8bbfcac4ff39255694264607dd4b88e9cdbe7559389a246c6ac66901",
     "rust_toolchain": "1.98.0"
   },
   "limitations": [
@@ -98,13 +100,13 @@
     "last_customer_refresh": {
       "active_records": 9,
       "component_checks": 0,
-      "elapsed_ms": 1619,
+      "elapsed_ms": 1786,
       "publication_revision": 15,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 317,
-        "graph_refresh": 310,
+        "elapsed_before_operation_completion": 379,
+        "graph_refresh": 352,
         "mdm_resolution": 0,
-        "publication": 2
+        "publication": 14
       }
     },
     "max_block_records": 0,
@@ -126,15 +128,15 @@
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
     "repeated_pair_discoveries": 0,
     "retained_history_rows_customer": 55,
-    "retained_history_table_bytes_database_wide": 827392,
+    "retained_history_table_bytes_database_wide": 843776,
     "scope": "customer entity state after Docker E2E; temp_bytes is cumulative for foundation database",
     "source_rows": 9,
-    "temporary_bytes": 20725760,
+    "temporary_bytes": 20660224,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-17T09:58:27.296816+00:00",
+  "recorded_at_utc": "2026-09-22T20:51:58.018352+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.12/docker-e2e.log",
-  "retained_log_scope": "Main PostgreSQL script output plus a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
-  "source_commit": "1d6e7dbdb3fb70e865845a054055af1ba0ac8c84"
+  "retained_log_scope": "Main PostgreSQL script output plus policy qualification output and a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
+  "source_commit": "7e4885a42e64854884bb98da775a6bfcdd00e219"
 }

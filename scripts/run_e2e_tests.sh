@@ -43,7 +43,7 @@ fi
 grep -q 'required extension "pg_trickle" is not installed' "$missing_log"
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql | tee -a "$e2e_log"
 docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/incremental_qualification.sql > "$qualification_json"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
@@ -715,6 +715,10 @@ END
 
 original_source_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'public.crm_customer'::regclass::oid")
 original_role_oid=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT 'mdm_administrator'::regrole::oid")
+original_operations=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT count(*) FROM mdm_internal.operations")
+original_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
+original_policy_max=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT max(case_key) FROM mdm_steward.policy_cases_v1 WHERE entity_name = 'policy_qualification'")
+restore_issue_key=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "SELECT pg_catalog.encode(issue_key, 'hex') FROM mdm_steward.policy_cases_v1 WHERE entity_name = 'policy_qualification' AND status = 'resolved' ORDER BY case_key DESC LIMIT 1")
 artifact_query="SELECT md5(string_agg(encode(artifact_bytes, 'hex'), ',' ORDER BY definition_version)) FROM mdm_internal.definition_artifacts"
 original_artifacts=$(docker exec "$container" psql -X -At -U postgres -d foundation -c "$artifact_query")
 source_identity_query="SELECT md5(COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(identity_digest, 'hex') || ':' || key_contract::text, '|' ORDER BY source_identity_id) FROM mdm_internal.source_identities), '') || '/' || COALESCE((SELECT string_agg(source_identity_id::text || ':' || encode(source_record_key, 'hex') || ':' || source_record_id::text || ':' || active::text, '|' ORDER BY source_identity_id, source_record_key) FROM mdm_internal.source_records), ''))"
@@ -947,17 +951,28 @@ docker exec "$container" createdb -U postgres restored
 chmod 0644 "$dump_file"
 docker cp "$dump_file" "$container:/tmp/foundation.dump" >/dev/null
 docker exec "$container" sh -c \
-    "pg_restore -l /tmp/foundation.dump | grep -v 'TABLE DATA pgtrickle ' > /tmp/foundation.list"
+    "pg_restore -l /tmp/foundation.dump | grep -v -E 'pgtrickle_changes|TABLE DATA pgtrickle |TRIGGER public .* pg_trickle_cdc_' > /tmp/foundation.list"
 docker exec "$container" pg_restore -v -U postgres -d restored \
     --use-list=/tmp/foundation.list /tmp/foundation.dump >/dev/null
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v helper_owner=mdm_helper_owner -f /sql/configure_helper.sql >/dev/null
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
-    -v original_source_oid="$original_source_oid" -v original_role_oid="$original_role_oid" -f /tests/restore.sql
+restored_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d restored -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
+test "$original_policy_digest" = "$restored_policy_digest"
 restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
-test "$original_artifacts" = "$restored_artifacts"
+if [[ "$original_artifacts" != "$restored_artifacts" ]]; then
+    echo 'FAIL: definition artifacts changed during logical restore' >&2
+    exit 1
+fi
 restored_source_identities=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$source_identity_query")
-test "$original_source_identities" = "$restored_source_identities"
+if [[ "$original_source_identities" != "$restored_source_identities" ]]; then
+    echo 'FAIL: source identities or records changed during logical restore' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
+    -v original_source_oid="$original_source_oid" -v original_role_oid="$original_role_oid" \
+    -v original_operations="$original_operations" -v original_policy_digest="$original_policy_digest" \
+    -v original_policy_max="$original_policy_max" -v restore_issue_key="$restore_issue_key" \
+    -f /tests/restore.sql
 
 docker exec "$container" createdb -U postgres --template=restored pg_mdm_clone
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d pg_mdm_clone <<'SQL'
@@ -982,9 +997,8 @@ clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
-# The clone adds one isolation-only row on top of the nine restored records.
-test "$clone_sources" = 10
-test "$restored_sources" = 9
+# The clone adds one isolation-only row on top of the restored records.
+test "$clone_sources" = "$((restored_sources + 1))"
 
 docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
