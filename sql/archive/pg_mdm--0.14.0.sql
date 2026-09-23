@@ -665,13 +665,13 @@ REVOKE ALL ON FUNCTION mdm_graph.evidence_digest(text) FROM PUBLIC;
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/describe.rs:151
+-- src/api/describe.rs:161
 -- pg_mdm::api::describe::describe_entity
 CREATE FUNCTION mdm_internal.describe_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'describe_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/describe.rs:135
+-- src/api/describe.rs:145
 -- pg_mdm::api::describe::describe
 CREATE FUNCTION mdm.describe(entity_name text, format text DEFAULT 'summary') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'describe_wrapper';
 /* </end connected objects> */
@@ -785,13 +785,13 @@ CREATE FUNCTION mdm_admin.drop_entity(entity_name text, confirm text) RETURNS js
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:1053
+-- src/api/create.rs:1141
 -- pg_mdm::api::create::persist_entity
 CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:57
+-- src/api/create.rs:136
 -- pg_mdm::api::create::create
 CREATE FUNCTION mdm.create(definition jsonb, expected_version bigint DEFAULT NULL, comment text DEFAULT NULL) RETURNS TABLE (operation_id uuid, entity_name text, desired_version bigint, changed boolean, definition_digest bytea, artifact_digest bytea) LANGUAGE c AS 'MODULE_PATHNAME', 'create_wrapper';
 /* </end connected objects> */
@@ -839,7 +839,7 @@ CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:1018
+-- src/api/create.rs:1106
 -- pg_mdm::api::create::persist_recompile
 CREATE FUNCTION mdm_internal.persist_recompile(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_recompile_wrapper';
 /* </end connected objects> */
@@ -899,7 +899,7 @@ CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'AL
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:983
+-- src/api/create.rs:1071
 -- pg_mdm::api::create::recompile
 CREATE FUNCTION mdm_admin.recompile(entity_name text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'recompile_wrapper';
 /* </end connected objects> */
