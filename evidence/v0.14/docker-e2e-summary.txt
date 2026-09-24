@@ -1,0 +1,9 @@
+PASS: installation, Graph V1 admission, authorization, definition history, concurrency, and restore/rebind
+PASS: resolver-limit rollback and retry, backup/restore, and clone isolation
+PASS: physical backup recovery with populated and pending graph state
+PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies
+PASS: source writes after a returned boundary remain pending for the next refresh
+PASS: Delta V1 consumer registration, resnapshot, acknowledgement, and observability
+PASS: compiler v9 to v10 canary adoption preserves the complete publication
+PASS: affected-resolution qualification matches full rebuilds at 128 and 2,048 records
+PASS: decision and golden-override intervals use affected resolution or the invalidation fallback
