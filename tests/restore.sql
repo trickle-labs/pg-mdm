@@ -242,6 +242,11 @@ SELECT pg_temp.assert_restored_binding_blocked(
 \endif
 RESET ROLE;
 \connect restored postgres
+CREATE TEMP TABLE e2e_restore_vars AS
+SELECT :original_operations::bigint AS original_operations,
+       :original_policy_max::bigint AS original_policy_max,
+       :'original_policy_digest'::text AS original_policy_digest,
+       :'restore_issue_key'::text AS restore_issue_key;
 
 DO $$
 BEGIN
