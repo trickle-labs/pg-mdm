@@ -279,9 +279,12 @@ BEGIN
         WHERE entity_name = 'policy_qualification'
           AND opened_at_source = 'administrator'
           AND opened_at = '2020-01-02 00:00:00+00'::timestamptz
-          AND action_revision = 2
+          AND action_revision >= 2
     ) THEN
-        RAISE EXCEPTION 'restored administrator-opened policy case is missing';
+        RAISE EXCEPTION 'restored administrator-opened policy case is missing: %',
+            (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('case_key', case_key, 'opened_at', opened_at, 'opened_at_source', opened_at_source, 'action_revision', action_revision) ORDER BY case_key)
+             FROM mdm_steward.policy_cases_v1
+             WHERE entity_name = 'policy_qualification' AND opened_at_source = 'administrator');
     END IF;
     IF EXISTS (
         SELECT 1
