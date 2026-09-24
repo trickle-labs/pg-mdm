@@ -271,19 +271,32 @@ BEGIN
         WHERE entity_name = 'policy_qualification'
           AND status = 'resolved'
           AND occurrence = 1
-    ) OR NOT EXISTS (
+    ) THEN
+        RAISE EXCEPTION 'restored policy case occurrences are missing';
+    END IF;
+    IF NOT EXISTS (
         SELECT 1 FROM mdm_steward.policy_cases_v1
         WHERE entity_name = 'policy_qualification'
           AND opened_at_source = 'administrator'
           AND opened_at = '2020-01-02 00:00:00+00'::timestamptz
           AND action_revision = 2
-    ) OR EXISTS (
+    ) THEN
+        RAISE EXCEPTION 'restored administrator-opened policy case is missing';
+    END IF;
+    IF EXISTS (
         SELECT 1
         FROM mdm_steward.policy_cases_v1 c
         LEFT JOIN mdm_internal.reviews r ON r.review_id = c.review_id
         WHERE c.entity_name = 'policy_qualification'
           AND r.review_id IS NULL
-    ) OR EXISTS (
+    ) THEN
+        RAISE EXCEPTION 'restored policy cases reference missing reviews: %',
+            (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('case_key', c.case_key, 'review_id', c.review_id) ORDER BY c.case_key)
+             FROM mdm_steward.policy_cases_v1 c
+             LEFT JOIN mdm_internal.reviews r ON r.review_id = c.review_id
+             WHERE c.entity_name = 'policy_qualification' AND r.review_id IS NULL);
+    END IF;
+    IF EXISTS (
         SELECT 1
         FROM mdm_steward.policy_cases_v1 c
         JOIN mdm_internal.reviews r ON r.review_id = c.review_id
@@ -295,7 +308,19 @@ BEGIN
               JOIN mdm_internal.entities e USING (entity_id)
               WHERE e.entity_name = c.entity_name
                 AND p.publication_revision = r.opened_revision)
-    ) OR EXISTS (
+    ) THEN
+        RAISE EXCEPTION 'restored publication-opened policy cases lost their opening publication: %',
+            (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('case_key', c.case_key, 'review_id', r.review_id, 'opened_revision', r.opened_revision) ORDER BY c.case_key)
+             FROM mdm_steward.policy_cases_v1 c
+             JOIN mdm_internal.reviews r ON r.review_id = c.review_id
+             WHERE c.entity_name = 'policy_qualification'
+               AND c.opened_at_source = 'publication'
+               AND NOT EXISTS (
+                   SELECT 1 FROM mdm_internal.publications p
+                   JOIN mdm_internal.entities e USING (entity_id)
+                   WHERE e.entity_name = c.entity_name AND p.publication_revision = r.opened_revision));
+    END IF;
+    IF EXISTS (
         SELECT 1
         FROM mdm_steward.policy_cases_v1 c
         JOIN mdm_internal.reviews r ON r.review_id = c.review_id
@@ -305,7 +330,13 @@ BEGIN
           AND c.status = 'resolved'
           AND (p.publication_revision IS NULL OR c.resolved_at IS DISTINCT FROM p.published_at)
     ) THEN
-        RAISE EXCEPTION 'restored policy cases lost their retained review or opening publication';
+        RAISE EXCEPTION 'restored resolved policy cases lost their resolution publication: %',
+            (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('case_key', c.case_key, 'review_id', r.review_id, 'resolved_revision', r.resolved_revision, 'resolved_at', c.resolved_at, 'published_at', p.published_at) ORDER BY c.case_key)
+             FROM mdm_steward.policy_cases_v1 c
+             JOIN mdm_internal.reviews r ON r.review_id = c.review_id
+             LEFT JOIN mdm_internal.publications p ON p.entity_id = r.entity_id AND p.publication_revision = r.resolved_revision
+             WHERE c.entity_name = 'policy_qualification' AND c.status = 'resolved'
+               AND (p.publication_revision IS NULL OR c.resolved_at IS DISTINCT FROM p.published_at));
     END IF;
 END
 $$;
