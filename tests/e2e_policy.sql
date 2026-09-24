@@ -1038,9 +1038,8 @@ RESET ROLE;
 \connect foundation mdm_legacy_login
 SET ROLE :"policy_execution_role";
 DO $$
-DECLARE binding_count bigint; rejected boolean := false;
+DECLARE rejected boolean := false;
 BEGIN
-    SELECT count(*) INTO binding_count FROM mdm_steward.policy_bindings_v1;
     BEGIN
         PERFORM * FROM mdm_admin.create_policy_binding(
             'policy_qualification', 'mdm_policy_worker',
@@ -1052,30 +1051,46 @@ BEGIN
            OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_BINDING') = 0 THEN RAISE; END IF;
         rejected := true;
     END;
-    IF NOT rejected OR (SELECT count(*) FROM mdm_steward.policy_bindings_v1) <> binding_count THEN
-        RAISE EXCEPTION 'noncanonical binding actions were accepted or persisted';
-    END IF;
-    rejected := false;
-    BEGIN
-        PERFORM * FROM mdm_admin.replace_policy_binding(
-            (SELECT binding_id FROM mdm_steward.policy_bindings_v1
-             WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL),
-            999, pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
-            ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT'],
-            ARRAY['priority', 'urgent']::text[], INTERVAL '30 days', 3
-        );
-    EXCEPTION WHEN OTHERS THEN
-        IF pg_catalog.strpos(SQLERRM, 'binding is replaced or expected version is stale') = 0
-           OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_BINDING') = 0 THEN RAISE; END IF;
-        rejected := true;
-    END;
-    IF NOT rejected OR (SELECT count(*) FROM mdm_steward.policy_bindings_v1) <> binding_count
-       OR (SELECT replaced_by FROM mdm_steward.policy_bindings_v1
-           WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL) IS NOT NULL THEN
-        RAISE EXCEPTION 'stale binding replacement changed binding state';
-    END IF;
+    IF NOT rejected THEN RAISE EXCEPTION 'noncanonical binding actions were accepted'; END IF;
 END
 $$;
+CREATE FUNCTION pg_temp.e2e_reject_stale_binding_replace(p_binding_id uuid)
+RETURNS boolean LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM * FROM mdm_admin.replace_policy_binding(
+        p_binding_id, 999, pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
+        ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT'],
+        ARRAY['priority', 'urgent']::text[], INTERVAL '30 days', 3
+    );
+    RETURN false;
+EXCEPTION WHEN OTHERS THEN
+    IF pg_catalog.strpos(SQLERRM, 'binding is replaced or expected version is stale') = 0
+       OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_BINDING') = 0 THEN RAISE; END IF;
+    RETURN true;
+END
+$$;
+SELECT pg_temp.e2e_reject_stale_binding_replace(:'second_binding_id'::uuid) AS stale_binding_replace_rejected
+\gset
+\if :stale_binding_replace_rejected
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation postgres
+SELECT count(*) = 2
+   AND count(*) FILTER (WHERE binding_id = :'first_binding_id'::uuid
+                        AND replaced_by = :'second_binding_id'::uuid) = 1
+   AND count(*) FILTER (WHERE binding_id = :'second_binding_id'::uuid
+                        AND replaced_by IS NULL AND binding_version = 1) = 1
+   AS binding_invalid_cases_state_ok
+FROM mdm_steward.policy_bindings_v1 WHERE automation_role_name = 'mdm_policy_worker'
+\gset
+\if :binding_invalid_cases_state_ok
+\else
+\quit 1
+\endif
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
 SELECT case_key, assigned_queue::text AS queue, COALESCE(due_at::text, '') AS due_at,
        escalation_level AS level, action_revision AS revision,
        manual_assignment_protected AS protected
