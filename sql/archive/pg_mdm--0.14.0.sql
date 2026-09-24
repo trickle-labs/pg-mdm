@@ -777,7 +777,7 @@ CREATE FUNCTION mdm_steward.decide(entity_name text, left_source_record_id uuid,
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/lifecycle.rs:30
+-- src/api/lifecycle.rs:64
 -- pg_mdm::api::lifecycle::persist_drop_entity
 CREATE FUNCTION mdm_internal.persist_drop_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_drop_entity_wrapper';
 /* </end connected objects> */
