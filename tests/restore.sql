@@ -190,7 +190,7 @@ RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE
     policy_case mdm_steward.policy_cases_v1%ROWTYPE;
     rejected boolean := false;
-    v_request_key bytea := pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex');
+    v_request_key bytea := pg_catalog.decode(pg_catalog.repeat('f', 64), 'hex');
 BEGIN
     SELECT * INTO STRICT policy_case
     FROM mdm_steward.policy_cases_v1
