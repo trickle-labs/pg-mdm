@@ -1102,7 +1102,7 @@ CREATE TEMP TABLE e2e_policy_human_before AS
 SELECT :human_case_key::bigint AS case_key, :'human_queue'::name AS assigned_queue,
        NULLIF(:'human_due_at', '')::timestamptz AS due_at,
        :human_level::integer AS escalation_level, :human_revision::bigint AS action_revision,
-       :human_protected::boolean AS manual_assignment_protected;
+       :'human_protected'::boolean AS manual_assignment_protected;
 SELECT action_revision
 FROM mdm_admin.set_case_controls(
     :human_case_key, :'human_queue'::name, NULLIF(:'human_due_at', '')::timestamptz,
