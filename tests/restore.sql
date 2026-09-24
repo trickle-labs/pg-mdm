@@ -190,7 +190,7 @@ RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE
     policy_case mdm_steward.policy_cases_v1%ROWTYPE;
     rejected boolean := false;
-    request_key bytea := pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex');
+    v_request_key bytea := pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex');
 BEGIN
     SELECT * INTO STRICT policy_case
     FROM mdm_steward.policy_cases_v1
@@ -201,7 +201,7 @@ BEGIN
     LIMIT 1;
     BEGIN
         PERFORM * FROM mdm_steward.submit_policy_intent(
-            p_binding_id, request_key,
+            p_binding_id, v_request_key,
             policy_case.case_key, 'ASSIGN_QUEUE',
             pg_catalog.jsonb_build_object('queue', p_queue::text),
             policy_case.review_version, policy_case.definition_version,
@@ -215,7 +215,7 @@ BEGIN
     END;
     IF NOT rejected OR EXISTS (
             SELECT FROM mdm_steward.policy_receipts_v1 r
-            WHERE r.binding_id = p_binding_id AND r.request_key = request_key
+            WHERE r.binding_id = p_binding_id AND r.request_key = v_request_key
        ) OR EXISTS (
             SELECT FROM mdm_steward.policy_cases_v1 c
             WHERE c.case_key = policy_case.case_key
