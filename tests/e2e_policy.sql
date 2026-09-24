@@ -1089,14 +1089,15 @@ FROM mdm_steward.policy_bindings_v1 WHERE automation_role_name = 'mdm_policy_wor
 \else
 \quit 1
 \endif
-\connect foundation mdm_legacy_login
-SET ROLE :"policy_execution_role";
+\connect foundation postgres
 SELECT case_key, assigned_queue::text AS queue, COALESCE(due_at::text, '') AS due_at,
        escalation_level AS level, action_revision AS revision,
        manual_assignment_protected AS protected
 FROM mdm_steward.policy_cases_v1
 WHERE case_key = :current_case_key
 \gset human_
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
 CREATE TEMP TABLE e2e_policy_human_before AS
 SELECT :human_case_key::bigint AS case_key, :'human_queue'::name AS assigned_queue,
        NULLIF(:'human_due_at', '')::timestamptz AS due_at,
