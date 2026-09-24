@@ -723,7 +723,7 @@ FROM mdm_steward.submit_policy_intent(
 \gset conflict_
 SELECT :'conflict_outcome' = 'IDEMPOTENCY_CONFLICT'
    AND :'conflict_reason_code' = 'REQUEST_KEY_BODY_MISMATCH'
-   AND :conflict_no_new_receipt
+   AND :'conflict_no_new_receipt'::boolean
    AND :conflict_action_revision = :current_action_revision
    AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
                AND reason_code = 'CONTROL_APPLIED'
@@ -1090,12 +1090,12 @@ SELECT :human_case_key::bigint AS case_key, :'human_queue'::name AS assigned_que
 SELECT action_revision
 FROM mdm_admin.set_case_controls(
     :human_case_key, :'human_queue'::name, NULLIF(:'human_due_at', '')::timestamptz,
-    :human_level, :human_protected, :human_revision, 'e2e unchanged human controls'
+    :human_level, :'human_protected'::boolean, :human_revision, 'e2e unchanged human controls'
 )
 \gset human_noop_
 SELECT :human_noop_action_revision = :human_revision
    AND (SELECT action_revision = :human_revision
-               AND manual_assignment_protected = :human_protected
+               AND manual_assignment_protected = :'human_protected'::boolean
         FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
    AS human_control_noop_ok
 \gset
