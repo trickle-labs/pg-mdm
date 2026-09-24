@@ -1104,7 +1104,7 @@ SELECT :human_case_key::bigint AS case_key, :'human_queue'::name AS assigned_que
        :human_level::integer AS escalation_level, :human_revision::bigint AS action_revision,
        :'human_protected'::boolean AS manual_assignment_protected;
 SELECT action_revision
-FROM mdm_admin.set_case_controls(
+FROM mdm_steward.set_case_controls(
     :human_case_key, :'human_queue'::name, NULLIF(:'human_due_at', '')::timestamptz,
     :human_level, :'human_protected'::boolean, :human_revision, 'e2e unchanged human controls'
 )
@@ -1120,7 +1120,7 @@ SELECT :human_noop_action_revision = :human_revision
 \quit 1
 \endif
 SELECT action_revision
-FROM mdm_admin.set_case_controls(
+FROM mdm_steward.set_case_controls(
     :human_case_key, :'human_queue'::name, NULLIF(:'human_due_at', '')::timestamptz,
     :human_level, true, :human_revision, 'e2e manual assignment protection'
 )
@@ -1138,7 +1138,7 @@ DO $$
 DECLARE rejected boolean := false;
 BEGIN
     BEGIN
-        PERFORM * FROM mdm_admin.set_case_controls(
+        PERFORM * FROM mdm_steward.set_case_controls(
             (SELECT case_key FROM e2e_policy_human_before),
             (SELECT assigned_queue FROM e2e_policy_human_before),
             (SELECT due_at FROM e2e_policy_human_before),
@@ -1204,7 +1204,7 @@ SELECT assigned_queue::text AS escalation_queue, action_revision AS escalation_r
 FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
 \gset early_seed_
 SELECT action_revision
-FROM mdm_admin.set_case_controls(
+FROM mdm_steward.set_case_controls(
     :human_case_key, :'early_seed_escalation_queue'::name,
     pg_catalog.statement_timestamp() + INTERVAL '1 day', 0, true,
     :early_seed_escalation_revision, 'e2e future due for early escalation'
@@ -1262,7 +1262,7 @@ SELECT assigned_queue::text AS escalation_queue, action_revision AS escalation_r
 FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
 \gset limit_seed_
 SELECT action_revision
-FROM mdm_admin.set_case_controls(
+FROM mdm_steward.set_case_controls(
     :human_case_key, :'limit_seed_escalation_queue'::name,
     pg_catalog.statement_timestamp() - INTERVAL '1 day', 2, true,
     :limit_seed_escalation_revision, 'e2e due escalation at limit'
