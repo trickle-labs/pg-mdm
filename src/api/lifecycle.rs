@@ -17,14 +17,48 @@ struct DropRequest {
     sql = "CREATE FUNCTION mdm_admin.drop_entity(entity_name text, confirm text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'drop_entity_wrapper';"
 )]
 pub(crate) fn drop_entity(entity_name: String, confirm: String) -> JsonB {
-    catalog::call_helper(
-        "persist_drop_entity",
-        DropRequest {
-            entity_name,
-            confirm,
-        },
-    )
-    .unwrap_or_else(|error| crate::raise(error))
+    let result = (|| {
+        let helper_owner = catalog::validate_helper_owner()?;
+        let (_, selected) = catalog::validate_caller(&helper_owner)?;
+        let mut result = catalog::call_helper(
+            "persist_drop_entity",
+            DropRequest {
+                entity_name,
+                confirm,
+            },
+        )?;
+        let unregistered_members = result
+            .0
+            .as_object_mut()
+            .and_then(|object| object.remove("unregistered_members"))
+            .and_then(|members| members.as_array().cloned())
+            .unwrap_or_default();
+        for member in unregistered_members {
+            let relation_oid = member
+                .as_u64()
+                .and_then(|oid| u32::try_from(oid).ok())
+                .map(pg_sys::Oid::from)
+                .ok_or_else(|| MdmError::GraphLifecycle("member relation OID is invalid".into()))?;
+            let relation_name = Spi::get_one_with_args::<String>(
+                "SELECT pg_catalog.format('%I.%I', n.nspname, c.relname) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = $1 AND c.relowner = $2 AND n.nspname = 'mdm_graph' AND c.relkind IN ('r', 'p')",
+                &[relation_oid.into(), selected.oid.into()],
+            )
+            .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?
+            .ok_or_else(|| {
+                MdmError::GraphLifecycle(
+                    "unregistered graph member no longer matches its execution role".into(),
+                )
+            })?;
+            Spi::connect_mut(|client| {
+                client
+                    .update(&format!("DROP TABLE {relation_name}"), None, &[])
+                    .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?;
+                Ok::<_, MdmError>(())
+            })?;
+        }
+        Ok(result)
+    })();
+    result.unwrap_or_else(|error| crate::raise(error))
 }
 
 #[pg_extern(
@@ -104,6 +138,7 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
                 )
                 .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?;
             let mut dropped_members = 0_i64;
+            let mut unregistered_members = Vec::new();
             for member in members {
                 let relation_name = member
                     .get::<String>(1)
@@ -127,6 +162,9 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
                     .first()
                     .get::<pg_sys::Oid>(1)
                     .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?;
+                if current_oid.is_none() {
+                    continue;
+                }
                 let owner = client
                     .select(
                         "SELECT pg_catalog.pg_get_userbyid(c.relowner)::text FROM pg_catalog.pg_class c WHERE c.oid = $1",
@@ -144,13 +182,28 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
                         "member {relation_name} no longer matches its binding"
                     )));
                 }
-                client
-                    .update(
-                        "SELECT pgtrickle.drop_stream_table($1::text, false)",
+                let registered = client
+                    .select(
+                        "SELECT EXISTS (SELECT FROM pgtrickle.stream_tables_info WHERE pgt_relid = $1)",
                         Some(1),
-                        &[relation_name.into()],
+                        &[relation_oid.into()],
                     )
-                    .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?;
+                    .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?
+                    .first()
+                    .get::<bool>(1)
+                    .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?
+                    .unwrap_or(false);
+                if registered {
+                    client
+                        .update(
+                            "SELECT pgtrickle.drop_stream_table($1::text, false)",
+                            Some(1),
+                            &[relation_name.into()],
+                        )
+                        .map_err(|error| MdmError::GraphLifecycle(error.to_string()))?;
+                } else {
+                    unregistered_members.push(relation_oid.to_u32());
+                }
                 dropped_members += 1;
             }
             for output_name in output_names {
@@ -205,7 +258,8 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
             }
             Ok(JsonB(json!({
                 "entity_name": request.entity_name,
-                "dropped_members": dropped_members
+                "dropped_members": dropped_members,
+                "unregistered_members": unregistered_members
             })))
         })
     })();

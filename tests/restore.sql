@@ -632,7 +632,10 @@ SELECT e.entity_id,
                  WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS receipts,
        COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id)
                  FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
-                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS runtime
+                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS runtime,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY b.graph_generation DESC, m.topological_ordinal DESC)
+                 FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS members
 FROM mdm_internal.entities e WHERE e.entity_name = 'policy_qualification';
 CREATE TABLE public.e2e_restore_binding_drop_blocker (
     binding_id uuid PRIMARY KEY REFERENCES mdm_steward.policy_bindings_v1(binding_id)
@@ -673,7 +676,11 @@ BEGIN
        OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id), '[]'::jsonb)
            FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
            JOIN e2e_restore_drop_snapshot s USING (entity_id))
-          IS DISTINCT FROM (SELECT runtime FROM e2e_restore_drop_snapshot) THEN
+          IS DISTINCT FROM (SELECT runtime FROM e2e_restore_drop_snapshot)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY b.graph_generation DESC, m.topological_ordinal DESC), '[]'::jsonb)
+           FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+           JOIN e2e_restore_drop_snapshot s USING (entity_id))
+          IS DISTINCT FROM (SELECT members FROM e2e_restore_drop_snapshot) THEN
         RAISE EXCEPTION 'failed policy entity drop did not preserve complete M2 audit state';
     END IF;
 END
@@ -697,7 +704,10 @@ BEGIN
        OR EXISTS (SELECT FROM mdm_internal.policy_binding_runtime r
                   WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
                                          FROM e2e_restore_drop_snapshot s
-                                         CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b)) THEN
+                                         CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b))
+       OR EXISTS (SELECT FROM e2e_restore_drop_snapshot s
+                  CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.members) m
+                  JOIN pg_catalog.pg_class c ON c.oid = (m->>'relation_oid')::pg_catalog.oid) THEN
         RAISE EXCEPTION 'successful policy entity drop left entity, cases, binding, receipt, or runtime rows';
     END IF;
 END
