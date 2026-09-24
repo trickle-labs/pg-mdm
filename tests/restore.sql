@@ -620,7 +620,7 @@ SELECT execution_role_name AS restore_drop_role
 FROM mdm_internal.entities WHERE entity_name = 'policy_qualification'
 \gset
 GRANT EXECUTE ON FUNCTION mdm_admin.drop_entity(text, text) TO :"restore_drop_role";
-CREATE TEMP TABLE e2e_restore_drop_snapshot AS
+CREATE TABLE public.e2e_restore_drop_snapshot AS
 SELECT e.entity_id,
        pg_catalog.to_jsonb(e) AS entity_row,
        COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key)
@@ -642,6 +642,7 @@ SELECT (b->>'binding_id')::uuid
 FROM e2e_restore_drop_snapshot s
 CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b
 LIMIT 1;
+\connect restored mdm_legacy_login
 SET ROLE :"restore_drop_role";
 DO $$
 BEGIN
@@ -654,6 +655,7 @@ BEGIN
 END
 $$;
 RESET ROLE;
+\connect restored postgres
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM mdm_internal.entities e JOIN e2e_restore_drop_snapshot s USING (entity_id)
@@ -677,9 +679,11 @@ BEGIN
 END
 $$;
 DROP TABLE public.e2e_restore_binding_drop_blocker;
+\connect restored mdm_legacy_login
 SET ROLE :"restore_drop_role";
 SELECT mdm_admin.drop_entity('policy_qualification', 'policy_qualification');
 RESET ROLE;
+\connect restored postgres
 DO $$
 BEGIN
     IF EXISTS (SELECT FROM mdm_internal.entities WHERE entity_name = 'policy_qualification')
@@ -698,3 +702,4 @@ BEGIN
     END IF;
 END
 $$;
+DROP TABLE public.e2e_restore_drop_snapshot;
