@@ -241,6 +241,7 @@ SELECT pg_temp.assert_restored_binding_blocked(
 \quit 1
 \endif
 RESET ROLE;
+\connect restored postgres
 
 DO $$
 BEGIN
