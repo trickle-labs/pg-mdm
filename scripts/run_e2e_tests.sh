@@ -959,7 +959,10 @@ docker exec "$container" pg_restore -v -U postgres -d restored \
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d restored \
     -v helper_owner=mdm_helper_owner -f /sql/configure_helper.sql >/dev/null
 restored_policy_digest=$(docker exec "$container" psql -X -At -U postgres -d restored -c "SELECT md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key) FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)")
-test "$original_policy_digest" = "$restored_policy_digest"
+if [[ "$original_policy_digest" != "$restored_policy_digest" ]]; then
+    echo "FAIL: restored policy case digest changed: $restored_policy_digest != $original_policy_digest" >&2
+    exit 1
+fi
 restored_artifacts=$(docker exec "$container" psql -X -At -U postgres -d restored -c "$artifact_query")
 if [[ "$original_artifacts" != "$restored_artifacts" ]]; then
     echo 'FAIL: definition artifacts changed during logical restore' >&2
@@ -1000,7 +1003,10 @@ clone_sources=$(docker exec "$container" psql -X -At -U postgres -d pg_mdm_clone
 restored_sources=$(docker exec "$container" psql -X -At -U postgres -d restored \
     -c "SELECT count(*) FROM mdm_internal.source_records WHERE active")
 # The clone adds one isolation-only row on top of the restored records.
-test "$clone_sources" = "$((restored_sources + 1))"
+if [[ "$clone_sources" != "$((restored_sources + 1))" ]]; then
+    echo "FAIL: clone isolation has $clone_sources active source records, expected $((restored_sources + 1))" >&2
+    exit 1
+fi
 
 docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
