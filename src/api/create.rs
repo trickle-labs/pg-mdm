@@ -862,6 +862,42 @@ fn persist(
                 .map_err(|error| MdmError::Spi(error.to_string()))?
                 .ok_or_else(|| MdmError::Spi("entity ID is NULL".into()))?;
             client.update("INSERT INTO mdm_internal.execution_role_bindings (entity_id, role_oid) VALUES ($1::pg_catalog.uuid, $2)", None, &[entity_id.clone().into(), selected_oid().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            let role = quote_identifier(&selected);
+            client
+                .update(
+                    &format!("GRANT USAGE ON SCHEMA mdm_admin, mdm_steward TO {role}"),
+                    None,
+                    &[],
+                )
+                .map_err(|error| MdmError::Spi(error.to_string()))?;
+            for (schema, function) in [
+                ("mdm_admin", "create_policy_binding"),
+                ("mdm_admin", "replace_policy_binding"),
+                ("mdm_admin", "set_policy_binding_state"),
+                ("mdm_steward", "set_case_controls"),
+            ] {
+                let signature = {
+                    let lookup = format!(
+                        "SELECT COALESCE((SELECT p.oid::pg_catalog.regprocedure::text FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = '{schema}' AND p.proname = '{function}' LIMIT 1), '')"
+                    );
+                    let rows = client
+                        .select(&lookup, Some(1), &[])
+                        .map_err(|error| MdmError::Spi(error.to_string()))?;
+                    rows.first()
+                        .get::<String>(1)
+                        .map_err(|error| MdmError::Spi(error.to_string()))?
+                        .filter(|value| !value.is_empty())
+                };
+                if let Some(signature) = signature {
+                    client
+                        .update(
+                            &format!("GRANT EXECUTE ON FUNCTION {signature} TO {role}"),
+                            None,
+                            &[],
+                        )
+                        .map_err(|error| MdmError::Spi(error.to_string()))?;
+                }
+            }
         }
 
         operation_id = fetch_operation_id(

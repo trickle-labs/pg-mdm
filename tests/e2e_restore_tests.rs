@@ -14,6 +14,16 @@ fn test_restore_script_integrity() {
     assert!(content.contains("mdm_internal.source_identities"));
     assert!(content.contains("mdm_internal.steward_decisions"));
     assert!(content.contains("mdm_admin.rebind"));
+    assert!(content.contains("mdm_steward.policy_bindings_v1"));
+    assert!(content.contains("mdm_steward.policy_receipts_v1"));
+    assert!(content.contains("request_body->>'binding_id'"));
+    assert!(content.contains("mdm_internal.policy_binding_runtime"));
+    assert!(content.contains("policy binding runtime was restored before reconciliation"));
+    assert!(content.contains("restored binding was not rejected before reconciliation"));
+    assert!(content.contains("failed policy entity drop did not preserve complete M2 audit state"));
+    assert!(content.contains(
+        "successful policy entity drop left entity, cases, binding, receipt, or runtime rows"
+    ));
 }
 
 #[test]

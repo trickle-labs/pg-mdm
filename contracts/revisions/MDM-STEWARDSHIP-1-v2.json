@@ -1,6 +1,6 @@
 {
   "contract": "MDM-STEWARDSHIP/1",
-  "revision": 3,
+  "revision": 2,
   "status": "approved",
   "revision_2_authorization": "Authorized by the requesting contract owner on 2026-09-23, who confirmed approval to amend the shared agreement. Personal approver names were not supplied.",
   "change_notes": [
@@ -11,14 +11,6 @@
       "new": "Revision 2 freezes entity-scoped create, replace, and runtime-state APIs under the entity execution role; each binding carries canonical action and queue limits, due interval and escalation maximum, optimistic versions, and least-privilege automation role checks.",
       "authorization": "The requesting contract owner confirmed approval to change the shared contract in this session.",
       "compatibility": "Retire revision 1 binding-administration APIs. Preserve existing binding and receipt history; pause existing bindings until an operator replaces and explicitly activates a fully bounded revision 2 binding."
-    },
-    {
-      "revision": 3,
-      "affected": ["bindings"],
-      "previous": "Revision 2 exposed allowed_queues as name[] on the entity-role create and replace APIs.",
-      "new": "Revision 3 exposes allowed_queues as text[] on the Rust-facing create and replace APIs; values are validated and stored in the durable name[] column.",
-      "authorization": "The requesting contract owner approved the proposed contract adjustment in this session on 2026-09-23.",
-      "compatibility": "The v0.14 API is introduced in this release; use the revision 3 signatures in the extension SQL and callers."
     }
   ],
   "approvals": {
@@ -131,13 +123,13 @@
         "Logical restore leaves runtime activation absent or disabled. A physical clone fails the database OID check. Explicit entity-execution-role reconciliation is required before new intents apply."
       ],
       "administrator_surface": {
-        "create": "mdm_admin.create_policy_binding(entity_name text, automation_role_name text, policy_digest bytea, allowed_actions text[], allowed_queues text[], max_due_interval interval, max_escalation_level integer) returns (binding_id uuid, binding_version bigint). Validates queue strings and stores canonical values in allowed_queues name[]. Creates a binding and active runtime row at version one.",
-        "replace": "mdm_admin.replace_policy_binding(binding_id uuid, expected_version bigint, policy_digest bytea, allowed_actions text[], allowed_queues text[], max_due_interval interval, max_escalation_level integer) returns (binding_id uuid, binding_version bigint). Validates queue strings and stores canonical values in allowed_queues name[]. Marks the old binding replaced and creates a fresh inactive binding.",
+        "create": "mdm_admin.create_policy_binding(entity_name text, automation_role_name text, policy_digest bytea, allowed_actions text[], allowed_queues name[], max_due_interval interval, max_escalation_level integer) returns (binding_id uuid, binding_version bigint). Creates a binding and active runtime row at version one.",
+        "replace": "mdm_admin.replace_policy_binding(binding_id uuid, expected_version bigint, policy_digest bytea, allowed_actions text[], allowed_queues name[], max_due_interval interval, max_escalation_level integer) returns (binding_id uuid, binding_version bigint). Marks the old binding replaced and creates a fresh inactive binding.",
         "state": "mdm_admin.set_policy_binding_state(binding_id uuid, expected_runtime_version bigint, state text, reason text) returns runtime_version bigint. Supports activation, pause, and explicit database/role OID reconciliation.",
         "authorization": "Only the owning entity execution role may create, replace, activate, pause, or reconcile its bindings through fixed-path MDM helpers with optimistic version checks.",
         "react_access": "React has no direct SELECT or DML on this relation; the bound role may call submit_policy_intent only. No PUBLIC grants."
       },
-      "legacy_transition": "Revision 1 binding-administration functions are revoked and retired. Existing bindings and receipts are retained; existing runtime is paused. An old binding can be replaced with fully bounded revision 3 settings and explicitly activated. Existing request keys and receipts are never transferred.",
+      "legacy_transition": "Revision 1 binding-administration functions are revoked and retired. Existing bindings and receipts are retained; existing runtime is paused. An old binding can be replaced with fully bounded revision 2 settings and explicitly activated. Existing request keys and receipts are never transferred.",
       "submit_behavior": "Authenticate the caller against the binding's stored role name and current role OID before receipt lookup. An identical authorized prior request returns its original receipt after pause or replacement; a new request on a paused or replaced binding receives BINDING_PAUSED or BINDING_REPLACED with no control change."
     }
   },

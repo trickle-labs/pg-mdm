@@ -1,4 +1,4 @@
-use pgrx::datum::TimestampWithTimeZone;
+use pgrx::datum::{Interval, TimestampWithTimeZone};
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
 use pgrx::{Internal, JsonB, Uuid};
@@ -12,17 +12,25 @@ use crate::policy::{
 };
 use crate::source_record::quote_identifier;
 
+#[derive(Clone)]
 struct BindingRequest {
-    scope: String,
-    principal_role: String,
+    entity_name: String,
+    automation_role_name: String,
     policy_digest: Vec<u8>,
     allowed_actions: Vec<String>,
+    allowed_queues: Vec<String>,
+    max_due_interval: Option<String>,
+    max_escalation_level: i32,
     actor: String,
-    replacement_of: Option<Uuid>,
+    expected_version: Option<i64>,
+    replace_binding_id: Option<Uuid>,
 }
 
-struct PauseRequest {
+struct BindingStateRequest {
     binding_id: Uuid,
+    expected_runtime_version: i64,
+    state: String,
+    reason: String,
     actor: String,
 }
 
@@ -93,68 +101,51 @@ fn session_user() -> Result<String, MdmError> {
         .ok_or_else(|| MdmError::Unauthorized("session_user is NULL".into()))
 }
 
-fn validate_admin() -> Result<(String, String), MdmError> {
-    let authenticated_superuser = unsafe {
-        // SAFETY: PostgreSQL invokes extension functions on the backend thread.
-        pg_sys::superuser_arg(pg_sys::GetAuthenticatedUserId())
-            && pg_sys::superuser_arg(catalog::session_user_id())
-    };
-    if !authenticated_superuser {
-        return Err(MdmError::Unauthorized(
-            "binding administration requires an authenticated superuser session".into(),
-        ));
-    }
+fn validate_entity_admin(entity_name: &str) -> Result<(String, String, pg_sys::Oid), MdmError> {
     let helper = catalog::validate_helper_owner()?;
-    let selected = catalog::outer_user_id();
-    if selected == helper.oid {
-        return Err(MdmError::Unauthorized(
-            "the helper owner cannot administer bindings".into(),
-        ));
-    }
-    let role = Spi::connect(|client| {
-        let rows = client
-            .select(
-                "SELECT rolname::text, rolsuper, rolcanlogin, rolbypassrls FROM pg_catalog.pg_roles WHERE oid = $1",
-                Some(1),
-                &[selected.into()],
-            )
-            .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let (_, selected) = catalog::validate_caller(&helper)?;
+    let entity = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT e.entity_id::text, e.execution_role_name, b.role_oid FROM mdm_internal.entities e JOIN mdm_internal.execution_role_bindings b USING (entity_id) WHERE e.entity_name = $1::pg_catalog.name",
+            Some(1), &[entity_name.into()],
+        ).map_err(|error| MdmError::Spi(error.to_string()))?;
         if rows.is_empty() {
             return Err(MdmError::Unauthorized(
-                "selected administrator role does not exist".into(),
+                "entity execution role is not bound".into(),
             ));
         }
         let row = rows.first();
         Ok((
             row.get::<String>(1)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::Spi("administrator role name is NULL".into()))?,
-            row.get::<bool>(2)
+                .ok_or_else(|| MdmError::Spi("entity ID is NULL".into()))?,
+            row.get::<String>(2)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
-                .unwrap_or(false),
-            row.get::<bool>(3)
+                .ok_or_else(|| MdmError::Spi("execution role name is NULL".into()))?,
+            row.get::<pg_sys::Oid>(3)
                 .map_err(|error| MdmError::Spi(error.to_string()))?
-                .unwrap_or(false),
-            row.get::<bool>(4)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .unwrap_or(false),
+                .ok_or_else(|| MdmError::Spi("execution role OID is NULL".into()))?,
         ))
     })?;
-    if role.0 != "mdm_administrator" || role.1 || role.3 {
+    if selected.name != entity.1 || selected.oid != entity.2 {
         return Err(MdmError::Unauthorized(
-            "selected administrator role must be mdm_administrator and must not be superuser or BYPASSRLS".into(),
+            "binding administration requires the entity execution role".into(),
         ));
     }
-    Ok((current_user()?, role.0))
+    Ok((entity.0, selected.name, selected.oid))
 }
 
-fn validate_principal_role(name: &str, helper_oid: pg_sys::Oid) -> Result<pg_sys::Oid, MdmError> {
+fn validate_principal_role(
+    name: &str,
+    helper_oid: pg_sys::Oid,
+    execution_oid: pg_sys::Oid,
+) -> Result<pg_sys::Oid, MdmError> {
     let row = Spi::connect(|client| {
         let rows = client
             .select(
-                "SELECT r.oid, r.rolname::text, r.rolsuper, r.rolcanlogin, r.rolbypassrls, EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m WHERE m.roleid = r.oid OR m.member = r.oid) FROM pg_catalog.pg_roles r WHERE r.rolname = $1",
+                "SELECT r.oid, r.rolname::text, r.rolsuper, r.rolcanlogin, r.rolbypassrls, pg_catalog.pg_has_role(r.oid, $2, 'MEMBER') OR pg_catalog.pg_has_role(r.oid, $3, 'MEMBER') FROM pg_catalog.pg_roles r WHERE r.rolname = $1",
                 Some(1),
-                &[name.into()],
+                &[name.into(), helper_oid.into(), execution_oid.into()],
             )
             .map_err(|error| MdmError::Spi(error.to_string()))?;
         if rows.is_empty() {
@@ -264,7 +255,17 @@ fn database_oid() -> Result<pg_sys::Oid, MdmError> {
     .ok_or_else(|| MdmError::Spi("current database OID is NULL".into()))
 }
 
-fn binding_result(value: Value) -> Result<Uuid, MdmError> {
+fn interval_text(interval: Option<Interval>) -> Option<String> {
+    interval.map(|interval| {
+        let interval = interval.into_inner();
+        format!(
+            "{} mons {} days {} microseconds",
+            interval.month, interval.day, interval.time
+        )
+    })
+}
+
+fn binding_result(value: &Value) -> Result<Uuid, MdmError> {
     parse_uuid(
         value["binding_id"]
             .as_str()
@@ -290,101 +291,140 @@ fn grant_binding_role(client: &mut SpiClient<'_>, principal_role: &str) -> Resul
     Ok(())
 }
 
-fn register_binding(request: &BindingRequest) -> Result<Value, MdmError> {
+fn validate_binding_request(
+    request: &BindingRequest,
+    execution_oid: pg_sys::Oid,
+) -> Result<pg_sys::Oid, MdmError> {
     validate_actions(&request.allowed_actions)?;
-    if request.policy_digest.len() != 32 {
+    let mut queues = request.allowed_queues.clone();
+    queues.sort();
+    queues.dedup();
+    if queues != request.allowed_queues || queues.iter().any(String::is_empty) {
         return Err(MdmError::PolicyBinding(
-            "policy_digest must be exactly 32 bytes".into(),
+            "allowed_queues must be sorted, distinct, and nonempty".into(),
+        ));
+    }
+    if request.allowed_actions.iter().any(|a| a == "ASSIGN_QUEUE") && queues.is_empty()
+        || request.allowed_actions.iter().any(|a| a == "SET_DUE_AT")
+            && request.max_due_interval.is_none()
+        || request.allowed_actions.iter().any(|a| a == "ESCALATE")
+            && request.max_escalation_level <= 0
+        || request.max_escalation_level < 0
+        || request.policy_digest.len() != 32
+    {
+        return Err(MdmError::PolicyBinding(
+            "binding limits do not satisfy enabled actions".into(),
         ));
     }
     let helper = catalog::validate_helper_owner()?;
-    let principal_oid = validate_principal_role(&request.principal_role, helper.oid)?;
-    let database_oid = database_oid()?;
-    let (_, selected) = validate_admin()?;
+    validate_principal_role(&request.automation_role_name, helper.oid, execution_oid)
+}
+
+fn persist_binding(request: &BindingRequest) -> Result<Value, MdmError> {
+    let (entity_id, selected, execution_oid) = validate_entity_admin(&request.entity_name)?;
+    let automation_oid = validate_binding_request(request, execution_oid)?;
+    let db_oid = database_oid()?;
     Spi::connect_mut(|client| {
-        let entity = client
-            .select(
-                "SELECT entity_id::text FROM mdm_internal.entities WHERE entity_name = $1::pg_catalog.name FOR UPDATE",
-                Some(1),
-                &[request.scope.clone().into()],
-            )
-            .map_err(|error| MdmError::Spi(error.to_string()))?;
-        let entity_id = entity
-            .first()
-            .get::<String>(1)
-            .map_err(|error| MdmError::Spi(error.to_string()))?
-            .ok_or_else(|| MdmError::PolicyBinding("binding scope must name an entity".into()))?;
-        let inserted = client
-            .update(
-                "INSERT INTO mdm_steward.policy_bindings_v1 (scope, entity_id, principal_role, principal_role_oid, policy_digest, allowed_actions, allowed_queues, max_due_interval, max_escalation_level, created_by_name, created_as_role_name) VALUES ($1::pg_catalog.name, $2::pg_catalog.uuid, $3::pg_catalog.name, $4, $5, $6, ARRAY[]::pg_catalog.name[], interval '365 days', 1, $7, $8) RETURNING binding_id::text, binding_version",
-                Some(1),
-                &[
-                    request.scope.clone().into(),
-                    entity_id.clone().into(),
-                    request.principal_role.clone().into(),
-                    principal_oid.into(),
-                    request.policy_digest.clone().into(),
-                    request.allowed_actions.clone().into(),
-                    request.actor.clone().into(),
-                    selected.clone().into(),
-                ],
-            )
-            .map_err(|error| MdmError::Spi(error.to_string()))?;
-        let row = inserted.first();
-        let binding_id = row
-            .get::<String>(1)
-            .map_err(|error| MdmError::Spi(error.to_string()))?
-            .ok_or_else(|| MdmError::OperationState("binding ID is NULL".into()))?;
-        let binding_version = row
-            .get::<i64>(2)
-            .map_err(|error| MdmError::Spi(error.to_string()))?
-            .ok_or_else(|| MdmError::OperationState("binding version is NULL".into()))?;
         client
-            .update(
-                "INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) VALUES ($1::pg_catalog.uuid, $2, $3, 'active', 1)",
-                None,
-                &[binding_id.clone().into(), database_oid.into(), principal_oid.into()],
+            .select(
+                "SELECT entity_id FROM mdm_internal.entities WHERE entity_id = $1::uuid FOR UPDATE",
+                Some(1),
+                &[entity_id.clone().into()],
             )
-            .map_err(|error| MdmError::Spi(error.to_string()))?;
-        grant_binding_role(client, &request.principal_role)?;
+            .map_err(|e| MdmError::Spi(e.to_string()))?;
+        let (old_id, binding_id) = if let Some(id) = request.replace_binding_id {
+            let old = client.select("SELECT binding_version, replaced_by::text FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND entity_id = $2::uuid FOR UPDATE", Some(1), &[id.into(), entity_id.clone().into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+            let row = old.first();
+            let version = row
+                .get::<i64>(1)
+                .map_err(|e| MdmError::Spi(e.to_string()))?
+                .ok_or_else(|| {
+                    MdmError::PolicyBinding("binding does not exist for entity".into())
+                })?;
+            if row
+                .get::<String>(2)
+                .map_err(|e| MdmError::Spi(e.to_string()))?
+                .is_some()
+                || request.expected_version != Some(version)
+            {
+                return Err(MdmError::PolicyBinding(
+                    "binding is replaced or expected version is stale".into(),
+                ));
+            }
+            let new_id = Spi::get_one::<String>("SELECT pg_catalog.uuidv7()::text")
+                .map_err(|e| MdmError::Spi(e.to_string()))?
+                .ok_or_else(|| MdmError::Spi("replacement ID is NULL".into()))?;
+            client.update("UPDATE mdm_steward.policy_bindings_v1 SET replaced_by = $2::uuid, replaced_at = pg_catalog.statement_timestamp() WHERE binding_id = $1::uuid", None, &[id.into(), new_id.clone().into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+            client.update("UPDATE mdm_internal.policy_binding_runtime SET state = 'paused', runtime_version = runtime_version + 1, changed_at = pg_catalog.statement_timestamp() WHERE binding_id = $1::uuid", None, &[id.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+            (Some(id), new_id)
+        } else {
+            (None, String::new())
+        };
+        let inserted = client.update("INSERT INTO mdm_steward.policy_bindings_v1 (binding_id, entity_id, automation_role_name, policy_digest, allowed_actions, allowed_queues, max_due_interval, max_escalation_level, created_by_name, created_as_role_name) VALUES (COALESCE(NULLIF($1, '')::uuid, pg_catalog.uuidv7()), $2::uuid, $3::name, $4, $5, $6::name[], $7::interval, $8, $9, $10) RETURNING binding_id::text, binding_version", Some(1), &[binding_id.into(), entity_id.clone().into(), request.automation_role_name.clone().into(), request.policy_digest.clone().into(), request.allowed_actions.clone().into(), request.allowed_queues.clone().into(), request.max_due_interval.clone().into(), request.max_escalation_level.into(), request.actor.clone().into(), selected.clone().into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+        let row = inserted.first();
+        let id = row
+            .get::<String>(1)
+            .map_err(|e| MdmError::Spi(e.to_string()))?
+            .ok_or_else(|| MdmError::Spi("binding ID is NULL".into()))?;
+        let version = row
+            .get::<i64>(2)
+            .map_err(|e| MdmError::Spi(e.to_string()))?
+            .ok_or_else(|| MdmError::Spi("binding version is NULL".into()))?;
+        let state = if old_id.is_some() { "paused" } else { "active" };
+        client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) VALUES ($1::uuid, $2, $3, $4, 1)", None, &[id.clone().into(), db_oid.into(), automation_oid.into(), state.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+        grant_binding_role(client, &request.automation_role_name)?;
         operation(
             client,
-            "policy_binding_register",
-            Some(&request.scope),
-            json!({"binding_id": binding_id, "binding_version": binding_version}),
+            if old_id.is_some() {
+                "policy_binding_replace"
+            } else {
+                "policy_binding_create"
+            },
+            Some(&request.entity_name),
+            json!({"binding_id": id, "replaced_binding_id": old_id.map(|v| v.to_string()), "binding_version": version, "runtime_state": state}),
             &request.actor,
             &selected,
         )?;
-        Ok(json!({"binding_id": binding_id, "binding_version": binding_version}))
+        Ok(json!({"binding_id": id, "binding_version": version}))
     })
 }
 
-#[pg_extern(
-    name = "register_policy_binding",
-    requires = [persist_create_policy_binding],
-    sql = "CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';"
-)]
+#[pg_extern(name = "create_policy_binding", requires = [persist_create_policy_binding], sql = "CREATE FUNCTION mdm_admin.create_policy_binding(entity_name text, automation_role_name text, policy_digest bytea, allowed_actions text[], allowed_queues text[], max_due_interval interval, max_escalation_level integer) RETURNS TABLE (binding_id uuid, binding_version bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';")]
 pub(crate) fn create_policy_binding(
-    scope: String,
-    principal_role: String,
+    entity_name: String,
+    automation_role_name: String,
     policy_digest: Vec<u8>,
     allowed_actions: Vec<String>,
-) -> Uuid {
+    allowed_queues: Vec<String>,
+    max_due_interval: Option<Interval>,
+    max_escalation_level: i32,
+) -> TableIterator<'static, (name!(binding_id, Uuid), name!(binding_version, i64))> {
     let result = (|| {
+        let actor = current_user()?;
         let value = catalog::call_helper(
             "persist_create_policy_binding",
             BindingRequest {
-                scope,
-                principal_role,
+                entity_name,
+                automation_role_name,
                 policy_digest,
                 allowed_actions,
-                actor: current_user()?,
-                replacement_of: None,
+                allowed_queues,
+                max_due_interval: interval_text(max_due_interval),
+                max_escalation_level,
+                actor,
+                expected_version: None,
+                replace_binding_id: None,
             },
         )?;
-        binding_result(value.0)
+        Ok((
+            binding_result(&value.0)?,
+            value.0["binding_version"].as_i64().unwrap_or(1),
+        ))
     })();
-    result.unwrap_or_else(|error| crate::raise(error))
+    match result {
+        Ok(row) => TableIterator::new(vec![row]),
+        Err(error) => crate::raise(error),
+    }
 }
 
 #[pg_extern(
@@ -395,111 +435,49 @@ pub(crate) fn create_policy_binding(
 #[search_path(pg_catalog, mdm_internal, pg_temp)]
 pub(crate) fn persist_create_policy_binding(request: Internal) -> JsonB {
     let result = (|| {
-        // SAFETY: only the public binding wrapper constructs this request.
         let request = unsafe { request.get::<BindingRequest>() }
             .ok_or_else(|| MdmError::Unauthorized("binding request is required".into()))?;
-        Ok(JsonB(register_binding(request)?))
+        Ok(JsonB(persist_binding(request)?))
     })();
     result.unwrap_or_else(|error| crate::raise(error))
 }
 
-#[pg_extern(
-    name = "pause_policy_binding",
-    requires = [persist_pause_policy_binding],
-    sql = "CREATE FUNCTION mdm_steward.pause_policy_binding(binding_id uuid) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'pause_policy_binding_wrapper';"
-)]
-pub(crate) fn pause_policy_binding(binding_id: Uuid) -> Uuid {
-    let result = (|| {
-        let value = catalog::call_helper(
-            "persist_pause_policy_binding",
-            PauseRequest {
-                binding_id,
-                actor: current_user()?,
-            },
-        )?;
-        binding_result(value.0)
-    })();
-    result.unwrap_or_else(|error| crate::raise(error))
-}
-
-#[pg_extern(
-    name = "persist_pause_policy_binding",
-    security_definer,
-    sql = "CREATE FUNCTION mdm_internal.persist_pause_policy_binding(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_pause_policy_binding_wrapper';"
-)]
-#[search_path(pg_catalog, mdm_internal, pg_temp)]
-pub(crate) fn persist_pause_policy_binding(request: Internal) -> JsonB {
-    let result = (|| {
-        // SAFETY: only the public binding wrapper constructs this request.
-        let request = unsafe { request.get::<PauseRequest>() }
-            .ok_or_else(|| MdmError::Unauthorized("pause request is required".into()))?;
-        let (_, selected) = validate_admin()?;
-        Spi::connect_mut(|client| {
-            let row = client
-                .update(
-                    "UPDATE mdm_steward.policy_bindings_v1 SET state = 'paused' WHERE binding_id = $1::pg_catalog.uuid AND state = 'active' RETURNING binding_id::text, scope::text",
-                    Some(1),
-                    &[request.binding_id.into()],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            let row = row.first();
-            let binding_id = row
-                .get::<String>(1)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| {
-                    MdmError::PolicyBinding("binding is missing or not active".into())
-                })?;
-            let scope = row
-                .get::<String>(2)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::PolicyBinding("binding scope is NULL".into()))?;
-            client
-                .update(
-                    "UPDATE mdm_internal.policy_binding_runtime SET state = 'paused', runtime_version = runtime_version + 1, changed_at = pg_catalog.statement_timestamp() WHERE binding_id = $1::pg_catalog.uuid",
-                    None,
-                    &[binding_id.clone().into()],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            operation(
-                client,
-                "policy_binding_pause",
-                Some(&scope),
-                json!({"binding_id": binding_id}),
-                &request.actor,
-                &selected,
-            )?;
-            Ok(JsonB(json!({"binding_id": binding_id})))
-        })
-    })();
-    result.unwrap_or_else(|error| crate::raise(error))
-}
-
-#[pg_extern(
-    name = "replace_policy_binding",
-    requires = [persist_replace_policy_binding],
-    sql = "CREATE FUNCTION mdm_steward.replace_policy_binding(binding_id uuid, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'replace_policy_binding_wrapper';"
-)]
+#[pg_extern(name = "replace_policy_binding", requires = [persist_replace_policy_binding], sql = "CREATE FUNCTION mdm_admin.replace_policy_binding(binding_id uuid, expected_version bigint, policy_digest bytea, allowed_actions text[], allowed_queues text[], max_due_interval interval, max_escalation_level integer) RETURNS TABLE (binding_id uuid, binding_version bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'replace_policy_binding_wrapper';")]
 pub(crate) fn replace_policy_binding(
     binding_id: Uuid,
-    principal_role: String,
+    expected_version: i64,
     policy_digest: Vec<u8>,
     allowed_actions: Vec<String>,
-) -> Uuid {
+    allowed_queues: Vec<String>,
+    max_due_interval: Option<Interval>,
+    max_escalation_level: i32,
+) -> TableIterator<'static, (name!(binding_id, Uuid), name!(binding_version, i64))> {
     let result = (|| {
+        let actor = current_user()?;
         let value = catalog::call_helper(
             "persist_replace_policy_binding",
             BindingRequest {
-                scope: String::new(),
-                principal_role,
+                entity_name: String::new(),
+                automation_role_name: String::new(),
                 policy_digest,
                 allowed_actions,
-                actor: current_user()?,
-                replacement_of: Some(binding_id),
+                allowed_queues,
+                max_due_interval: interval_text(max_due_interval),
+                max_escalation_level,
+                actor,
+                expected_version: Some(expected_version),
+                replace_binding_id: Some(binding_id),
             },
         )?;
-        binding_result(value.0)
+        Ok((
+            binding_result(&value.0)?,
+            value.0["binding_version"].as_i64().unwrap_or(1),
+        ))
     })();
-    result.unwrap_or_else(|error| crate::raise(error))
+    match result {
+        Ok(row) => TableIterator::new(vec![row]),
+        Err(error) => crate::raise(error),
+    }
 }
 
 #[pg_extern(
@@ -510,100 +488,104 @@ pub(crate) fn replace_policy_binding(
 #[search_path(pg_catalog, mdm_internal, pg_temp)]
 pub(crate) fn persist_replace_policy_binding(request: Internal) -> JsonB {
     let result = (|| {
-        // SAFETY: only the public binding wrapper constructs this request.
-        let request = unsafe { request.get::<BindingRequest>() }
-            .ok_or_else(|| MdmError::Unauthorized("replacement request is required".into()))?;
-        let (_, selected) = validate_admin()?;
-        validate_actions(&request.allowed_actions)?;
-        if request.policy_digest.len() != 32 {
+        let mut request = unsafe { request.get::<BindingRequest>() }
+            .ok_or_else(|| MdmError::Unauthorized("replacement request is required".into()))?
+            .clone();
+        let old_id = request
+            .replace_binding_id
+            .ok_or_else(|| MdmError::PolicyBinding("replacement binding ID is required".into()))?;
+        (request.entity_name, request.automation_role_name) = Spi::connect(|client| {
+            let rows = client.select(
+                "SELECT e.entity_name::text, b.automation_role_name::text FROM mdm_steward.policy_bindings_v1 b JOIN mdm_internal.entities e USING (entity_id) WHERE b.binding_id = $1::uuid",
+                Some(1), &[old_id.into()],
+            ).map_err(|e| MdmError::Spi(e.to_string()))?;
+            let row = rows.first();
+            Ok((
+                row.get::<String>(1)
+                    .map_err(|e| MdmError::Spi(e.to_string()))?
+                    .ok_or_else(|| MdmError::PolicyBinding("binding does not exist".into()))?,
+                row.get::<String>(2)
+                    .map_err(|e| MdmError::Spi(e.to_string()))?
+                    .ok_or_else(|| MdmError::PolicyBinding("automation role is missing".into()))?,
+            ))
+        })?;
+        Ok(JsonB(persist_binding(&request)?))
+    })();
+    result.unwrap_or_else(|error| crate::raise(error))
+}
+
+#[pg_extern(name = "set_policy_binding_state", requires = [persist_set_policy_binding_state], sql = "CREATE FUNCTION mdm_admin.set_policy_binding_state(binding_id uuid, expected_runtime_version bigint, state text, reason text) RETURNS bigint LANGUAGE c AS 'MODULE_PATHNAME', 'set_policy_binding_state_wrapper';")]
+pub(crate) fn set_policy_binding_state(
+    binding_id: Uuid,
+    expected_runtime_version: i64,
+    state: String,
+    reason: String,
+) -> i64 {
+    let result = catalog::call_helper(
+        "persist_set_policy_binding_state",
+        BindingStateRequest {
+            binding_id,
+            expected_runtime_version,
+            state,
+            reason,
+            actor: current_user().unwrap_or_default(),
+        },
+    )
+    .and_then(|value| {
+        value.0["runtime_version"]
+            .as_i64()
+            .ok_or_else(|| MdmError::OperationState("runtime version missing".into()))
+    });
+    result.unwrap_or_else(|error| crate::raise(error))
+}
+
+#[pg_extern(
+    name = "persist_set_policy_binding_state",
+    security_definer,
+    sql = "CREATE FUNCTION mdm_internal.persist_set_policy_binding_state(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_set_policy_binding_state_wrapper';"
+)]
+#[search_path(pg_catalog, mdm_internal, pg_temp)]
+pub(crate) fn persist_set_policy_binding_state(request: Internal) -> JsonB {
+    let result = (|| {
+        let request = unsafe { request.get::<BindingStateRequest>() }
+            .ok_or_else(|| MdmError::Unauthorized("binding state request is required".into()))?;
+        if !matches!(request.state.as_str(), "active" | "paused")
+            || request.reason.trim().is_empty()
+        {
             return Err(MdmError::PolicyBinding(
-                "policy_digest must be exactly 32 bytes".into(),
+                "state must be active or paused and reason must be nonempty".into(),
             ));
         }
-        let old_id = request
-            .replacement_of
-            .ok_or_else(|| MdmError::PolicyBinding("replacement binding ID is required".into()))?;
+        let entity_name = Spi::get_one_with_args::<String>("SELECT e.entity_name::text FROM mdm_steward.policy_bindings_v1 b JOIN mdm_internal.entities e USING (entity_id) WHERE b.binding_id = $1::uuid", &[request.binding_id.into()]).map_err(|e| MdmError::Spi(e.to_string()))?.ok_or_else(|| MdmError::PolicyBinding("binding does not exist".into()))?;
+        let (entity_id, selected_name, execution_oid) = validate_entity_admin(&entity_name)?;
+        let automation_role = Spi::get_one_with_args::<String>(
+            "SELECT automation_role_name::text FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND replaced_by IS NULL",
+            &[request.binding_id.into()],
+        )
+        .map_err(|e| MdmError::Spi(e.to_string()))?
+        .ok_or_else(|| MdmError::PolicyBinding("binding is replaced".into()))?;
         let helper = catalog::validate_helper_owner()?;
-        let principal_oid = validate_principal_role(&request.principal_role, helper.oid)?;
-        let database_oid = database_oid()?;
+        let automation_oid = validate_principal_role(&automation_role, helper.oid, execution_oid)?;
         Spi::connect_mut(|client| {
-            let old = client
-                .select(
-                    "SELECT scope::text, entity_id::text, state FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::pg_catalog.uuid FOR UPDATE",
-                    Some(1),
-                    &[old_id.into()],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            let old_row = old.first();
-            let scope = old_row
-                .get::<String>(1)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::PolicyBinding("binding does not exist".into()))?;
-            let entity_id = old_row
-                .get::<String>(2)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::Spi("binding entity ID is NULL".into()))?;
-            let state = old_row
-                .get::<String>(3)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::Spi("binding state is NULL".into()))?;
-            if state == "replaced" {
-                return Err(MdmError::PolicyBinding(
-                    "binding is already replaced".into(),
-                ));
-            }
-            client
-                .update(
-                    "UPDATE mdm_steward.policy_bindings_v1 SET state = 'replaced' WHERE binding_id = $1::pg_catalog.uuid",
-                    None,
-                    &[old_id.into()],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            let inserted = client
-                .update(
-                    "INSERT INTO mdm_steward.policy_bindings_v1 (scope, entity_id, principal_role, principal_role_oid, policy_digest, allowed_actions, allowed_queues, max_due_interval, max_escalation_level, created_by_name, created_as_role_name, state) VALUES ($1::pg_catalog.name, $2::pg_catalog.uuid, $3::pg_catalog.name, $4, $5, $6, ARRAY[]::pg_catalog.name[], interval '365 days', 1, $7, $8, 'active') RETURNING binding_id::text",
-                    Some(1),
-                    &[
-                        scope.clone().into(),
-                        entity_id.into(),
-                        request.principal_role.clone().into(),
-                        principal_oid.into(),
-                        request.policy_digest.clone().into(),
-                        request.allowed_actions.clone().into(),
-                        request.actor.clone().into(),
-                        selected.clone().into(),
-                    ],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            let new_id = inserted
+            let row = client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) SELECT $1::uuid, $2, $3, $4, 1 WHERE $5 >= 0 AND EXISTS (SELECT 1 FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND entity_id = $6::uuid AND replaced_by IS NULL) AND ($5 = 0 OR EXISTS (SELECT 1 FROM mdm_internal.policy_binding_runtime WHERE binding_id = $1::uuid AND runtime_version = $5)) ON CONFLICT (binding_id) DO UPDATE SET database_oid = EXCLUDED.database_oid, automation_role_oid = EXCLUDED.automation_role_oid, state = EXCLUDED.state, runtime_version = mdm_internal.policy_binding_runtime.runtime_version + 1, changed_at = pg_catalog.statement_timestamp() WHERE mdm_internal.policy_binding_runtime.runtime_version = $5 RETURNING runtime_version", Some(1), &[request.binding_id.into(), database_oid()?.into(), automation_oid.into(), request.state.clone().into(), request.expected_runtime_version.into(), entity_id.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+            let version = row
                 .first()
-                .get::<String>(1)
-                .map_err(|error| MdmError::Spi(error.to_string()))?
-                .ok_or_else(|| MdmError::OperationState("replacement binding ID is NULL".into()))?;
-            client
-                .update(
-                    "UPDATE mdm_steward.policy_bindings_v1 SET replacement_binding_id = $2::pg_catalog.uuid WHERE binding_id = $1::pg_catalog.uuid",
-                    None,
-                    &[old_id.into(), new_id.clone().into()],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            client
-                .update(
-                    "INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) VALUES ($1::pg_catalog.uuid, $2, $3, 'active', 1)",
-                    None,
-                    &[new_id.clone().into(), database_oid.into(), principal_oid.into()],
-                )
-                .map_err(|error| MdmError::Spi(error.to_string()))?;
-            grant_binding_role(client, &request.principal_role)?;
+                .get::<i64>(1)
+                .map_err(|e| MdmError::Spi(e.to_string()))?
+                .ok_or_else(|| {
+                    MdmError::PolicyBinding(
+                        "runtime version is stale or binding is replaced".into(),
+                    )
+                })?;
             operation(
                 client,
-                "policy_binding_replace",
-                Some(&scope),
-                json!({"binding_id": new_id, "replaced_binding_id": old_id.to_string()}),
+                "policy_binding_state",
+                Some(&entity_name),
+                json!({"binding_id": request.binding_id.to_string(), "state": request.state, "reason": request.reason, "runtime_version": version}),
                 &request.actor,
-                &selected,
+                &selected_name,
             )?;
-            Ok(JsonB(json!({"binding_id": new_id})))
+            Ok(JsonB(json!({"runtime_version": version})))
         })
     })();
     result.unwrap_or_else(|error| crate::raise(error))
@@ -819,7 +801,7 @@ fn receipt_select(
 ) -> Result<Option<Receipt>, MdmError> {
     let rows = client
         .select(
-            "SELECT receipt_id::text, receipt_id::text, outcome, reason_code, case_key, action_revision, control, resulting_publication_revision FROM mdm_steward.policy_receipts_v1 WHERE binding_id = $1::pg_catalog.uuid AND request_key = $2",
+            "SELECT receipt_id::text, outcome, reason_code, case_key, action_revision, control, resulting_publication_revision FROM mdm_steward.policy_receipts_v1 WHERE binding_id = $1::pg_catalog.uuid AND request_key = $2",
             Some(1),
             &[binding_id.to_string().into(), request_key.to_vec().into()],
         )
@@ -891,7 +873,7 @@ fn terminal(
 ) -> Result<Receipt, MdmError> {
     let inserted = client
         .update(
-            "INSERT INTO mdm_steward.policy_receipts_v1 (binding_id, request_key, request_digest, request_body, actor, session_role_name, selected_role_name, binding_version, case_key, action, action_revision, outcome, reason_code, control) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5::pg_catalog.name, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT (binding_id, request_key) DO NOTHING RETURNING receipt_id::text, receipt_id::text, outcome, reason_code, case_key, action_revision, control, resulting_publication_revision",
+            "INSERT INTO mdm_steward.policy_receipts_v1 (binding_id, request_key, request_digest, request_body, actor, session_role_name, selected_role_name, binding_version, case_key, action, action_revision, outcome, reason_code, control) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5::pg_catalog.name, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT (binding_id, request_key) DO NOTHING RETURNING receipt_id::text, outcome, reason_code, case_key, action_revision, control, resulting_publication_revision",
             Some(1),
             &[
                 request.binding_id.to_string().into(),
@@ -979,7 +961,7 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
     Spi::connect_mut(|client| {
         let binding = client
             .select(
-                "SELECT b.entity_id::text, b.principal_role::text, b.principal_role_oid, b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, b.state, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused') FROM mdm_steward.policy_bindings_v1 b LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid",
+                "SELECT b.entity_id::text, b.automation_role_name::text, COALESCE(r.automation_role_oid, 0), b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, CASE WHEN b.replaced_by IS NOT NULL THEN 'replaced' ELSE COALESCE(r.state, 'paused') END, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused') FROM mdm_steward.policy_bindings_v1 b LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid",
                 Some(1),
                 &[request.binding_id.to_string().into()],
             )
@@ -1006,7 +988,7 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
         }
         let binding = client
             .select(
-                "SELECT b.entity_id::text, b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, b.state, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused'), b.scope::text FROM mdm_steward.policy_bindings_v1 b LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid FOR UPDATE OF b",
+                "SELECT b.entity_id::text, b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, CASE WHEN b.replaced_by IS NOT NULL THEN 'replaced' ELSE COALESCE(r.state, 'paused') END, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused'), e.entity_name::text FROM mdm_steward.policy_bindings_v1 b JOIN mdm_internal.entities e USING (entity_id) LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid FOR UPDATE OF b",
                 Some(1),
                 &[request.binding_id.to_string().into()],
             )

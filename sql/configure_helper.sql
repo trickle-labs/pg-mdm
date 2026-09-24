@@ -26,7 +26,8 @@ WHERE rolname = :'helper_owner'
 \endif
 
 BEGIN;
-GRANT USAGE ON SCHEMA mdm_admin, mdm_internal, mdm_steward, mdm_graph TO :"helper_owner";
+GRANT USAGE ON SCHEMA mdm_internal, mdm_graph TO :"helper_owner";
+GRANT USAGE ON SCHEMA mdm_admin, mdm_steward TO :"helper_owner" WITH GRANT OPTION;
 GRANT USAGE, CREATE ON SCHEMA mdm_out TO :"helper_owner";
 SELECT pg_catalog.format(
     'ALTER TABLE %I.%I OWNER TO %I',
@@ -123,10 +124,14 @@ ALTER FUNCTION mdm_admin.rebuild(text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_drop_entity(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_create_policy_binding(internal) OWNER TO :"helper_owner";
-ALTER FUNCTION mdm_internal.persist_pause_policy_binding(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_replace_policy_binding(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_internal.persist_set_policy_binding_state(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_set_case_controls(internal) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.persist_policy_intent(internal) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_admin.create_policy_binding(text, text, bytea, text[], text[], interval, integer) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_admin.replace_policy_binding(uuid, bigint, bytea, text[], text[], interval, integer) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_admin.set_policy_binding_state(uuid, bigint, text, text) OWNER TO :"helper_owner";
+ALTER FUNCTION mdm_steward.set_case_controls(bigint, name, timestamptz, integer, boolean, bigint, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_steward.submit_policy_intent(uuid, bytea, bigint, text, jsonb, bigint, bigint, bigint, bigint, bytea, bigint, bytea, text, text, text) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.policy_case_basis_digest(jsonb) OWNER TO :"helper_owner";
 ALTER FUNCTION mdm_internal.normalized_levenshtein_score(text, text, bigint) OWNER TO :"helper_owner";

@@ -137,7 +137,7 @@
         "authorization": "Only the owning entity execution role may create, replace, activate, pause, or reconcile its bindings through fixed-path MDM helpers with optimistic version checks.",
         "react_access": "React has no direct SELECT or DML on this relation; the bound role may call submit_policy_intent only. No PUBLIC grants."
       },
-      "legacy_transition": "Revision 1 binding-administration functions are revoked and retired. Existing bindings and receipts are retained; existing runtime is paused. An old binding can be replaced with fully bounded revision 3 settings and explicitly activated. Existing request keys and receipts are never transferred.",
+      "legacy_transition": "Revision 1 binding-administration functions are revoked and retired. Existing bindings and receipts are retained; existing runtime is paused. An old binding can be replaced with fully bounded revision 2 settings and explicitly activated. Existing request keys and receipts are never transferred.",
       "submit_behavior": "Authenticate the caller against the binding's stored role name and current role OID before receipt lookup. An identical authorized prior request returns its original receipt after pause or replacement; a new request on a paused or replaced binding receives BINDING_PAUSED or BINDING_REPLACED with no control change."
     }
   },

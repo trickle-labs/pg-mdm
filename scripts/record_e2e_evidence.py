@@ -94,7 +94,7 @@ cpu_info = {
 }
 storage_info = in_container('df -B1 "$PGDATA"')
 package_manifest = in_container("cat /evidence/pg_mdm-package-manifest.sha256") + "\n"
-evidence_dir = ROOT / "evidence" / "v0.12"
+evidence_dir = ROOT / "evidence" / "v0.14"
 evidence_dir.mkdir(parents=True, exist_ok=True)
 manifest_path = evidence_dir / "pg-mdm-package-manifest.sha256"
 manifest_path.write_text(package_manifest, encoding="utf-8")

@@ -566,5 +566,811 @@ $$;
 RESET ROLE;
 \connect foundation postgres
 DROP TABLE public.e2e_policy_vars;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'mdm_policy_worker') THEN
+        CREATE ROLE mdm_policy_worker NOLOGIN NOSUPERUSER NOBYPASSRLS;
+    END IF;
+END
+$$;
+GRANT mdm_policy_worker TO mdm_legacy_login WITH SET TRUE, INHERIT FALSE;
+SELECT execution_role_name AS policy_execution_role
+FROM mdm_internal.entities
+WHERE entity_name = 'policy_qualification'
+\gset
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT binding_id AS first_binding_id, binding_version AS first_binding_version
+FROM mdm_admin.create_policy_binding(
+    'policy_qualification', 'mdm_policy_worker', pg_catalog.decode(pg_catalog.repeat('a', 64), 'hex'),
+    ARRAY['ASSIGN_QUEUE'], ARRAY['priority']::text[], NULL, 0
+)
+\gset
+SELECT binding_id AS second_binding_id, binding_version AS second_binding_version
+FROM mdm_admin.replace_policy_binding(
+    :'first_binding_id'::uuid, :first_binding_version,
+    pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT'],
+    ARRAY['priority', 'urgent']::text[], INTERVAL '30 days', 3
+)
+\gset
+RESET ROLE;
+\connect foundation postgres
+DO $$
+BEGIN
+    IF (SELECT state FROM mdm_internal.policy_binding_runtime r
+        WHERE r.binding_id = (SELECT b.binding_id FROM mdm_steward.policy_bindings_v1 b WHERE b.automation_role_name = 'mdm_policy_worker' AND b.replaced_by IS NOT NULL)) <> 'paused'
+       OR (SELECT state FROM mdm_internal.policy_binding_runtime r
+           WHERE r.binding_id = (SELECT b.replaced_by FROM mdm_steward.policy_bindings_v1 b WHERE b.automation_role_name = 'mdm_policy_worker' AND b.replaced_by IS NOT NULL)) <> 'paused'
+       OR (SELECT binding_version FROM mdm_steward.policy_bindings_v1
+           WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL) <> 1
+       OR (SELECT count(*) FROM mdm_steward.policy_bindings_v1 WHERE automation_role_name = 'mdm_policy_worker') <> 2 THEN
+        RAISE EXCEPTION 'replacement did not retain and pause exact binding state';
+    END IF;
+END
+$$;
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT mdm_admin.set_policy_binding_state(:'second_binding_id'::uuid, 1, 'active', 'reconciled') AS active_runtime_version
+\gset
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+SELECT case_key, review_version, definition_version, publication_revision,
+       stewardship_epoch, pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision,
+       CASE WHEN assigned_queue::text = 'priority' THEN 'urgent' ELSE 'priority' END AS policy_queue
+FROM mdm_steward.policy_cases_v1
+WHERE entity_name = 'policy_qualification'
+  AND status = 'open'
+  AND case_key <> :legacy_case_key
+  AND NOT pending_stewardship
+  AND NOT manual_assignment_protected
+  AND 'ASSIGN_QUEUE' = ANY(permitted_actions)
+ORDER BY case_key
+LIMIT 1
+\gset
+SELECT receipt_id, outcome, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('c', 64), 'hex'),
+    :case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', :'policy_queue'),
+    :review_version, :definition_version, :publication_revision, :stewardship_epoch,
+    pg_catalog.decode(:'evidence_digest', 'hex'), :action_revision,
+    pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'), 'policy-1', 'eval-1', 'work-1'
+)
+\gset applied_
+SELECT receipt_id, outcome, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('c', 64), 'hex'),
+    :case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', :'policy_queue'),
+    :review_version, :definition_version, :publication_revision, :stewardship_epoch,
+    pg_catalog.decode(:'evidence_digest', 'hex'), :action_revision,
+    pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'), 'policy-1', 'eval-1', 'work-1'
+)
+\gset retry_
+SELECT :'applied_outcome' = 'APPLIED_CONTROL'
+   AND :'retry_outcome' = 'APPLIED_CONTROL'
+   AND :'applied_receipt_id'::uuid = :'retry_receipt_id'::uuid
+   AND :applied_action_revision = :action_revision + 1
+   AND :retry_action_revision = :applied_action_revision AS binding_intent_retry_ok
+\gset
+\if :binding_intent_retry_ok
+\else
+\quit 1
+\endif
+SELECT assigned_queue::text = :'policy_queue'
+   AND action_revision = :applied_action_revision AS binding_intent_control_ok
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :case_key
+\gset
+\if :binding_intent_control_ok
+\else
+\quit 1
+\endif
+SELECT count(*) = 1 AND pg_catalog.bool_and(resulting_publication_revision IS NULL)
+       AS binding_intent_receipt_ok
+FROM mdm_steward.policy_receipts_v1
+WHERE binding_id = :'second_binding_id'::uuid
+  AND request_key = pg_catalog.decode(pg_catalog.repeat('c', 64), 'hex')
+  AND outcome = 'APPLIED_CONTROL';
+\gset
+\if :binding_intent_receipt_ok
+\else
+\quit 1
+\endif
+SELECT case_key, review_version, definition_version, publication_revision,
+       stewardship_epoch, pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision, assigned_queue::text AS policy_queue
+FROM mdm_steward.policy_cases_v1
+WHERE case_key = :case_key
+\gset current_
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
+    :current_case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', :'current_policy_queue'),
+    :current_review_version, :current_definition_version, :current_publication_revision,
+    :current_stewardship_epoch, pg_catalog.decode(:'current_evidence_digest', 'hex'),
+    :current_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-noop', 'work-noop'
+)
+\gset noop_
+SELECT :'noop_outcome' = 'NO_CHANGE'
+   AND :'noop_reason_code' = 'CONTROL_UNCHANGED'
+   AND :noop_action_revision = :current_action_revision
+   AND (SELECT assigned_queue::text = :'current_policy_queue'
+               AND action_revision = :current_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :current_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'NO_CHANGE'
+               AND reason_code = 'CONTROL_UNCHANGED'
+               AND action_revision = :current_action_revision
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'))
+   AS binding_intent_noop_ok
+\gset
+\if :binding_intent_noop_ok
+\else
+\quit 1
+\endif
+SELECT outcome, reason_code, receipt_id IS NULL AS no_new_receipt, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('c', 64), 'hex'),
+    :current_case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', 'not-bound'),
+    :current_review_version, :current_definition_version, :current_publication_revision,
+    :current_stewardship_epoch, pg_catalog.decode(:'current_evidence_digest', 'hex'),
+    :current_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-conflict', 'work-conflict'
+)
+\gset conflict_
+SELECT :'conflict_outcome' = 'IDEMPOTENCY_CONFLICT'
+   AND :'conflict_reason_code' = 'REQUEST_KEY_BODY_MISMATCH'
+   AND :conflict_no_new_receipt
+   AND :conflict_action_revision = :current_action_revision
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
+               AND reason_code = 'CONTROL_APPLIED'
+               AND action_revision = :applied_action_revision
+               AND control->>'assigned_queue' = :'policy_queue')
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('c', 64), 'hex'))
+   AND (SELECT assigned_queue::text = :'policy_queue'
+               AND action_revision = :applied_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :current_case_key)
+   AS binding_intent_conflict_ok
+\gset
+\if :binding_intent_conflict_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('e', 64), 'hex'),
+    :current_case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', 'not-bound'),
+    :current_review_version, :current_definition_version, :current_publication_revision,
+    :current_stewardship_epoch, pg_catalog.decode(:'current_evidence_digest', 'hex'),
+    :current_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-denied', 'work-denied'
+)
+\gset denied_queue_
+SELECT :'denied_queue_outcome' = 'ACTION_DENIED'
+   AND :'denied_queue_reason_code' = 'QUEUE_NOT_ALLOWED'
+   AND :denied_queue_action_revision = :current_action_revision
+   AND (SELECT assigned_queue::text = :'policy_queue'
+               AND action_revision = :applied_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :current_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'ACTION_DENIED'
+               AND reason_code = 'QUEUE_NOT_ALLOWED'
+               AND action_revision = :current_action_revision
+               AND control->>'assigned_queue' = :'policy_queue'
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('e', 64), 'hex'))
+   AS binding_intent_denied_queue_ok
+\gset
+\if :binding_intent_denied_queue_ok
+\else
+\quit 1
+\endif
+SELECT case_key, review_version, definition_version, publication_revision,
+       stewardship_epoch, pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision, opened_at::text AS opened_at, escalation_level,
+       COALESCE(due_at::text, '') AS before_due
+FROM mdm_steward.policy_cases_v1
+WHERE entity_name = 'policy_qualification'
+  AND status = 'open'
+  AND opened_at <= pg_catalog.statement_timestamp()
+  AND opened_at IS NOT NULL
+  AND NOT pending_stewardship
+  AND 'SET_DUE_AT' = ANY(permitted_actions)
+  AND 'ESCALATE' = ANY(permitted_actions)
+  AND escalation_level < 3
+  AND due_at IS DISTINCT FROM opened_at
+ORDER BY case_key
+LIMIT 1
+\gset deadline_
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('1', 64), 'hex'),
+    :deadline_case_key, 'SET_DUE_AT',
+    pg_catalog.jsonb_build_object('due_at', :'deadline_opened_at'::timestamptz - INTERVAL '1 second'),
+    :deadline_review_version, :deadline_definition_version, :deadline_publication_revision,
+    :deadline_stewardship_epoch, pg_catalog.decode(:'deadline_evidence_digest', 'hex'),
+    :deadline_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-due-lower-bound', 'work-due-lower-bound'
+)
+\gset due_lower_
+SELECT :'due_lower_outcome' = 'LIMIT_EXCEEDED'
+   AND :'due_lower_reason_code' = 'DUE_AT_OUT_OF_BOUNDS'
+   AND :due_lower_action_revision = :deadline_action_revision
+   AND (SELECT due_at IS NOT DISTINCT FROM NULLIF(:'deadline_before_due', '')::timestamptz
+               AND action_revision = :deadline_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :deadline_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'LIMIT_EXCEEDED'
+               AND reason_code = 'DUE_AT_OUT_OF_BOUNDS'
+               AND action_revision = :deadline_action_revision
+               AND control->>'due_at' IS NOT DISTINCT FROM NULLIF(:'deadline_before_due', '')
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('1', 64), 'hex'))
+   AS binding_intent_due_lower_bound_ok
+\gset
+\if :binding_intent_due_lower_bound_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('4', 64), 'hex'),
+    :deadline_case_key, 'SET_DUE_AT',
+    pg_catalog.jsonb_build_object('due_at', :'deadline_opened_at'::timestamptz + INTERVAL '31 days'),
+    :deadline_review_version, :deadline_definition_version, :deadline_publication_revision,
+    :deadline_stewardship_epoch, pg_catalog.decode(:'deadline_evidence_digest', 'hex'),
+    :deadline_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-due-upper-bound', 'work-due-upper-bound'
+)
+\gset due_upper_
+SELECT :'due_upper_outcome' = 'LIMIT_EXCEEDED'
+   AND :'due_upper_reason_code' = 'DUE_AT_OUT_OF_BOUNDS'
+   AND :due_upper_action_revision = :deadline_action_revision
+   AND (SELECT due_at IS NOT DISTINCT FROM NULLIF(:'deadline_before_due', '')::timestamptz
+               AND action_revision = :deadline_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :deadline_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'LIMIT_EXCEEDED'
+               AND reason_code = 'DUE_AT_OUT_OF_BOUNDS'
+               AND action_revision = :deadline_action_revision
+               AND control->>'due_at' IS NOT DISTINCT FROM NULLIF(:'deadline_before_due', '')
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('4', 64), 'hex'))
+   AS binding_intent_due_upper_bound_ok
+\gset
+\if :binding_intent_due_upper_bound_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('2', 64), 'hex'),
+    :deadline_case_key, 'SET_DUE_AT',
+    pg_catalog.jsonb_build_object('due_at', :'deadline_opened_at'::timestamptz),
+    :deadline_review_version, :deadline_definition_version, :deadline_publication_revision,
+    :deadline_stewardship_epoch, pg_catalog.decode(:'deadline_evidence_digest', 'hex'),
+    :deadline_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-due-valid', 'work-due-valid'
+)
+\gset due_valid_
+SELECT :'due_valid_outcome' = 'APPLIED_CONTROL'
+   AND :'due_valid_reason_code' = 'CONTROL_APPLIED'
+   AND :due_valid_action_revision = :deadline_action_revision + 1
+   AND (SELECT due_at = :'deadline_opened_at'::timestamptz
+               AND action_revision = :due_valid_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :deadline_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
+               AND reason_code = 'CONTROL_APPLIED'
+               AND action_revision = :due_valid_action_revision
+               AND (control->>'due_at')::timestamptz = :'deadline_opened_at'::timestamptz
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('2', 64), 'hex'))
+   AS binding_intent_due_valid_ok
+\gset
+\if :binding_intent_due_valid_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('3', 64), 'hex'),
+    :deadline_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', :deadline_escalation_level + 1),
+    :deadline_review_version, :deadline_definition_version, :deadline_publication_revision,
+    :deadline_stewardship_epoch, pg_catalog.decode(:'deadline_evidence_digest', 'hex'),
+    :due_valid_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-escalate-due', 'work-escalate-due'
+)
+\gset escalate_due_
+SELECT :'escalate_due_outcome' = 'APPLIED_CONTROL'
+   AND :'escalate_due_reason_code' = 'CONTROL_APPLIED'
+   AND :escalate_due_action_revision = :due_valid_action_revision + 1
+   AND (SELECT escalation_level = :deadline_escalation_level + 1
+               AND due_at = :'deadline_opened_at'::timestamptz
+               AND action_revision = :escalate_due_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :deadline_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
+               AND reason_code = 'CONTROL_APPLIED'
+               AND action_revision = :escalate_due_action_revision
+               AND control->>'escalation_level' = (:deadline_escalation_level + 1)::text
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('3', 64), 'hex'))
+   AS binding_intent_escalate_due_ok
+\gset
+\if :binding_intent_escalate_due_ok
+\else
+\quit 1
+\endif
+SELECT assigned_queue::text AS queue, action_revision
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :current_case_key
+\gset malformed_before_
+DO $$
+DECLARE rejected boolean := false;
+BEGIN
+    BEGIN
+        PERFORM * FROM mdm_steward.submit_policy_intent(
+            '00000000-0000-0000-0000-000000000001'::uuid,
+            pg_catalog.decode(pg_catalog.repeat('f', 64), 'hex'), 1,
+            'ASSIGN_QUEUE', '{"queue":"priority","extra":true}'::jsonb,
+            1, 1, 0, 0, pg_catalog.decode(pg_catalog.repeat('f', 64), 'hex'),
+            1, pg_catalog.decode(pg_catalog.repeat('f', 64), 'hex'),
+            'policy-1', 'eval-malformed', 'work-malformed'
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'ASSIGN_QUEUE arguments must contain only queue') = 0
+           OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_INTENT') = 0 THEN
+            RAISE;
+        END IF;
+        rejected := true;
+    END;
+    IF NOT rejected OR EXISTS (
+        SELECT 1 FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = '00000000-0000-0000-0000-000000000001'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('f', 64), 'hex')
+    ) THEN
+        RAISE EXCEPTION 'malformed intent created a receipt or was accepted';
+    END IF;
+END
+$$;
+SELECT assigned_queue::text = :'malformed_before_queue'
+   AND action_revision = :malformed_before_action_revision
+   AS malformed_intent_control_unchanged
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :current_case_key
+\gset
+\if :malformed_intent_control_unchanged
+\else
+\quit 1
+\endif
+SELECT case_key, review_version, definition_version, publication_revision,
+       stewardship_epoch, pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision,
+       CASE WHEN assigned_queue::text = 'priority' THEN 'urgent' ELSE 'priority' END AS queue_after_rollback
+FROM mdm_steward.policy_cases_v1
+WHERE case_key = :current_case_key
+\gset atomic_
+BEGIN;
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('5', 64), 'hex'),
+    :atomic_case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', :'atomic_queue_after_rollback'),
+    :atomic_review_version, :atomic_definition_version, :atomic_publication_revision,
+    :atomic_stewardship_epoch, pg_catalog.decode(:'atomic_evidence_digest', 'hex'),
+    :atomic_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-atomic', 'work-atomic'
+)
+\gset atomic_first_
+SELECT :'atomic_first_outcome' = 'APPLIED_CONTROL'
+   AND :'atomic_first_reason_code' = 'CONTROL_APPLIED'
+   AND :atomic_first_action_revision = :atomic_action_revision + 1
+   AND (SELECT assigned_queue::text = :'atomic_queue_after_rollback'
+               AND action_revision = :atomic_first_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :atomic_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
+               AND reason_code = 'CONTROL_APPLIED'
+               AND action_revision = :atomic_first_action_revision
+               AND control->>'assigned_queue' = :'atomic_queue_after_rollback')
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('5', 64), 'hex'))
+   AS binding_intent_atomic_first_ok
+\gset
+\if :binding_intent_atomic_first_ok
+\else
+\quit 1
+\endif
+ROLLBACK;
+SELECT count(*) = 0 AS binding_intent_atomic_rollback_ok
+FROM mdm_steward.policy_receipts_v1
+WHERE binding_id = :'second_binding_id'::uuid
+  AND request_key = pg_catalog.decode(pg_catalog.repeat('5', 64), 'hex')
+\gset
+\if :binding_intent_atomic_rollback_ok
+\else
+\quit 1
+\endif
+SELECT assigned_queue::text <> :'atomic_queue_after_rollback'
+   AND action_revision = :atomic_action_revision AS binding_intent_atomic_control_rollback_ok
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :atomic_case_key
+\gset
+\if :binding_intent_atomic_control_rollback_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('5', 64), 'hex'),
+    :atomic_case_key, 'ASSIGN_QUEUE', pg_catalog.jsonb_build_object('queue', :'atomic_queue_after_rollback'),
+    :atomic_review_version, :atomic_definition_version, :atomic_publication_revision,
+    :atomic_stewardship_epoch, pg_catalog.decode(:'atomic_evidence_digest', 'hex'),
+    :atomic_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-atomic', 'work-atomic'
+)
+\gset atomic_retry_
+SELECT :'atomic_retry_outcome' = 'APPLIED_CONTROL'
+   AND :'atomic_retry_reason_code' = 'CONTROL_APPLIED'
+   AND :atomic_retry_action_revision = :atomic_action_revision + 1
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
+               AND reason_code = 'CONTROL_APPLIED'
+               AND action_revision = :atomic_retry_action_revision
+               AND control->>'assigned_queue' = :'atomic_queue_after_rollback'
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('5', 64), 'hex'))
+   AS binding_intent_atomic_retry_ok
+\gset
+\if :binding_intent_atomic_retry_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+DO $$
+DECLARE binding_count bigint; rejected boolean := false;
+BEGIN
+    SELECT count(*) INTO binding_count FROM mdm_steward.policy_bindings_v1;
+    BEGIN
+        PERFORM * FROM mdm_admin.create_policy_binding(
+            'policy_qualification', 'mdm_policy_worker',
+            pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
+            ARRAY['ESCALATE', 'ASSIGN_QUEUE'], ARRAY['priority']::text[], NULL, 3
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'allowed_actions must be sorted, distinct') = 0
+           OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_BINDING') = 0 THEN RAISE; END IF;
+        rejected := true;
+    END;
+    IF NOT rejected OR (SELECT count(*) FROM mdm_steward.policy_bindings_v1) <> binding_count THEN
+        RAISE EXCEPTION 'noncanonical binding actions were accepted or persisted';
+    END IF;
+    rejected := false;
+    BEGIN
+        PERFORM * FROM mdm_admin.replace_policy_binding(
+            (SELECT binding_id FROM mdm_steward.policy_bindings_v1
+             WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL),
+            999, pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
+            ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT'],
+            ARRAY['priority', 'urgent']::text[], INTERVAL '30 days', 3
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'binding is replaced or expected version is stale') = 0
+           OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_BINDING') = 0 THEN RAISE; END IF;
+        rejected := true;
+    END;
+    IF NOT rejected OR (SELECT count(*) FROM mdm_steward.policy_bindings_v1) <> binding_count
+       OR (SELECT replaced_by FROM mdm_steward.policy_bindings_v1
+           WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL) IS NOT NULL THEN
+        RAISE EXCEPTION 'stale binding replacement changed binding state';
+    END IF;
+END
+$$;
+SELECT case_key, assigned_queue::text AS queue, COALESCE(due_at::text, '') AS due_at,
+       escalation_level AS level, action_revision AS revision,
+       manual_assignment_protected AS protected
+FROM mdm_steward.policy_cases_v1
+WHERE case_key = :current_case_key
+\gset human_
+CREATE TEMP TABLE e2e_policy_human_before AS
+SELECT :human_case_key::bigint AS case_key, :'human_queue'::name AS assigned_queue,
+       NULLIF(:'human_due_at', '')::timestamptz AS due_at,
+       :human_level::integer AS escalation_level, :human_revision::bigint AS action_revision,
+       :human_protected::boolean AS manual_assignment_protected;
+SELECT action_revision
+FROM mdm_admin.set_case_controls(
+    :human_case_key, :'human_queue'::name, NULLIF(:'human_due_at', '')::timestamptz,
+    :human_level, :human_protected, :human_revision, 'e2e unchanged human controls'
+)
+\gset human_noop_
+SELECT :human_noop_action_revision = :human_revision
+   AND (SELECT action_revision = :human_revision
+               AND manual_assignment_protected = :human_protected
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AS human_control_noop_ok
+\gset
+\if :human_control_noop_ok
+\else
+\quit 1
+\endif
+SELECT action_revision
+FROM mdm_admin.set_case_controls(
+    :human_case_key, :'human_queue'::name, NULLIF(:'human_due_at', '')::timestamptz,
+    :human_level, true, :human_revision, 'e2e manual assignment protection'
+)
+\gset human_changed_
+SELECT :human_changed_action_revision = :human_revision + 1
+   AND (SELECT manual_assignment_protected AND action_revision = :human_changed_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AS human_control_changed_ok
+\gset
+\if :human_control_changed_ok
+\else
+\quit 1
+\endif
+DO $$
+DECLARE rejected boolean := false;
+BEGIN
+    BEGIN
+        PERFORM * FROM mdm_admin.set_case_controls(
+            (SELECT case_key FROM e2e_policy_human_before),
+            (SELECT assigned_queue FROM e2e_policy_human_before),
+            (SELECT due_at FROM e2e_policy_human_before),
+            (SELECT escalation_level FROM e2e_policy_human_before),
+            (SELECT manual_assignment_protected FROM e2e_policy_human_before),
+            (SELECT action_revision FROM e2e_policy_human_before), 'e2e stale human controls'
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'action revision changed concurrently') = 0
+           OR pg_catalog.strpos(SQLERRM, 'MDM_POLICY_CONTROL') = 0 THEN
+            RAISE;
+        END IF;
+        rejected := true;
+    END;
+    IF NOT rejected THEN RAISE EXCEPTION 'stale human controls were accepted'; END IF;
+END
+$$;
+DROP TABLE e2e_policy_human_before;
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+SELECT review_version, definition_version, publication_revision, stewardship_epoch,
+       pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest, action_revision,
+       assigned_queue::text AS queue
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
+\gset protected_
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('6', 64), 'hex'),
+    :human_case_key, 'ASSIGN_QUEUE',
+    pg_catalog.jsonb_build_object('queue', CASE WHEN :'protected_queue' = 'priority' THEN 'urgent' ELSE 'priority' END),
+    :protected_review_version, :protected_definition_version, :protected_publication_revision,
+    :protected_stewardship_epoch, pg_catalog.decode(:'protected_evidence_digest', 'hex'),
+    :protected_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-protected', 'work-protected'
+)
+\gset protected_intent_
+SELECT :'protected_intent_outcome' = 'MANUAL_PROTECTION'
+   AND :'protected_intent_reason_code' = 'MANUAL_ASSIGNMENT_PROTECTED'
+   AND :protected_intent_action_revision = :protected_action_revision
+   AND (SELECT manual_assignment_protected AND action_revision = :protected_action_revision
+               AND assigned_queue::text = :'protected_queue'
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'MANUAL_PROTECTION'
+               AND reason_code = 'MANUAL_ASSIGNMENT_PROTECTED'
+               AND action_revision = :protected_action_revision
+               AND control->>'manual_assignment_protected' = 'true'
+               AND control->>'assigned_queue' = :'protected_queue'
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('6', 64), 'hex'))
+   AS binding_intent_manual_protection_ok
+\gset
+\if :binding_intent_manual_protection_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT assigned_queue::text AS escalation_queue, action_revision AS escalation_revision
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
+\gset early_seed_
+SELECT action_revision
+FROM mdm_admin.set_case_controls(
+    :human_case_key, :'early_seed_escalation_queue'::name,
+    pg_catalog.statement_timestamp() + INTERVAL '1 day', 0, true,
+    :early_seed_escalation_revision, 'e2e future due for early escalation'
+)
+\gset early_seeded_
+SELECT :early_seeded_action_revision = :early_seed_escalation_revision + 1 AS early_seed_ok
+\gset
+\if :early_seed_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+SELECT review_version, definition_version, publication_revision, stewardship_epoch,
+       pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision, escalation_level
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
+\gset early_
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('7', 64), 'hex'),
+    :human_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', :early_escalation_level + 1),
+    :early_review_version, :early_definition_version, :early_publication_revision,
+    :early_stewardship_epoch, pg_catalog.decode(:'early_evidence_digest', 'hex'),
+    :early_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-early-escalation', 'work-early-escalation'
+)
+\gset early_intent_
+SELECT :'early_intent_outcome' = 'ACTION_DENIED'
+   AND :'early_intent_reason_code' = 'ESCALATION_NOT_DUE'
+   AND :early_intent_action_revision = :early_action_revision
+   AND (SELECT due_at > pg_catalog.statement_timestamp()
+               AND escalation_level = :early_escalation_level
+               AND action_revision = :early_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'ACTION_DENIED'
+               AND reason_code = 'ESCALATION_NOT_DUE'
+               AND action_revision = :early_action_revision
+               AND (control->>'due_at')::timestamptz > pg_catalog.statement_timestamp()
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('7', 64), 'hex'))
+   AS binding_intent_escalate_early_ok
+\gset
+\if :binding_intent_escalate_early_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT assigned_queue::text AS escalation_queue, action_revision AS escalation_revision
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
+\gset limit_seed_
+SELECT action_revision
+FROM mdm_admin.set_case_controls(
+    :human_case_key, :'limit_seed_escalation_queue'::name,
+    pg_catalog.statement_timestamp() - INTERVAL '1 day', 2, true,
+    :limit_seed_escalation_revision, 'e2e due escalation at limit'
+)
+\gset limit_seeded_
+SELECT :limit_seeded_action_revision = :limit_seed_escalation_revision + 1 AS escalation_limit_seed_ok
+\gset
+\if :escalation_limit_seed_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+SELECT review_version, definition_version, publication_revision, stewardship_epoch,
+       pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision, escalation_level
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key
+\gset at_limit_
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('8', 64), 'hex'),
+    :human_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', :at_limit_escalation_level + 2),
+    :at_limit_review_version, :at_limit_definition_version, :at_limit_publication_revision,
+    :at_limit_stewardship_epoch, pg_catalog.decode(:'at_limit_evidence_digest', 'hex'),
+    :at_limit_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-skipped-escalation', 'work-skipped-escalation'
+)
+\gset skipped_level_
+SELECT :'skipped_level_outcome' = 'STALE_CASE'
+   AND :'skipped_level_reason_code' = 'ESCALATION_NOT_NEXT'
+   AND :skipped_level_action_revision = :at_limit_action_revision
+   AND (SELECT escalation_level = 2 AND action_revision = :at_limit_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'STALE_CASE'
+               AND reason_code = 'ESCALATION_NOT_NEXT'
+               AND action_revision = :at_limit_action_revision
+               AND control->>'escalation_level' = '2'
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('8', 64), 'hex'))
+   AS binding_intent_escalate_not_next_ok
+\gset
+\if :binding_intent_escalate_not_next_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('9', 64), 'hex'),
+    :human_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', 3),
+    :at_limit_review_version, :at_limit_definition_version, :at_limit_publication_revision,
+    :at_limit_stewardship_epoch, pg_catalog.decode(:'at_limit_evidence_digest', 'hex'),
+    :at_limit_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-escalation-limit', 'work-escalation-limit'
+)
+\gset escalate_to_limit_
+SELECT :'escalate_to_limit_outcome' = 'APPLIED_CONTROL'
+   AND :'escalate_to_limit_reason_code' = 'CONTROL_APPLIED'
+   AND :escalate_to_limit_action_revision = :at_limit_action_revision + 1
+   AND (SELECT escalation_level = 3 AND action_revision = :escalate_to_limit_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'APPLIED_CONTROL'
+               AND reason_code = 'CONTROL_APPLIED'
+               AND action_revision = :escalate_to_limit_action_revision
+               AND control->>'escalation_level' = '3'
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('9', 64), 'hex'))
+   AS binding_intent_escalate_to_max_ok
+\gset
+\if :binding_intent_escalate_to_max_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('a', 64), 'hex'),
+    :human_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', 4),
+    :at_limit_review_version, :at_limit_definition_version, :at_limit_publication_revision,
+    :at_limit_stewardship_epoch, pg_catalog.decode(:'at_limit_evidence_digest', 'hex'),
+    :escalate_to_limit_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-over-limit', 'work-over-limit'
+)
+\gset over_limit_
+SELECT :'over_limit_outcome' = 'LIMIT_EXCEEDED'
+   AND :'over_limit_reason_code' = 'ESCALATION_LIMIT'
+   AND :over_limit_action_revision = :escalate_to_limit_action_revision
+   AND (SELECT escalation_level = 3 AND action_revision = :escalate_to_limit_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+   AND (SELECT count(*) = 1 AND bool_and(outcome = 'LIMIT_EXCEEDED'
+               AND reason_code = 'ESCALATION_LIMIT'
+               AND action_revision = :escalate_to_limit_action_revision
+               AND control->>'escalation_level' = '3'
+               AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('a', 64), 'hex'))
+   AS binding_intent_escalate_over_limit_ok
+\gset
+\if :binding_intent_escalate_over_limit_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT mdm_admin.set_policy_binding_state(:'second_binding_id'::uuid, :active_runtime_version, 'paused', 'paused') AS paused_runtime_version
+\gset
+RESET ROLE;
+\connect foundation postgres
+DO $$
+BEGIN
+    IF (SELECT runtime_version FROM mdm_internal.policy_binding_runtime
+        WHERE binding_id = (SELECT binding_id FROM mdm_steward.policy_bindings_v1 WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL)) <> 3
+       OR (SELECT state FROM mdm_internal.policy_binding_runtime
+           WHERE binding_id = (SELECT binding_id FROM mdm_steward.policy_bindings_v1 WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL)) <> 'paused'
+       OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'mdm_steward' AND p.proname IN ('register_policy_binding', 'pause_policy_binding', 'replace_policy_binding')) THEN
+        RAISE EXCEPTION 'binding activation, pause, or retired API state is invalid';
+    END IF;
+END
+$$;
 \echo PASS: policy publication identity, resolution, recurrence, unknown opening, and backfill assertions
+\echo PASS: policy binding lifecycle, intent application, retry, no-op, denial, deadline, escalation and rollback controls, runtime reconciliation, and retired API assertions
 \echo PASS: policy reader exact-row access and private-history denial

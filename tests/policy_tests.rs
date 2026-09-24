@@ -135,5 +135,5 @@ fn intent_matches_signed_fixture_bytes_and_digest() {
         "blocked",
         &["priority".to_owned(), "standard".to_owned()]
     ));
-    assert!(queue_is_allowed("priority", &[]));
+    assert!(!queue_is_allowed("priority", &[]));
 }

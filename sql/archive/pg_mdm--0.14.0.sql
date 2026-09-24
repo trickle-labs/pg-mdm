@@ -429,31 +429,29 @@ CREATE TABLE mdm_steward.policy_cases_v1 (
 
 CREATE TABLE mdm_steward.policy_bindings_v1 (
     binding_id uuid PRIMARY KEY DEFAULT pg_catalog.uuidv7(),
-    scope pg_catalog.name NOT NULL,
     entity_id uuid NOT NULL REFERENCES mdm_internal.entities(entity_id),
-    principal_role pg_catalog.name NOT NULL,
-    principal_role_oid oid NOT NULL,
+    binding_version bigint NOT NULL DEFAULT 1 CHECK (binding_version > 0),
+    automation_role_name pg_catalog.name NOT NULL,
     policy_digest bytea NOT NULL CHECK (octet_length(policy_digest) = 32),
     allowed_actions text[] NOT NULL,
     allowed_queues pg_catalog.name[] NOT NULL DEFAULT ARRAY[]::pg_catalog.name[],
     max_due_interval interval,
     max_escalation_level integer NOT NULL DEFAULT 0 CHECK (max_escalation_level >= 0),
-    binding_version bigint NOT NULL DEFAULT 1 CHECK (binding_version > 0),
-    state text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'paused', 'replaced')),
-    replacement_binding_id uuid REFERENCES mdm_steward.policy_bindings_v1(binding_id),
+    replaced_by uuid,
+    replaced_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
     created_by_name text NOT NULL,
     created_as_role_name text NOT NULL,
     CHECK (allowed_actions <@ ARRAY['ASSIGN_QUEUE', 'ESCALATE', 'SET_DUE_AT']::text[]),
     CHECK (cardinality(allowed_actions) BETWEEN 1 AND 3),
+    CHECK ('ASSIGN_QUEUE' <> ALL (allowed_actions) OR cardinality(allowed_queues) > 0),
     CHECK ('SET_DUE_AT' <> ALL (allowed_actions) OR (max_due_interval IS NOT NULL AND max_due_interval > interval '0')),
-    CHECK ('ESCALATE' <> ALL (allowed_actions) OR max_escalation_level > 0)
+    CHECK ('ESCALATE' <> ALL (allowed_actions) OR max_escalation_level > 0),
+    CHECK ((replaced_by IS NULL) = (replaced_at IS NULL))
 );
 
-CREATE UNIQUE INDEX policy_bindings_one_active_scope
-    ON mdm_steward.policy_bindings_v1 (scope) WHERE state = 'active';
 CREATE UNIQUE INDEX policy_bindings_one_current_role
-    ON mdm_steward.policy_bindings_v1 (scope, principal_role) WHERE state <> 'replaced';
+    ON mdm_steward.policy_bindings_v1 (entity_id, automation_role_name) WHERE replaced_by IS NULL;
 
 CREATE TABLE mdm_internal.policy_binding_runtime (
     binding_id uuid PRIMARY KEY REFERENCES mdm_steward.policy_bindings_v1(binding_id),
@@ -755,9 +753,15 @@ CREATE FUNCTION mdm_admin.backfill_policy_case_opened_at(case_key bigint, opened
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:390
+-- src/api/policy_intent.rs:430
 -- pg_mdm::api::policy_intent::persist_create_policy_binding
 CREATE FUNCTION mdm_internal.persist_create_policy_binding(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_create_policy_binding_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/policy_intent.rs:392
+-- pg_mdm::api::policy_intent::create_policy_binding
+CREATE FUNCTION mdm_admin.create_policy_binding(entity_name text, automation_role_name text, policy_digest bytea, allowed_actions text[], allowed_queues text[], max_due_interval interval, max_escalation_level integer) RETURNS TABLE (binding_id uuid, binding_version bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -785,7 +789,7 @@ CREATE FUNCTION mdm_admin.drop_entity(entity_name text, confirm text) RETURNS js
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:1141
+-- src/api/create.rs:1177
 -- pg_mdm::api::create::persist_entity
 CREATE FUNCTION mdm_internal.persist_entity(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_entity_wrapper';
 /* </end connected objects> */
@@ -815,19 +819,7 @@ CREATE FUNCTION mdm_steward.clear_golden_override(entity_name text, anchor_sourc
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:425
--- pg_mdm::api::policy_intent::persist_pause_policy_binding
-CREATE FUNCTION mdm_internal.persist_pause_policy_binding(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_pause_policy_binding_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- src/api/policy_intent.rs:406
--- pg_mdm::api::policy_intent::pause_policy_binding
-CREATE FUNCTION mdm_steward.pause_policy_binding(binding_id uuid) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'pause_policy_binding_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- src/api/policy_intent.rs:1435
+-- src/api/policy_intent.rs:1417
 -- pg_mdm::api::policy_intent::persist_policy_intent
 CREATE FUNCTION mdm_internal.persist_policy_intent(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_policy_intent_wrapper';
 /* </end connected objects> */
@@ -839,7 +831,7 @@ CREATE FUNCTION mdm_internal.persist_rebind(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:1106
+-- src/api/create.rs:1142
 -- pg_mdm::api::create::persist_recompile
 CREATE FUNCTION mdm_internal.persist_recompile(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_recompile_wrapper';
 /* </end connected objects> */
@@ -851,15 +843,21 @@ CREATE FUNCTION mdm_internal.persist_refresh(request internal) RETURNS jsonb SEC
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:505
+-- src/api/policy_intent.rs:483
 -- pg_mdm::api::policy_intent::persist_replace_policy_binding
 CREATE FUNCTION mdm_internal.persist_replace_policy_binding(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_replace_policy_binding_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:656
+-- src/api/policy_intent.rs:638
 -- pg_mdm::api::policy_intent::persist_set_case_controls
 CREATE FUNCTION mdm_internal.persist_set_case_controls(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_set_case_controls_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/policy_intent.rs:542
+-- pg_mdm::api::policy_intent::persist_set_policy_binding_state
+CREATE FUNCTION mdm_internal.persist_set_policy_binding_state(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_set_policy_binding_state_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -899,7 +897,7 @@ CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'AL
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/create.rs:1071
+-- src/api/create.rs:1107
 -- pg_mdm::api::create::recompile
 CREATE FUNCTION mdm_admin.recompile(entity_name text) RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'recompile_wrapper';
 /* </end connected objects> */
@@ -917,15 +915,9 @@ CREATE FUNCTION mdm_internal.refresh_access(request internal) RETURNS jsonb SECU
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:362
--- pg_mdm::api::policy_intent::create_policy_binding
-CREATE FUNCTION mdm_steward.register_policy_binding(scope name, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'create_policy_binding_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- src/api/policy_intent.rs:477
+-- src/api/policy_intent.rs:445
 -- pg_mdm::api::policy_intent::replace_policy_binding
-CREATE FUNCTION mdm_steward.replace_policy_binding(binding_id uuid, principal_role name, policy_digest bytea, allowed_actions text[]) RETURNS uuid LANGUAGE c AS 'MODULE_PATHNAME', 'replace_policy_binding_wrapper';
+CREATE FUNCTION mdm_admin.replace_policy_binding(binding_id uuid, expected_version bigint, policy_digest bytea, allowed_actions text[], allowed_queues text[], max_due_interval interval, max_escalation_level integer) RETURNS TABLE (binding_id uuid, binding_version bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'replace_policy_binding_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -935,9 +927,15 @@ CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c 
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:612
+-- src/api/policy_intent.rs:594
 -- pg_mdm::api::policy_intent::set_case_controls
 CREATE FUNCTION mdm_steward.set_case_controls(case_key bigint, assigned_queue name, due_at timestamptz, escalation_level integer, manual_assignment_protected boolean, expected_action_revision bigint, reason text) RETURNS TABLE (operation_id uuid, action_revision bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'set_case_controls_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- src/api/policy_intent.rs:517
+-- pg_mdm::api::policy_intent::set_policy_binding_state
+CREATE FUNCTION mdm_admin.set_policy_binding_state(binding_id uuid, expected_runtime_version bigint, state text, reason text) RETURNS bigint LANGUAGE c AS 'MODULE_PATHNAME', 'set_policy_binding_state_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -947,7 +945,7 @@ CREATE FUNCTION mdm.source(name text, relation regclass, source_id text[], mode 
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy_intent.rs:1354
+-- src/api/policy_intent.rs:1336
 -- pg_mdm::api::policy_intent::submit_policy_intent
 CREATE FUNCTION mdm_steward.submit_policy_intent(binding_id uuid, request_key bytea, case_key bigint, action text, arguments jsonb, expected_review_version bigint, expected_definition_version bigint, expected_publication_revision bigint, expected_stewardship_epoch bigint, expected_evidence_basis_digest bytea, expected_action_revision bigint, expected_policy_digest bytea, policy_revision text, evaluation_ref text, work_ref text) RETURNS TABLE (receipt_id uuid, outcome text, reason_code text, case_key bigint, action_revision bigint, control jsonb, resulting_publication_revision bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'submit_policy_intent_wrapper';
 /* </end connected objects> */
@@ -959,7 +957,7 @@ CREATE FUNCTION mdm_admin.verify_installation() RETURNS text STRICT SECURITY DEF
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/schema.rs:695
+-- src/schema.rs:693
 -- requires:
 --   verify_installation
 --   normalize_text
@@ -980,14 +978,14 @@ REVOKE ALL ON FUNCTION mdm_admin.rebind(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.drop_entity(text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_admin.backfill_policy_case_opened_at(bigint, timestamptz, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_steward.submit_policy_intent(uuid, bytea, bigint, text, jsonb, bigint, bigint, bigint, bigint, bytea, bigint, bytea, text, text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_steward.register_policy_binding(name, name, bytea, text[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_steward.pause_policy_binding(uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_steward.replace_policy_binding(uuid, name, bytea, text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.create_policy_binding(text, text, bytea, text[], text[], interval, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.replace_policy_binding(uuid, bigint, bytea, text[], text[], interval, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_admin.set_policy_binding_state(uuid, bigint, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_steward.set_case_controls(bigint, name, timestamptz, integer, boolean, bigint, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_policy_intent(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_create_policy_binding(internal) FROM PUBLIC;
-REVOKE ALL ON FUNCTION mdm_internal.persist_pause_policy_binding(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_replace_policy_binding(internal) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mdm_internal.persist_set_policy_binding_state(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.persist_set_case_controls(internal) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalize_text(text, text, integer, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.normalize_date(date, text, integer, text, jsonb) FROM PUBLIC;

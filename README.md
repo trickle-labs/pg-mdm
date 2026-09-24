@@ -13,7 +13,7 @@ The project is built around a deliberate division of responsibility. [`pg_trickl
 
 v0.14 supports PostgreSQL 18 and requires the pinned `pg_trickle` 0.108.0 package. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum.
 
-The extension stores definitions, installs private Graph V1.2 members, consumes Delta V1.1 changes, and publishes PostgreSQL output tables in one transaction. The v0.13 CI suite compares differential and full results, tests affected resolution, and covers rollback, retry, upgrade, and restore on PostgreSQL 18.
+The extension stores definitions, installs private Graph V1.2 members, consumes Delta V1.1 changes, and publishes PostgreSQL output tables in one transaction. The v0.14 CI suite compares differential and full results, tests affected resolution, and covers rollback, retry, policy intents, upgrade, and restore on PostgreSQL 18.
 
 Build and copy the package:
 

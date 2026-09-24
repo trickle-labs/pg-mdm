@@ -148,6 +148,85 @@ END
 $$;
 
 DO $$
+DECLARE retained_bindings bigint; retained_receipts bigint;
+BEGIN
+    SELECT count(*) INTO retained_bindings
+    FROM mdm_steward.policy_bindings_v1 b
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'policy_qualification'
+      AND b.automation_role_name = 'mdm_policy_worker';
+    SELECT count(*) INTO retained_receipts
+    FROM mdm_steward.policy_receipts_v1 r
+    JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'policy_qualification'
+      AND b.automation_role_name = 'mdm_policy_worker'
+      AND r.request_key = pg_catalog.decode(pg_catalog.repeat('c', 64), 'hex')
+      AND r.request_body->>'action' = r.action
+      AND r.request_body->>'binding_id' = r.binding_id::text
+      AND (r.request_body->>'case_key')::bigint = r.case_key;
+    IF retained_bindings <> 2 OR retained_receipts <> 1 THEN
+        RAISE EXCEPTION 'durable policy bindings, receipt, or canonical request body did not survive restore: bindings %, receipts %',
+            retained_bindings, retained_receipts;
+    END IF;
+    IF EXISTS (SELECT FROM mdm_internal.policy_binding_runtime) THEN
+        RAISE EXCEPTION 'policy binding runtime was restored before reconciliation';
+    END IF;
+END
+$$;
+
+\connect restored mdm_legacy_login
+SET ROLE mdm_policy_worker;
+DO $$
+DECLARE
+    binding mdm_steward.policy_bindings_v1%ROWTYPE;
+    policy_case mdm_steward.policy_cases_v1%ROWTYPE;
+    rejected boolean := false;
+BEGIN
+    SELECT * INTO STRICT binding
+    FROM mdm_steward.policy_bindings_v1
+    WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL;
+    SELECT * INTO STRICT policy_case
+    FROM mdm_steward.policy_cases_v1
+    WHERE entity_name = 'policy_qualification'
+      AND status = 'open' AND 'ASSIGN_QUEUE' = ANY(permitted_actions)
+      AND NOT pending_stewardship AND NOT manual_assignment_protected
+    ORDER BY case_key
+    LIMIT 1;
+    BEGIN
+        PERFORM * FROM mdm_steward.submit_policy_intent(
+            binding.binding_id, pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
+            policy_case.case_key, 'ASSIGN_QUEUE',
+            pg_catalog.jsonb_build_object('queue', binding.allowed_queues[1]),
+            policy_case.review_version, policy_case.definition_version,
+            policy_case.publication_revision, policy_case.stewardship_epoch,
+            policy_case.evidence_basis_digest, policy_case.action_revision,
+            binding.policy_digest, 'restore-policy-1', 'restore-eval-1', 'restore-work-1'
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF pg_catalog.strpos(SQLERRM, 'caller does not match the bound automation role') = 0 THEN RAISE; END IF;
+        rejected := true;
+    END;
+    IF NOT rejected OR EXISTS (
+            SELECT FROM mdm_steward.policy_receipts_v1 r
+            WHERE r.binding_id = binding.binding_id
+              AND r.request_key = pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex')
+       ) OR EXISTS (
+            SELECT FROM mdm_steward.policy_cases_v1 c
+            WHERE c.case_key = policy_case.case_key
+              AND (c.action_revision IS DISTINCT FROM policy_case.action_revision
+                   OR c.assigned_queue IS DISTINCT FROM policy_case.assigned_queue
+                   OR c.due_at IS DISTINCT FROM policy_case.due_at
+                   OR c.escalation_level IS DISTINCT FROM policy_case.escalation_level
+                   OR c.manual_assignment_protected IS DISTINCT FROM policy_case.manual_assignment_protected)
+       ) THEN
+        RAISE EXCEPTION 'restored binding was not rejected before reconciliation';
+    END IF;
+END
+$$;
+RESET ROLE;
+
+DO $$
 BEGIN
     IF md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
                      FROM mdm_steward.policy_cases_v1 c
@@ -477,5 +556,89 @@ BEGIN
         RAISE EXCEPTION 'rebind changed the restored definition';
     END IF;
     PERFORM mdm_admin.verify_installation();
+END
+$$;
+
+\connect restored postgres
+SELECT execution_role_name AS restore_drop_role
+FROM mdm_internal.entities WHERE entity_name = 'policy_qualification'
+\gset
+GRANT EXECUTE ON FUNCTION mdm_admin.drop_entity(text, text) TO :"restore_drop_role";
+CREATE TEMP TABLE e2e_restore_drop_snapshot AS
+SELECT e.entity_id,
+       pg_catalog.to_jsonb(e) AS entity_row,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key)
+                 FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = e.entity_name), '[]'::jsonb) AS cases,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.binding_id)
+                 FROM mdm_steward.policy_bindings_v1 b WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS bindings,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.receipt_id)
+                 FROM mdm_steward.policy_receipts_v1 r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS receipts,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id)
+                 FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS runtime
+FROM mdm_internal.entities e WHERE e.entity_name = 'policy_qualification';
+CREATE TABLE public.e2e_restore_binding_drop_blocker (
+    binding_id uuid PRIMARY KEY REFERENCES mdm_steward.policy_bindings_v1(binding_id)
+);
+INSERT INTO public.e2e_restore_binding_drop_blocker
+SELECT (b->>'binding_id')::uuid
+FROM e2e_restore_drop_snapshot s
+CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b
+LIMIT 1;
+SET ROLE :"restore_drop_role";
+DO $$
+BEGIN
+    BEGIN
+        PERFORM mdm_admin.drop_entity('policy_qualification', 'policy_qualification');
+        RAISE EXCEPTION 'binding FK blocker did not prevent entity drop';
+    EXCEPTION WHEN OTHERS THEN
+        IF strpos(pg_catalog.lower(SQLERRM), 'foreign key') = 0 THEN RAISE; END IF;
+    END;
+END
+$$;
+RESET ROLE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM mdm_internal.entities e JOIN e2e_restore_drop_snapshot s USING (entity_id)
+                   WHERE pg_catalog.to_jsonb(e) = s.entity_row)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.case_key), '[]'::jsonb)
+           FROM mdm_steward.policy_cases_v1 c WHERE c.entity_name = 'policy_qualification')
+          IS DISTINCT FROM (SELECT cases FROM e2e_restore_drop_snapshot)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.binding_id), '[]'::jsonb)
+           FROM mdm_steward.policy_bindings_v1 b JOIN e2e_restore_drop_snapshot s USING (entity_id))
+          IS DISTINCT FROM (SELECT bindings FROM e2e_restore_drop_snapshot)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.receipt_id), '[]'::jsonb)
+           FROM mdm_steward.policy_receipts_v1 r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+           JOIN e2e_restore_drop_snapshot s USING (entity_id))
+          IS DISTINCT FROM (SELECT receipts FROM e2e_restore_drop_snapshot)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id), '[]'::jsonb)
+           FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+           JOIN e2e_restore_drop_snapshot s USING (entity_id))
+          IS DISTINCT FROM (SELECT runtime FROM e2e_restore_drop_snapshot) THEN
+        RAISE EXCEPTION 'failed policy entity drop did not preserve complete M2 audit state';
+    END IF;
+END
+$$;
+DROP TABLE public.e2e_restore_binding_drop_blocker;
+SET ROLE :"restore_drop_role";
+SELECT mdm_admin.drop_entity('policy_qualification', 'policy_qualification');
+RESET ROLE;
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM mdm_internal.entities WHERE entity_name = 'policy_qualification')
+       OR EXISTS (SELECT FROM mdm_steward.policy_cases_v1 WHERE entity_name = 'policy_qualification')
+       OR EXISTS (SELECT FROM mdm_steward.policy_bindings_v1 b
+                  JOIN e2e_restore_drop_snapshot s ON b.entity_id = s.entity_id)
+       OR EXISTS (SELECT FROM mdm_steward.policy_receipts_v1 r
+                  WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
+                                         FROM e2e_restore_drop_snapshot s
+                                         CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b))
+       OR EXISTS (SELECT FROM mdm_internal.policy_binding_runtime r
+                  WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
+                                         FROM e2e_restore_drop_snapshot s
+                                         CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b)) THEN
+        RAISE EXCEPTION 'successful policy entity drop left entity, cases, binding, receipt, or runtime rows';
+    END IF;
 END
 $$;
