@@ -175,17 +175,23 @@ BEGIN
 END
 $$;
 
+SELECT binding_id::text AS binding_id,
+       pg_catalog.encode(policy_digest, 'hex') AS policy_digest,
+       allowed_queues[1]::text AS queue
+FROM mdm_steward.policy_bindings_v1
+WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL
+\gset restored_binding_
 \connect restored mdm_legacy_login
 SET ROLE mdm_policy_worker;
-DO $$
+CREATE FUNCTION pg_temp.assert_restored_binding_blocked(
+    p_binding_id uuid, p_policy_digest bytea, p_queue name
+)
+RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE
-    binding mdm_steward.policy_bindings_v1%ROWTYPE;
     policy_case mdm_steward.policy_cases_v1%ROWTYPE;
     rejected boolean := false;
+    request_key bytea := pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex');
 BEGIN
-    SELECT * INTO STRICT binding
-    FROM mdm_steward.policy_bindings_v1
-    WHERE automation_role_name = 'mdm_policy_worker' AND replaced_by IS NULL;
     SELECT * INTO STRICT policy_case
     FROM mdm_steward.policy_cases_v1
     WHERE entity_name = 'policy_qualification'
@@ -195,13 +201,13 @@ BEGIN
     LIMIT 1;
     BEGIN
         PERFORM * FROM mdm_steward.submit_policy_intent(
-            binding.binding_id, pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex'),
+            p_binding_id, request_key,
             policy_case.case_key, 'ASSIGN_QUEUE',
-            pg_catalog.jsonb_build_object('queue', binding.allowed_queues[1]),
+            pg_catalog.jsonb_build_object('queue', p_queue::text),
             policy_case.review_version, policy_case.definition_version,
             policy_case.publication_revision, policy_case.stewardship_epoch,
             policy_case.evidence_basis_digest, policy_case.action_revision,
-            binding.policy_digest, 'restore-policy-1', 'restore-eval-1', 'restore-work-1'
+            p_policy_digest, 'restore-policy-1', 'restore-eval-1', 'restore-work-1'
         );
     EXCEPTION WHEN OTHERS THEN
         IF pg_catalog.strpos(SQLERRM, 'caller does not match the bound automation role') = 0 THEN RAISE; END IF;
@@ -209,8 +215,7 @@ BEGIN
     END;
     IF NOT rejected OR EXISTS (
             SELECT FROM mdm_steward.policy_receipts_v1 r
-            WHERE r.binding_id = binding.binding_id
-              AND r.request_key = pg_catalog.decode(pg_catalog.repeat('d', 64), 'hex')
+            WHERE r.binding_id = p_binding_id AND r.request_key = request_key
        ) OR EXISTS (
             SELECT FROM mdm_steward.policy_cases_v1 c
             WHERE c.case_key = policy_case.case_key
@@ -219,11 +224,22 @@ BEGIN
                    OR c.due_at IS DISTINCT FROM policy_case.due_at
                    OR c.escalation_level IS DISTINCT FROM policy_case.escalation_level
                    OR c.manual_assignment_protected IS DISTINCT FROM policy_case.manual_assignment_protected)
-       ) THEN
+        ) THEN
         RAISE EXCEPTION 'restored binding was not rejected before reconciliation';
     END IF;
+    RETURN true;
 END
 $$;
+SELECT pg_temp.assert_restored_binding_blocked(
+    :'restored_binding_binding_id'::uuid,
+    pg_catalog.decode(:'restored_binding_policy_digest', 'hex'),
+    :'restored_binding_queue'::name
+) AS restore_intent_blocked
+\gset
+\if :restore_intent_blocked
+\else
+\quit 1
+\endif
 RESET ROLE;
 
 DO $$
