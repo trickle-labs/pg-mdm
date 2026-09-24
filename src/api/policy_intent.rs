@@ -661,7 +661,7 @@ pub(crate) fn persist_set_case_controls(request: Internal) -> JsonB {
         Spi::connect_mut(|client| {
             let row = client
                 .select(
-                    "SELECT c.entity_name::text, c.status, c.assigned_queue::text, c.due_at::text, c.escalation_level, c.manual_assignment_protected, c.action_revision, e.execution_role_name, b.role_oid FROM mdm_steward.policy_cases_v1 c JOIN mdm_internal.entities e ON e.entity_name = c.entity_name LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE c.case_key = $1 FOR UPDATE",
+                    "SELECT c.entity_name::text, c.status, c.assigned_queue::text, c.due_at::text, c.escalation_level, c.manual_assignment_protected, c.action_revision, e.execution_role_name, b.role_oid FROM mdm_steward.policy_cases_v1 c JOIN mdm_internal.entities e ON e.entity_name = c.entity_name LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE c.case_key = $1 FOR UPDATE OF c",
                     Some(1),
                     &[request.case_key.into()],
                 )
