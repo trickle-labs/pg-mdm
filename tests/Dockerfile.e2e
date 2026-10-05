@@ -2,8 +2,8 @@
 ARG POSTGRES_IMAGE=postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf
 
 FROM ${POSTGRES_IMAGE} AS pg_trickle_release
-ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.108.0/pg_trickle-0.108.0-pg18-linux-amd64.tar.gz
-ARG PG_TRICKLE_SHA256=016ad89fc83172b66b3b3518a00a7182c6206770f755d504195487fdbff406a0
+ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.108.2/pg_trickle-0.108.2-pg18-linux-amd64.tar.gz
+ARG PG_TRICKLE_SHA256=b2d8c2a429a6cb6a61b18ea97712ab585e111108a80b6f6a9f3c1a13854090f8
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -13,17 +13,6 @@ RUN apt-get update \
     && tar -xzf /tmp/pg_trickle.tar.gz -C /pg_trickle --strip-components=1 \
     && cp /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/ \
     && cp -R /pg_trickle/extension/. /usr/share/postgresql/18/extension/
-
-FROM ${POSTGRES_IMAGE} AS pg_trickle_previous
-ARG PG_TRICKLE_PREVIOUS_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.105.1/pg_trickle-0.105.1-pg18-linux-amd64.tar.gz
-ARG PG_TRICKLE_PREVIOUS_SHA256=a6b1942ce5d2517dc8ad94a04ba3f2508fad4be21d6fc247df873502bcf2e69e
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL "$PG_TRICKLE_PREVIOUS_URL" -o /tmp/pg_trickle_previous.tar.gz \
-    && echo "$PG_TRICKLE_PREVIOUS_SHA256  /tmp/pg_trickle_previous.tar.gz" | sha256sum -c - \
-    && mkdir /pg_trickle_previous \
-    && tar -xzf /tmp/pg_trickle_previous.tar.gz -C /pg_trickle_previous --strip-components=1
 
 FROM ${POSTGRES_IMAGE} AS builder
 RUN apt-get update \
@@ -68,7 +57,6 @@ USER postgres
 FROM ${POSTGRES_IMAGE}
 COPY --from=pg_trickle_release /usr/lib/postgresql/18/lib/pg_trickle.so /usr/lib/postgresql/18/lib/
 COPY --from=pg_trickle_release /usr/share/postgresql/18/extension/pg_trickle* /usr/share/postgresql/18/extension/
-COPY --from=pg_trickle_previous /pg_trickle_previous/extension/pg_trickle--0.105.1.sql /usr/share/postgresql/18/extension/
 COPY --from=builder /package/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
 COPY --from=builder /package/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
 COPY --from=builder /tmp/pg_mdm-package-manifest.sha256 /evidence/pg_mdm-package-manifest.sha256
