@@ -711,7 +711,7 @@ CREATE FUNCTION mdm.golden_value(field text, policy text, sources text[] DEFAULT
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:181
+-- src/integration.rs:190
 -- pg_mdm::integration::capability_report_sql
 CREATE FUNCTION mdm_internal.integration_capabilities() RETURNS TABLE (capability text, major_version smallint, minor_version smallint, enabled boolean, details jsonb) STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'capability_report_sql_wrapper';
 /* </end connected objects> */
@@ -921,7 +921,7 @@ CREATE FUNCTION mdm_admin.replace_policy_binding(binding_id uuid, expected_versi
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/integration.rs:220
+-- src/integration.rs:229
 -- pg_mdm::integration::require_graph_v1_sql
 CREATE FUNCTION mdm_internal.require_graph_v1() RETURNS jsonb STRICT LANGUAGE c AS 'MODULE_PATHNAME', 'require_graph_v1_sql_wrapper';
 /* </end connected objects> */
