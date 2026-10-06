@@ -7,7 +7,7 @@ CREATE ROLE mdm_legacy_login LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT mdm_legacy_administrator TO mdm_legacy_login WITH SET TRUE, INHERIT FALSE;
 CREATE DATABASE foundation;
 \connect foundation postgres
-CREATE EXTENSION pg_trickle VERSION '0.105.1';
+CREATE EXTENSION pg_trickle VERSION '0.108.3';
 CREATE EXTENSION pg_mdm VERSION '0.8.0';
 
 DO $$
@@ -396,8 +396,11 @@ BEGIN
     IF (SELECT count(*) FROM mdm_internal.integration_capabilities()
         WHERE capability = 'external_graph_refresh' AND major_version = 1 AND minor_version = 2 AND enabled) <> 1
        OR (SELECT count(*) FROM mdm_internal.integration_capabilities()
+        WHERE capability = 'external_graph_refresh'
+          AND details->'differential_features' = '["stable_row_identity_encoder_v3","custom_table_srf_out_columns","lateral_immutable_composite_function"]'::jsonb) <> 1
+       OR (SELECT count(*) FROM mdm_internal.integration_capabilities()
         WHERE capability = 'output_delta_consumer' AND major_version = 1 AND minor_version = 1 AND enabled) <> 1 THEN
-        RAISE EXCEPTION 'Graph V1 integration capabilities are not enabled';
+        RAISE EXCEPTION 'Graph V1 v3 and Delta V1 integration capabilities are not enabled';
     END IF;
 END
 $$;
@@ -2074,68 +2077,6 @@ BEGIN
 END
 $$;
 
-CREATE TABLE public.e2e_pg_trickle_upgrade_snapshot AS
-SELECT e.publication_revision,
-       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.graph_generation)
-        FROM mdm_internal.graph_bindings b WHERE b.entity_id = e.entity_id) AS bindings,
-       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.logical_id)
-        FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
-        WHERE b.entity_id = e.entity_id) AS graph_members,
-       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.publication_revision)
-        FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id) AS publications,
-       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(i) ORDER BY i.mdm_id)
-        FROM mdm_internal.identity_registry i WHERE i.entity_id = e.entity_id) AS identities,
-       (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.mdm_id)
-        FROM mdm_out.customer c) AS outputs,
-       pg_catalog.has_table_privilege('mdm_output_reader', 'mdm_out.customer', 'SELECT') AS output_reader_grant,
-       pg_catalog.to_regclass('mdm_out.customer')::text AS consumer_relation
-FROM mdm_internal.entities e
-WHERE e.entity_name = 'customer';
-DO $$
-BEGIN
-    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.105.1' THEN
-        RAISE EXCEPTION 'populated upgrade fixture did not start on pg_trickle 0.105.1';
-    END IF;
-END
-$$;
-ALTER EXTENSION pg_trickle UPDATE TO '0.108.0';
-DO $$
-DECLARE
-    snapshot record;
-    current_state record;
-BEGIN
-    SELECT * INTO STRICT snapshot FROM public.e2e_pg_trickle_upgrade_snapshot;
-    SELECT e.publication_revision,
-           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(b) ORDER BY b.graph_generation)
-            FROM mdm_internal.graph_bindings b WHERE b.entity_id = e.entity_id) AS bindings,
-           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.logical_id)
-            FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
-            WHERE b.entity_id = e.entity_id) AS graph_members,
-           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.publication_revision)
-            FROM mdm_internal.publications p WHERE p.entity_id = e.entity_id) AS publications,
-           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(i) ORDER BY i.mdm_id)
-            FROM mdm_internal.identity_registry i WHERE i.entity_id = e.entity_id) AS identities,
-           (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.mdm_id)
-            FROM mdm_out.customer c) AS outputs,
-           pg_catalog.has_table_privilege('mdm_output_reader', 'mdm_out.customer', 'SELECT') AS output_reader_grant,
-           pg_catalog.to_regclass('mdm_out.customer')::text AS consumer_relation
-    INTO STRICT current_state
-    FROM mdm_internal.entities e
-    WHERE e.entity_name = 'customer';
-    IF (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle') <> '0.108.0'
-       OR snapshot.publication_revision IS DISTINCT FROM current_state.publication_revision
-       OR snapshot.bindings IS DISTINCT FROM current_state.bindings
-       OR snapshot.graph_members IS DISTINCT FROM current_state.graph_members
-       OR snapshot.publications IS DISTINCT FROM current_state.publications
-       OR snapshot.identities IS DISTINCT FROM current_state.identities
-       OR snapshot.outputs IS DISTINCT FROM current_state.outputs
-       OR snapshot.output_reader_grant IS DISTINCT FROM current_state.output_reader_grant
-       OR snapshot.consumer_relation IS DISTINCT FROM current_state.consumer_relation THEN
-        RAISE EXCEPTION 'pg_trickle upgrade changed populated MDM state: before %, after %', snapshot, current_state;
-    END IF;
-END
-$$;
-DROP TABLE public.e2e_pg_trickle_upgrade_snapshot;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 DO $$

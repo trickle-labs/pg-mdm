@@ -12,12 +12,12 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Runtime PostgreSQL | 18.4, Debian Bookworm |
 | Build/test `pg_config` | 18.6 (`18.6-1.pgdg12+2`) |
 | PostgreSQL image | `postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf` |
-| `pg_trickle` version | 0.108.0 |
-| `pg_trickle` commit | `8bd0a4b5eb3e586ebdeea56bd774611aa7907e25` |
-| `pg_trickle` tag object | annotated tag targeting the commit above |
-| `pg_trickle` artifact | `pg_trickle-0.108.0-pg18-linux-amd64.tar.gz` |
-| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.108.0/pg_trickle-0.108.0-pg18-linux-amd64.tar.gz` |
-| Artifact SHA-256 | `016ad89fc83172b66b3b3518a00a7182c6206770f755d504195487fdbff406a0` |
+| `pg_trickle` version | 0.108.3 |
+| `pg_trickle` commit | `ce709f06327b4801f79fc48934bc96107b450907` |
+| `pg_trickle` tag | `v0.108.3` |
+| `pg_trickle` artifact | `pg_trickle-0.108.3-pg18-linux-amd64.tar.gz` |
+| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.108.3/pg_trickle-0.108.3-pg18-linux-amd64.tar.gz` |
+| Artifact SHA-256 | `e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f` |
 | Capture mode | trigger |
 | E2E database `LC_COLLATE` / `LC_CTYPE` | `en_US.utf8` / `en_US.utf8` |
 | Normalization fixture SHA-256 | `c01d1b0fe2b938dd09d3afa48e4e43bf648b47d0715595aa0b208ffca68826aa` |
@@ -26,9 +26,11 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Pair-precedence fixture SHA-256 | `ed2324ebcb1744ed5cf945189b7a5b30bb1838a38cd1c6f537a206f79986bd33` |
 | Organization-quality fixture SHA-256 | `f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb` |
 
-The baseline capability response contains `external_graph_refresh 1.2 enabled=true` and `output_delta_consumer 1.1 enabled=true`, both with stable status. v0.13 uses Graph V1.2 and Delta V1.1.
+The adapter accepts the exact Graph V1.2 feature vectors with either `stable_row_identity_encoder_v2` or `stable_row_identity_encoder_v3`, alongside `custom_table_srf_out_columns` and `lateral_immutable_composite_function`. pg_mdm's graph SQL calls `pgtrickle.encode_row_id_v2`; pg_trickle 0.108.3 preserves that function and its bytes. Its v3 encoder changes only `bpchar` trailing-space canonicalization. pg_mdm records the output-delta row-identity version returned by pg_trickle instead of assuming a fixed version.
 
-The pg-trickle 0.108.0 release includes package/runtime qualification and benchmark smoke tests. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
+The 0.108.3 identity migration can require active output-delta consumers to resnapshot before the extension upgrade. For pg_mdm consumers, request the resnapshot before upgrading; pg_mdm's next refresh rebuilds its state from the new snapshot and acknowledges fresh tokens. The upstream migration retains its fail-closed block until consumers are ready.
+
+The pg-trickle v0.108.3 release passed package/runtime and upgrade qualification. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
 
 ## Archived v0.1 Linux package checksums
 

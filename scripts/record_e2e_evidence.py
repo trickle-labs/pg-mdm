@@ -54,7 +54,7 @@ if set(qualification) != {
     "schema_version", "pg_trickle_version", "equivalence_checks", "populations", "scope"
 }:
     raise SystemExit("incremental qualification fields are incomplete")
-if qualification["schema_version"] != 1 or qualification["pg_trickle_version"] != "0.108.0":
+if qualification["schema_version"] != 1 or qualification["pg_trickle_version"] != "0.108.3":
     raise SystemExit("incremental qualification dependency contract changed")
 if qualification["equivalence_checks"] != 70:
     raise SystemExit("incremental qualification did not complete all rebuild comparisons")
@@ -125,8 +125,8 @@ report = {
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
         "archived_pg_mdm_0_14_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.14.0.sql"),
         "pg_mdm_package_manifest_sha256": sha256_bytes(package_manifest.encode()),
-        "pg_trickle_version": "0.108.0",
-        "pg_trickle_artifact_sha256": "016ad89fc83172b66b3b3518a00a7182c6206770f755d504195487fdbff406a0",
+        "pg_trickle_version": "0.108.3",
+        "pg_trickle_artifact_sha256": "e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f",
         "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
         "rust_toolchain": "1.98.0",
     },

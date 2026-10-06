@@ -77,13 +77,22 @@ fn parse_capabilities(
             minimum_minor: GRAPH_CAPABILITY_MIN_MINOR,
         });
     }
+    let differential_features = graph.details.get("differential_features");
     if graph.enabled
-        && graph.details.get("differential_features")
-            != Some(&serde_json::json!([
+        && ![
+            serde_json::json!([
                 "stable_row_identity_encoder_v2",
                 "custom_table_srf_out_columns",
                 "lateral_immutable_composite_function"
-            ]))
+            ]),
+            serde_json::json!([
+                "stable_row_identity_encoder_v3",
+                "custom_table_srf_out_columns",
+                "lateral_immutable_composite_function"
+            ]),
+        ]
+        .iter()
+        .any(|expected| differential_features == Some(expected))
     {
         return Err(MdmError::CapabilityInvalid(
             "external_graph_refresh is missing required differential features".into(),
@@ -315,6 +324,54 @@ mod tests {
     fn disabled_graph_has_a_distinct_gate_error() {
         let capability = parse_capabilities([row(GRAPH_CAPABILITY, 1, false, "{}")]).unwrap();
         assert!(!capability.external_graph_refresh.enabled);
+    }
+
+    #[test]
+    fn accepts_exact_v2_and_v3_graph_profiles() {
+        for features in [
+            serde_json::json!([
+                "stable_row_identity_encoder_v2",
+                "custom_table_srf_out_columns",
+                "lateral_immutable_composite_function"
+            ]),
+            serde_json::json!([
+                "stable_row_identity_encoder_v3",
+                "custom_table_srf_out_columns",
+                "lateral_immutable_composite_function"
+            ]),
+        ] {
+            let details = serde_json::json!({"differential_features": features});
+            let parsed =
+                parse_capabilities([row(GRAPH_CAPABILITY, 1, true, &details.to_string())]).unwrap();
+            assert_eq!(
+                parsed.external_graph_refresh.details["differential_features"],
+                details["differential_features"]
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_or_incomplete_graph_profiles() {
+        for features in [
+            serde_json::json!([
+                "stable_row_identity_encoder_v4",
+                "custom_table_srf_out_columns",
+                "lateral_immutable_composite_function"
+            ]),
+            serde_json::json!([
+                "stable_row_identity_encoder_v3",
+                "lateral_immutable_composite_function"
+            ]),
+            serde_json::json!([
+                "stable_row_identity_encoder_v3",
+                "custom_table_srf_out_columns"
+            ]),
+        ] {
+            let details = serde_json::json!({"differential_features": features});
+            let error = parse_capabilities([row(GRAPH_CAPABILITY, 1, true, &details.to_string())])
+                .unwrap_err();
+            assert_eq!(error.code(), "MDM_PGT_CAPABILITY_INVALID");
+        }
     }
 
     #[test]
