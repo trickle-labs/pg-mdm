@@ -7,20 +7,20 @@
     },
     "docker_engine_architecture": "arm64",
     "docker_image_architecture": "amd64",
-    "docker_image_id": "sha256:45b99615f7d47706dd2a0c512caa5e4ddba23b0fcb060ca65afb8462a2bf7221",
+    "docker_image_id": "sha256:94f6e69f6aee026876056a9a444b97c88048d86d9f8e19413611c270ffacb3b7",
     "memory": {
       "cgroup_limit_bytes": "max",
-      "cgroup_peak_bytes": 1420640256,
-      "visible_available_bytes": 4878028800,
+      "cgroup_peak_bytes": 1309659136,
+      "visible_available_bytes": 6656933888,
       "visible_total_bytes": 8319504384
     },
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "storage": "Filesystem        1B-blocks        Used    Available Use% Mounted on\n/dev/vda1      977896124416 98447527936 829698752512  11% /var/lib/postgresql"
+    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 128525578240 799620702208  14% /var/lib/postgresql"
   },
   "evidence_version": 1,
   "incremental_qualification": {
     "equivalence_checks": 70,
-    "pg_trickle_version": "0.108.0",
+    "pg_trickle_version": "0.108.3",
     "populations": [
       {
         "delta_rows": {
@@ -28,20 +28,20 @@
           "min": 2
         },
         "elapsed_ms": {
-          "max": 835.722,
-          "p50": 780.197,
-          "p95": 830.38
+          "max": 808.932,
+          "p50": 716.388,
+          "p95": 787.297
         },
         "graph_refresh_ms": {
-          "p95": 729.55
+          "p95": 691.85
         },
         "mdm_resolution_ms": {
-          "p95": 6
+          "p95": 5
         },
         "measured_samples": 30,
         "population": 128,
         "publication_ms": {
-          "p95": 70
+          "p95": 62.55
         },
         "warmup_samples": 5
       },
@@ -51,20 +51,20 @@
           "min": 2
         },
         "elapsed_ms": {
-          "max": 2184.891,
-          "p50": 2102.534,
-          "p95": 2160.312
+          "max": 1973.645,
+          "p50": 1913.37,
+          "p95": 1960.074
         },
         "graph_refresh_ms": {
-          "p95": 1147.65
+          "p95": 1010
         },
         "mdm_resolution_ms": {
-          "p95": 73.55
+          "p95": 72
         },
         "measured_samples": 30,
         "population": 2048,
         "publication_ms": {
-          "p95": 890.65
+          "p95": 841
         },
         "warmup_samples": 5
       }
@@ -73,16 +73,16 @@
     "scope": "synthetic exact-email graph; p95 is observational and has no timing gate"
   },
   "inputs": {
-    "archived_pg_mdm_0_14_0_sha256": "ded142f6b0e1e82c046a313cda2d992960bca4b6a10d71a4a75a77c789217724",
+    "archived_pg_mdm_0_14_0_sha256": "5aff3edd6155ad277265f7ca561a293dea9fec5624627cb5e93f92a7cd8d5b16",
     "cargo_lock_sha256": "699add5f72d8b47a825b84bc19754629e240f8302d613089b334e408c0c35cee",
     "e2e_policy_sql_sha256": "2187628aeb64fb176d11b970f4d534206a67d593190bf2cc027c3cf1966ed97d",
-    "e2e_sql_sha256": "d31d33315ebac56b5d92dcb54e4bcc932ee7657dc5d52a3c4e50e3fb4031fb9f",
+    "e2e_sql_sha256": "8e09abbfd9e716834dfa7ad6897a8e7127fc29f7120fb118cc813a60004baa1c",
     "incremental_qualification_sql_sha256": "5d4479140127b8466f90e4c2530a31fa05a3e8cc9f18fe04f0a899e823f34072",
     "operating_envelope_sql_sha256": "dd1abd9dd9e993cbe6851f426969e5dafbe47141ea19e742ebd8c760002edec8",
     "organization_fixture_sha256": "f79acb4273716f9b6d9ca9c3bf7999edb21440798a4a06ae1e135c909c70dbbb",
-    "pg_mdm_package_manifest_sha256": "c5471c8b137efbb27ce980559d2dc6af3e6f21570cf2c9968795ffd63023e531",
-    "pg_trickle_artifact_sha256": "016ad89fc83172b66b3b3518a00a7182c6206770f755d504195487fdbff406a0",
-    "pg_trickle_version": "0.108.0",
+    "pg_mdm_package_manifest_sha256": "5f5ee572242b6b1c4b232408cad76f54a750a076ebecc04f115d9ba3ed1eff44",
+    "pg_trickle_artifact_sha256": "e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f",
+    "pg_trickle_version": "0.108.3",
     "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
     "restore_sql_sha256": "0413359762146970f9e3dab66fad6f514b3e7b61901ef62a535542bc79997ebd",
     "rust_toolchain": "1.98.0"
@@ -100,13 +100,13 @@
     "last_customer_refresh": {
       "active_records": 9,
       "component_checks": 0,
-      "elapsed_ms": 1825,
+      "elapsed_ms": 1762,
       "publication_revision": 15,
       "stage_timings_ms": {
-        "elapsed_before_operation_completion": 375,
-        "graph_refresh": 348,
+        "elapsed_before_operation_completion": 374,
+        "graph_refresh": 345,
         "mdm_resolution": 0,
-        "publication": 14
+        "publication": 15
       }
     },
     "max_block_records": 0,
@@ -128,15 +128,15 @@
     "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
     "repeated_pair_discoveries": 0,
     "retained_history_rows_customer": 55,
-    "retained_history_table_bytes_database_wide": 909312,
+    "retained_history_table_bytes_database_wide": 917504,
     "scope": "customer entity state after Docker E2E; temp_bytes is cumulative for foundation database",
     "source_rows": 9,
-    "temporary_bytes": 21741568,
+    "temporary_bytes": 18530304,
     "unique_candidate_pairs": 0
   },
-  "recorded_at_utc": "2026-09-24T16:15:06.717042+00:00",
+  "recorded_at_utc": "2026-10-06T18:10:18.146133+00:00",
   "result": "passed",
   "retained_log": "evidence/v0.14/docker-e2e.log",
   "retained_log_scope": "Main PostgreSQL script output plus policy qualification output and a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
-  "source_commit": "4889ac41485ac1282aa90b261487ba5315501d10"
+  "source_commit": "548c3e20a9b62324c1b428d3041ac4c8c1cfc433"
 }
