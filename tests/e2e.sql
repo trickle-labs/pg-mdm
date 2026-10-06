@@ -7,7 +7,7 @@ CREATE ROLE mdm_legacy_login LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT mdm_legacy_administrator TO mdm_legacy_login WITH SET TRUE, INHERIT FALSE;
 CREATE DATABASE foundation;
 \connect foundation postgres
-CREATE EXTENSION pg_trickle VERSION '0.108.2';
+CREATE EXTENSION pg_trickle VERSION '0.108.3';
 CREATE EXTENSION pg_mdm VERSION '0.8.0';
 
 DO $$

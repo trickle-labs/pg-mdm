@@ -4,7 +4,7 @@
 
 **Status:** Post-v0.11 design with a recommended delivery scope; optional capabilities remain proposals
 **Reviewed:** 15 September 2026
-**Baseline:** Released `pg_mdm` v0.12.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). The v0.12 tag admitted pg-trickle v0.105.2; current source locks v0.108.2 and retains the exact v0.108.0 v2 profile.
+**Baseline:** Released `pg_mdm` v0.12.0 and the contract in [`DESIGN_V1.md`](DESIGN_V1.md). The v0.12 tag admitted pg-trickle v0.105.2; current source locks v0.108.3 and retains the exact v0.108.0 v2 profile.
 **Foundation:** [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) remains the incremental relational engine
 **Goal:** Add deeper source, matching, stewardship, history, integration, and operational capabilities without changing the small product model established by V1  
 **Product contract:** The same five nouns, five actions, and three primary public outputs
@@ -34,8 +34,8 @@ The released code and upstream contracts establish the following boundary:
 | Item | State after the releases | Consequence for V2 |
 |---|---|---|
 | pg-mdm v0.11.0 | Synchronous strict graph refresh, full MDM resolution, identity history, and atomic publication | Reuse the compiler, resolver, and publication code |
-| pg-mdm dependency | v0.12.0 pins pg-trickle v0.105.2; current source locks the v0.108.2 package and runtime version | Exact-artifact E2E remains the release qualification step |
-| Graph V1 and Delta V1 | Upstream v0.108.2 advertises `external_graph_refresh` 1.2 with the v3 encoder and `output_delta_consumer` 1.1 as stable and enabled | pg-mdm accepts the exact v2 and v3 feature vectors, consumes Delta V1.1 for exact affected scopes, and retains FULL fallback |
+| pg-mdm dependency | v0.12.0 pins pg-trickle v0.105.2; current source locks the v0.108.3 package and runtime version | Exact-artifact E2E remains the release qualification step |
+| Graph V1 and Delta V1 | Upstream v0.108.3 advertises `external_graph_refresh` 1.2 with the v3 encoder and `output_delta_consumer` 1.1 as stable and enabled | pg-mdm accepts the exact v2 and v3 feature vectors, consumes Delta V1.1 for exact affected scopes, and retains FULL fallback |
 | Prepared generations and prepared delta binding | Neither capability appears in the v0.108.2 manifest. The upstream design remains a post-1.0 proposal | Sections 3 and 4 specify a future contract, not callable released APIs |
 | Capture | Upstream advertises trigger and WAL capture as stable | Keep MDM on trigger capture until its own WAL admission suite passes |
 | Preview | `preview_entity()` currently returns metadata and counts. It labels `scoped` as exact without resolving the requested subproblem | Repair the existing claim, then implement shared resolution and exact impact comparison |
@@ -499,7 +499,7 @@ Public-schema changes remain conservative. Additive metadata and new optional ta
 
 ### 23.1 Admit the new baseline and close V1 gaps
 
-The current source locks pg-trickle v0.108.2. Complete pg-trickle's protected FULL reinitialization for existing v2-backed streams, then run the cumulative Docker E2E against that exact artifact before production rollout. Keep the bytea candidate-block and multi-row candidate-pair insert histories checked against complete SQL expectations and a FULL reference while their normal refresh strategy is `DIFFERENTIAL`.
+The current source locks pg-trickle v0.108.3. Request resnapshots for active output-delta consumers before its identity migration, then run the cumulative Docker E2E against that exact artifact before production rollout. Keep the bytea candidate-block and multi-row candidate-pair insert histories checked against complete SQL expectations and a FULL reference while their normal refresh strategy is `DIFFERENTIAL`.
 
 Audit the V1 acceptance criteria against executable tests and retained release results. Correct the current scoped-preview exactness claim and complete its promised subproblem behavior. Connect the organization corpus to runnable quality checks, add held-out cases, and measure the synchronous operating envelope. These are baseline obligations; a V2 feature cannot substitute for them.
 
