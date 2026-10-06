@@ -1,0 +1,1 @@
+-- pg-mdm 0.14.1 changes dependency compatibility without changing database objects.

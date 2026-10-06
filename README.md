@@ -3,7 +3,7 @@
 **Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
 
 > [!IMPORTANT]
-> The v0.14.0 release was qualified with `pg_trickle` 0.108.0. This adapter accepts the exact Graph V1.2 v2 and v3 feature vectors in `pg_trickle` 0.108.3. It consumes Delta V1.1 terminal changes and adds bound stewardship policy intents with durable receipts.
+> The v0.14.1 release is qualified with `pg_trickle` 0.108.3. This adapter accepts the exact Graph V1.2 v2 and v3 feature vectors. It consumes Delta V1.1 terminal changes and adds bound stewardship policy intents with durable receipts.
 
 Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
 
@@ -200,7 +200,7 @@ The design also separates semantic choices from physical execution. Cleaners, ca
 
 ## Project status
 
-The v0.14.0 release admits the checksummed `pg_trickle` 0.108.0 artifact. This compatibility fix adds the exact v0.108.3 v3 capability profile; its graph SQL still uses the preserved v2 encoder. Before upgrading to 0.108.3, request resnapshots for active output-delta consumers; pg_mdm rebuilds their state on the next refresh. v0.14 adds policy-intent bindings, atomic control updates, immutable receipts, and fail-closed retry behavior on top of v0.13's differential graph refresh.
+The v0.14.1 release admits the checksummed `pg_trickle` 0.108.3 artifact; its graph SQL still uses the preserved v2 encoder. Before upgrading to 0.108.3, request resnapshots for active output-delta consumers; pg_mdm rebuilds their state on the next refresh. v0.14 adds policy-intent bindings, atomic control updates, immutable receipts, and fail-closed retry behavior on top of v0.13's differential graph refresh.
 
 The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
 

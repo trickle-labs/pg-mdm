@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-archive=${1:-sql/archive/pg_mdm--0.14.0.sql}
+archive=${1:-sql/archive/pg_mdm--0.14.1.sql}
 
 test -f "$archive"
 

@@ -17,6 +17,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_11_12 = root.join("sql").join("pg_mdm--0.11.0--0.12.0.sql");
     let upgrade_12_13 = root.join("sql").join("pg_mdm--0.12.0--0.13.0.sql");
     let upgrade_13_14 = root.join("sql").join("pg_mdm--0.13.0--0.14.0.sql");
+    let upgrade_14_14_1 = root.join("sql").join("pg_mdm--0.14.0--0.14.1.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -69,6 +70,10 @@ fn test_upgrade_scripts_exist() {
     assert!(
         upgrade_13_14.is_file(),
         "0.13.0 -> 0.14.0 upgrade script must exist"
+    );
+    assert!(
+        upgrade_14_14_1.is_file(),
+        "0.14.0 -> 0.14.1 upgrade script must exist"
     );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");

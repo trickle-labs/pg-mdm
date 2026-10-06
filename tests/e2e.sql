@@ -275,17 +275,17 @@ DROP TABLE mdm_internal.graph_delta_consumers;
 DROP TABLE mdm_steward.policy_cases_v1;
 DROP SEQUENCE mdm_internal.policy_case_key_seq;
 ALTER EXTENSION pg_mdm UPDATE TO '0.13.0';
-ALTER EXTENSION pg_mdm UPDATE TO '0.14.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.14.1';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.14.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.14.1')
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_delta_consumers') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings_entity_definition_generation') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_members_binding_ordinal') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION '0.8.0 to 0.14.0 upgrade did not complete';
+        RAISE EXCEPTION '0.8.0 to 0.14.1 upgrade did not complete';
     END IF;
 END
 $$;
@@ -372,16 +372,16 @@ ALTER EXTENSION pg_mdm UPDATE TO '0.9.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.10.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.12.0';
 ALTER EXTENSION pg_mdm UPDATE TO '0.13.0';
-ALTER EXTENSION pg_mdm UPDATE TO '0.14.0';
+ALTER EXTENSION pg_mdm UPDATE TO '0.14.1';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.14.0')
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.14.1')
        OR pg_catalog.to_regclass('mdm_internal.source_records') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.publications') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_bindings') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.graph_delta_consumers') IS NULL
        OR pg_catalog.to_regclass('mdm_internal.operations_entity_started') IS NULL THEN
-        RAISE EXCEPTION 'direct 0.2.0 to 0.14.0 upgrade did not complete';
+        RAISE EXCEPTION 'direct 0.2.0 to 0.14.1 upgrade did not complete';
     END IF;
 END
 $$;

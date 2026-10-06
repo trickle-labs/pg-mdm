@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.1
+
+- Admit the checksummed `pg_trickle` 0.108.3 Graph V1.2 v3 capability profile.
+- Handle `pg_trickle` identity-v3 output resnapshots during pg-mdm refresh and recovery.
+
 ## 0.14.0
 
 - Add bound policy intents for queue assignment, due dates, and escalation.
