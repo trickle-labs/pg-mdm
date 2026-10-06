@@ -7,7 +7,7 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Rust edition | 2024 |
 | Rust toolchain | 1.98.0 |
 | Build target | `x86_64-unknown-linux-gnu` |
-| `Cargo.lock` SHA-256 | `f96a398612cfe55176933349dbb84d7156691d5e1714d124909ce0b143638a01` |
+| `Cargo.lock` SHA-256 | `f274953d718b3b3a5f86a51116f7bd75f5ef88b30b1a454957611e854bd218eb` |
 | `cargo-pgrx` and `pgrx` | 0.18.0 |
 | Runtime PostgreSQL | 18.4, Debian Bookworm |
 | Build/test `pg_config` | 18.6 (`18.6-1.pgdg12+2`) |
