@@ -36,8 +36,15 @@ assert set(helpers) == {
 }, helpers
 PY
 
-if rg -n 'Spi::(run|run_with_args)\(&|client\.(select|update)\(&' src; then
+# Only these batch inserts interpolate generated placeholders; row data stays bound.
+safe_batch_sql='^src/api/refresh\.rs:[0-9]+:[[:space:]]*client\.update\(&format!\("INSERT INTO mdm_internal\.(identity_aliases|identity_splits|reviews)( AS target)? [^"{}]*VALUES \{values\}[^"{}]*"\), None, &args\)'
+if rg -n 'Spi::(run|run_with_args)\(&|client\.(select|update)\(&' src | rg -v "$safe_batch_sql"; then
     echo 'dynamic SQL passed to SPI' >&2
+    exit 1
+fi
+
+if printf '%s\n' 'src/api/refresh.rs:9999: client.update(&format!("UPDATE mdm_internal.identity_aliases SET value = {value}"), None, &args)' | rg -q "$safe_batch_sql"; then
+    echo 'security check accepted an unbound dynamic value' >&2
     exit 1
 fi
 
