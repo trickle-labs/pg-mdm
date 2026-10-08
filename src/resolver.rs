@@ -327,6 +327,9 @@ fn cannot_cross(
     right: &component::Component,
     cannot_links: &BTreeSet<(Uuid, Uuid)>,
 ) -> bool {
+    if cannot_links.is_empty() {
+        return false;
+    }
     left.members.iter().any(|left_member| {
         right.members.iter().any(|right_member| {
             cannot_links.contains(&(*left_member, *right_member))
@@ -769,6 +772,43 @@ mod tests {
                 edge(3, 4, "b", 2),
                 edge(1, 2, "a", 1),
             ],
+            limits: ResolverLimits::default(),
+        };
+        assert_eq!(
+            resolve(input.clone()).unwrap(),
+            oracle::resolve(input).unwrap()
+        );
+    }
+
+    #[test]
+    fn large_components_with_empty_cannot_links_match_set_oracle() {
+        let records = (0..=255)
+            .map(|value| ResolverRecord {
+                source_record_id: id(value),
+                source_sort_key: vec![value],
+                authority: BTreeMap::new(),
+            })
+            .collect::<Vec<_>>();
+        let mut manual_matches = (0..127)
+            .chain(128..255)
+            .map(|value| DecisionEdge {
+                decision_id: id(value),
+                left_source_record_id: id(value),
+                right_source_record_id: id(value + 1),
+                decision: DecisionKind::Match,
+            })
+            .collect::<Vec<_>>();
+        manual_matches.push(DecisionEdge {
+            decision_id: id(255),
+            left_source_record_id: id(127),
+            right_source_record_id: id(128),
+            decision: DecisionKind::Match,
+        });
+        let input = ResolverInput {
+            records,
+            manual_matches,
+            cannot_links: Vec::new(),
+            pair_decisions: Vec::new(),
             limits: ResolverLimits::default(),
         };
         assert_eq!(

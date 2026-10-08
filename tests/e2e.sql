@@ -2285,6 +2285,7 @@ BEGIN
         'members', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_out.customer_members m), '[]'::jsonb),
         'entities', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id) FROM mdm_out.customer e), '[]'::jsonb),
         'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb),
+        'durable_acknowledgement', COALESCE((SELECT o.outcome->'delta_acknowledged_token' FROM mdm_internal.operations o WHERE o.entity_name = 'customer' AND o.operation_kind IN ('refresh', 'rebuild') AND o.status = 'succeeded' ORDER BY o.completed_at DESC, o.operation_id DESC LIMIT 1), 'null'::jsonb),
         'internal_changed', changed_categories
     );
 END
@@ -2604,6 +2605,7 @@ BEGIN
        OR after_state->'entities' IS DISTINCT FROM before_state->'entities'
        OR after_state->'members' IS DISTINCT FROM before_state->'members'
        OR after_state->'reviews' IS DISTINCT FROM before_state->'reviews'
+       OR after_state->'durable_acknowledgement' IS DISTINCT FROM before_state->'durable_acknowledgement'
        OR after_state->'publication_revision' IS DISTINCT FROM before_state->'publication_revision'
        OR after_state->'publication_count' IS DISTINCT FROM before_state->'publication_count'
        OR after_state->'observation_count' IS DISTINCT FROM before_state->'observation_count' THEN
@@ -3620,3 +3622,173 @@ RESET ROLE;
 DROP FUNCTION public.e2e_composite_source_records();
 DROP TABLE public.crm_customer_composite;
 DROP FUNCTION public.mdm_graph_qualification(jsonb, text[]);
+
+CREATE TABLE public.crm_batch_publication_probe (
+    id bigint PRIMARY KEY,
+    display_name text NOT NULL,
+    email_address text,
+    updated_at timestamptz NOT NULL
+);
+INSERT INTO public.crm_batch_publication_probe
+SELECT id, 'Batch member', 'batch-publication@example.test', pg_catalog.statement_timestamp()
+FROM pg_catalog.generate_series(1, 128) AS id;
+GRANT SELECT, MAINTAIN ON public.crm_batch_publication_probe TO mdm_administrator;
+CREATE TABLE public.batch_publication_probe_checkpoint (
+    created_changed boolean NOT NULL,
+    result jsonb NOT NULL,
+    summary jsonb NOT NULL
+);
+REVOKE ALL ON public.batch_publication_probe_checkpoint FROM PUBLIC;
+GRANT INSERT ON public.batch_publication_probe_checkpoint TO mdm_administrator;
+CREATE FUNCTION public.assert_batch_publication_probe(
+    created_changed boolean,
+    result jsonb,
+    summary jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, mdm_out, mdm_internal, public
+AS $$
+DECLARE
+    probe_entity_id uuid;
+    probe_mdm_id uuid;
+    actual_entities jsonb;
+    expected_entities jsonb;
+    actual_members jsonb;
+    expected_members jsonb;
+    actual_internal_members jsonb;
+    expected_internal_members jsonb;
+    actual_registry jsonb;
+    expected_registry jsonb;
+BEGIN
+    SELECT e.entity_id INTO STRICT probe_entity_id
+      FROM mdm_internal.entities e WHERE e.entity_name = 'batch_publication_probe';
+    SELECT m.mdm_id INTO STRICT probe_mdm_id
+      FROM mdm_out.batch_publication_probe_members m
+     ORDER BY m.mdm_id
+     LIMIT 1;
+    SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(o) ORDER BY o.mdm_id)
+      INTO actual_entities FROM mdm_out.batch_publication_probe o;
+    expected_entities := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+        'mdm_id', probe_mdm_id, 'name', 'Batch member', 'member_count', 128,
+        'has_review', false, 'last_change_revision', 1));
+    SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id)
+      INTO actual_members FROM mdm_out.batch_publication_probe_members m;
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'source_record_id', r.source_record_id,
+        'source_name', 'crm',
+        'source_id', pg_catalog.jsonb_build_object('source_record_key', pg_catalog.encode(r.source_record_key, 'hex')),
+        'mdm_id', probe_mdm_id,
+        'active', true,
+        'first_membership_revision', 1,
+        'last_membership_revision', 1,
+        'membership_reason', 'new',
+        'last_change_revision', 1) ORDER BY r.source_record_id)
+      INTO expected_members
+      FROM mdm_internal.source_records r
+      JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
+      JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
+      JOIN public.crm_batch_publication_probe c
+        ON r.source_record_key = pgtrickle.encode_row_id_v2('SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id))
+     WHERE e.entity_name = 'batch_publication_probe';
+    SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id)
+      INTO actual_internal_members FROM mdm_internal.memberships m WHERE m.entity_id = probe_entity_id;
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'entity_id', probe_entity_id,
+        'source_record_id', r.source_record_id,
+        'source_name', 'crm',
+        'source_id', pg_catalog.jsonb_build_object('source_record_key', pg_catalog.encode(r.source_record_key, 'hex')),
+        'mdm_id', probe_mdm_id,
+        'active', true,
+        'first_membership_revision', 1,
+        'last_membership_revision', 1,
+        'membership_reason', 'new',
+        'last_change_revision', 1) ORDER BY r.source_record_id)
+      INTO expected_internal_members
+      FROM mdm_internal.source_records r
+      JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id AND s.entity_id = r.entity_id
+      JOIN mdm_internal.entities e ON e.entity_id = r.entity_id
+      JOIN public.crm_batch_publication_probe c
+        ON r.source_record_key = pgtrickle.encode_row_id_v2('SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id))
+     WHERE e.entity_name = 'batch_publication_probe';
+    SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(i) ORDER BY i.mdm_id)
+      INTO actual_registry FROM mdm_internal.identity_registry i WHERE i.entity_id = probe_entity_id;
+    expected_registry := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+        'entity_id', probe_entity_id, 'mdm_id', probe_mdm_id, 'created_revision', 1,
+        'retired_revision', NULL, 'status', 'active'));
+    IF NOT created_changed
+       OR result->>'changed' IS DISTINCT FROM 'true'
+       OR result->>'publication_revision' IS DISTINCT FROM '1'
+       OR result->>'active_records' IS DISTINCT FROM '128'
+       OR result->>'identities' IS DISTINCT FROM '1'
+       OR result->>'open_reviews' IS DISTINCT FROM '0'
+       OR result->>'delta_acknowledged_token' IS NULL
+       OR summary->'publication'->'refresh'->>'delta_acknowledged_token'
+          IS DISTINCT FROM result->>'delta_acknowledged_token'
+       OR result->'stage_timings_ms' IS NULL
+       OR actual_entities IS DISTINCT FROM expected_entities
+       OR actual_members IS DISTINCT FROM expected_members
+       OR actual_internal_members IS DISTINCT FROM expected_internal_members
+       OR actual_registry IS DISTINCT FROM expected_registry
+       OR (SELECT count(*) FROM mdm_internal.identity_aliases a WHERE a.entity_id = probe_entity_id) <> 0
+       OR (SELECT count(*) FROM mdm_internal.identity_splits s WHERE s.entity_id = probe_entity_id) <> 0
+       OR (SELECT count(*) FROM mdm_internal.reviews r WHERE r.entity_id = probe_entity_id) <> 0 THEN
+        RAISE EXCEPTION '128-record batched publication differed from its complete expected rows: result %, entities %, expected %, members %, expected %, internal members %, expected %, registry %, expected %',
+            result, actual_entities, expected_entities, actual_members, expected_members,
+            actual_internal_members, expected_internal_members, actual_registry, expected_registry;
+    END IF;
+END
+$$;
+REVOKE ALL ON FUNCTION public.assert_batch_publication_probe(boolean, jsonb, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.assert_batch_publication_probe(boolean, jsonb, jsonb) TO mdm_administrator;
+ALTER ROLE mdm_test_login SET session_preload_libraries = 'auto_explain';
+ALTER ROLE mdm_test_login SET auto_explain.log_min_duration = '0';
+ALTER ROLE mdm_test_login SET auto_explain.log_nested_statements = 'on';
+ALTER ROLE mdm_test_login SET auto_explain.log_analyze = 'on';
+ALTER ROLE mdm_test_login SET auto_explain.log_timing = 'off';
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $$
+DECLARE
+    definition jsonb;
+    created record;
+    result jsonb;
+    summary jsonb;
+BEGIN
+    definition := pg_catalog.jsonb_set(
+        pg_catalog.jsonb_set(
+            mdm.describe('customer', 'definition'),
+            '{name}', pg_catalog.to_jsonb('batch_publication_probe'::text)),
+        '{sources,0,relation}', pg_catalog.to_jsonb('public.crm_batch_publication_probe'::text));
+    SELECT * INTO STRICT created FROM mdm.create(definition);
+    result := mdm.refresh('batch_publication_probe', 'ALLOW');
+    summary := mdm.describe('batch_publication_probe', 'summary');
+    INSERT INTO public.batch_publication_probe_checkpoint VALUES (created.changed, result, summary);
+    RAISE NOTICE 'batch128 refresh trace pid=% result=%', pg_catalog.pg_backend_pid(), result;
+END
+$$;
+RESET ROLE;
+
+\connect foundation postgres
+ALTER ROLE mdm_test_login RESET session_preload_libraries;
+ALTER ROLE mdm_test_login RESET auto_explain.log_min_duration;
+ALTER ROLE mdm_test_login RESET auto_explain.log_nested_statements;
+ALTER ROLE mdm_test_login RESET auto_explain.log_analyze;
+ALTER ROLE mdm_test_login RESET auto_explain.log_timing;
+DO $$
+DECLARE checkpoint public.batch_publication_probe_checkpoint%ROWTYPE;
+BEGIN
+    SELECT * INTO STRICT checkpoint FROM public.batch_publication_probe_checkpoint;
+    PERFORM public.assert_batch_publication_probe(
+        checkpoint.created_changed, checkpoint.result, checkpoint.summary);
+END
+$$;
+SET SESSION AUTHORIZATION mdm_test_login;
+SET ROLE mdm_administrator;
+SELECT mdm_admin.drop_entity('batch_publication_probe', 'batch_publication_probe');
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+DROP TABLE public.crm_batch_publication_probe;
+DROP FUNCTION public.assert_batch_publication_probe(boolean, jsonb, jsonb);
+DROP TABLE public.batch_publication_probe_checkpoint;

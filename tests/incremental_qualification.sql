@@ -30,6 +30,11 @@ CREATE TABLE public.incremental_qualification_results (
     PRIMARY KEY (population, sample)
 );
 GRANT INSERT, SELECT ON public.incremental_qualification_results TO mdm_administrator;
+ALTER ROLE mdm_test_login SET session_preload_libraries = 'auto_explain';
+ALTER ROLE mdm_test_login SET auto_explain.log_min_duration = '0';
+ALTER ROLE mdm_test_login SET auto_explain.log_nested_statements = 'on';
+ALTER ROLE mdm_test_login SET auto_explain.log_analyze = 'on';
+ALTER ROLE mdm_test_login SET auto_explain.log_timing = 'off';
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -86,11 +91,17 @@ BEGIN
         RAISE EXCEPTION 'incremental qualification bootstrap mismatch: expected %, actual %',
             expected, actual;
     END IF;
+    RAISE NOTICE 'spi trace population=128 pid=% result=%', pg_catalog.pg_backend_pid(), result;
 END
 $block$;
 RESET ROLE;
 
 \connect foundation postgres
+ALTER ROLE mdm_test_login RESET session_preload_libraries;
+ALTER ROLE mdm_test_login RESET auto_explain.log_min_duration;
+ALTER ROLE mdm_test_login RESET auto_explain.log_nested_statements;
+ALTER ROLE mdm_test_login RESET auto_explain.log_analyze;
+ALTER ROLE mdm_test_login RESET auto_explain.log_timing;
 CREATE FUNCTION public.incremental_qualification_publication()
 RETURNS jsonb
 LANGUAGE sql
@@ -202,6 +213,17 @@ BEGIN
     END LOOP;
 END
 $block$;
+RESET ROLE;
+
+\connect foundation postgres
+ALTER ROLE mdm_test_login SET session_preload_libraries = 'auto_explain';
+ALTER ROLE mdm_test_login SET auto_explain.log_min_duration = '0';
+ALTER ROLE mdm_test_login SET auto_explain.log_nested_statements = 'on';
+ALTER ROLE mdm_test_login SET auto_explain.log_analyze = 'on';
+ALTER ROLE mdm_test_login SET auto_explain.log_timing = 'off';
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
 
 INSERT INTO public.incremental_qualification_source
 SELECT id,
@@ -220,6 +242,22 @@ BEGIN
        OR result->>'delta_lag' IS DISTINCT FROM '0' THEN
         RAISE EXCEPTION 'qualification population growth mismatch: %', result;
     END IF;
+    RAISE NOTICE 'spi trace population=2048 pid=% result=%', pg_catalog.pg_backend_pid(), result;
+END
+$block$;
+RESET ROLE;
+
+\connect foundation postgres
+ALTER ROLE mdm_test_login RESET session_preload_libraries;
+ALTER ROLE mdm_test_login RESET auto_explain.log_min_duration;
+ALTER ROLE mdm_test_login RESET auto_explain.log_nested_statements;
+ALTER ROLE mdm_test_login RESET auto_explain.log_analyze;
+ALTER ROLE mdm_test_login RESET auto_explain.log_timing;
+
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+DO $block$
+BEGIN
     FOR sample_number IN 1..35 LOOP
         PERFORM public.run_incremental_qualification_sample(2048, sample_number, sample_number > 5);
     END LOOP;
