@@ -91,11 +91,11 @@ pub(crate) fn select_golden(
         .memberships
         .iter()
         .filter(|membership| membership.active)
-        .map(|membership| (membership.source_record_id, membership.mdm_id))
+        .map(|membership| (membership.source_record_id, membership))
         .collect::<BTreeMap<_, _>>();
     let mut candidates: BTreeMap<(Uuid, String), Vec<GoldenCandidate>> = BTreeMap::new();
     for row in rows {
-        let Some(&mdm_id) = by_record.get(&row.source_record_id) else {
+        let Some(membership) = by_record.get(&row.source_record_id).copied() else {
             continue;
         };
         let Some(definition) = entity
@@ -113,7 +113,7 @@ pub(crate) fn select_golden(
             continue;
         }
         candidates
-            .entry((mdm_id, row.field.clone()))
+            .entry((membership.mdm_id, row.field.clone()))
             .or_default()
             .push(GoldenCandidate {
                 source_record_id: row.source_record_id,
@@ -121,12 +121,7 @@ pub(crate) fn select_golden(
                 source_priority: source_priority(entity, &row.source_name),
                 row_changed_at: row.row_changed_at,
                 authoritative: source_authority(entity, &row.source_name).contains_key(&row.field),
-                source_sort_key: memberships
-                    .memberships
-                    .iter()
-                    .find(|membership| membership.source_record_id == row.source_record_id)
-                    .map(|membership| membership.source_sort_key.clone())
-                    .unwrap_or_default(),
+                source_sort_key: membership.source_sort_key.clone(),
                 raw_value: row.raw_value.clone(),
                 state: row.state,
                 normalized: row.normalized.clone(),

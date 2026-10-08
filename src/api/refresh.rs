@@ -25,6 +25,8 @@ use crate::resolver::ResolverLimits;
 use crate::review::{Review, ReviewStatus};
 use crate::source_record::quote_identifier;
 
+const PUBLICATION_BATCH_SIZE: usize = 128;
+
 struct RefreshRequest {
     entity_name: String,
     full_policy: String,
@@ -308,6 +310,26 @@ fn sql_literal(value: &Value, type_name: &str) -> String {
         }
     };
     format!("{value}::{type_name}")
+}
+
+fn values_placeholders(row_count: usize, types: &[&str], first_parameter: usize) -> String {
+    (0..row_count)
+        .map(|row| {
+            let values = types
+                .iter()
+                .enumerate()
+                .map(|(column, type_name)| {
+                    format!(
+                        "${}::{type_name}",
+                        first_parameter + row * types.len() + column
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({values})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn stable_graph_contract(contract: &Value) -> Value {
@@ -2270,9 +2292,61 @@ fn persist_publication_snapshots(
             )
             .map_err(|error| MdmError::Spi(error.to_string()))?;
     }
-    for ((mdm_id, field), selection) in golden {
+    for batch in golden
+        .iter()
+        .collect::<Vec<_>>()
+        .chunks(PUBLICATION_BATCH_SIZE)
+    {
+        let mut args = Vec::with_capacity(batch.len() * 13);
+        for ((mdm_id, field), selection) in batch {
+            args.extend([
+                context.entity_id.clone().into(),
+                revision.into(),
+                (*mdm_id).into(),
+                field.clone().into(),
+                selection.value.clone().map(JsonB).into(),
+                selection.normalized.clone().into(),
+                selection.status.as_str().into(),
+                selection.winning_source_record_id.into(),
+                selection.policy.clone().into(),
+                (selection.policy_version as i16).into(),
+                selection.tie_break.clone().into(),
+                JsonB(json!(
+                    selection
+                        .contributors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                ))
+                .into(),
+                context.definition_version.into(),
+            ]);
+        }
+        let values = values_placeholders(
+            batch.len(),
+            &[
+                "pg_catalog.uuid",
+                "pg_catalog.int8",
+                "pg_catalog.uuid",
+                "pg_catalog.text",
+                "pg_catalog.jsonb",
+                "pg_catalog.text",
+                "pg_catalog.text",
+                "pg_catalog.uuid",
+                "pg_catalog.text",
+                "pg_catalog.int2",
+                "pg_catalog.text",
+                "pg_catalog.jsonb",
+                "pg_catalog.int8",
+            ],
+            1,
+        );
         client
-            .update("INSERT INTO mdm_internal.golden_provenance (entity_id, publication_revision, mdm_id, field_name, value, normalized_value, status, winning_source_record_id, policy, policy_version, tie_break, contributors, definition_version) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)", None, &[context.entity_id.clone().into(), revision.into(), (*mdm_id).into(), field.clone().into(), selection.value.clone().map(JsonB).into(), selection.normalized.clone().into(), selection.status.as_str().into(), selection.winning_source_record_id.into(), selection.policy.clone().into(), (selection.policy_version as i16).into(), selection.tie_break.clone().into(), JsonB(json!(selection.contributors.iter().map(ToString::to_string).collect::<Vec<_>>())).into(), context.definition_version.into()])
+            .update(
+                &format!("INSERT INTO mdm_internal.golden_provenance (entity_id, publication_revision, mdm_id, field_name, value, normalized_value, status, winning_source_record_id, policy, policy_version, tie_break, contributors, definition_version) VALUES {values}"),
+                None,
+                &args,
+            )
             .map_err(|error| MdmError::Spi(error.to_string()))?;
     }
 
@@ -2323,55 +2397,66 @@ fn persist_outputs(
         .iter()
         .filter(|review| review.status == ReviewStatus::Open)
         .count();
-    for identity_row in identity
+    let mut member_counts = BTreeMap::new();
+    for membership in identity.memberships.iter().filter(|row| row.active) {
+        *member_counts.entry(membership.mdm_id).or_insert(0usize) += 1;
+    }
+    let active_identities = identity
         .registry
         .iter()
         .filter(|row| row.status == identity::IdentityStatus::Active)
-    {
-        let members = identity
-            .memberships
+        .collect::<Vec<_>>();
+    let mut columns = vec!["mdm_id".into()];
+    columns.extend(fields.iter().map(|field| quote_identifier(&field.name)));
+    columns.extend([
+        "member_count".into(),
+        "has_review".into(),
+        "last_change_revision".into(),
+    ]);
+    let update_columns = columns
+        .iter()
+        .skip(1)
+        .map(|column| format!("{column} = EXCLUDED.{column}"))
+        .collect::<Vec<_>>();
+    let changed_columns = columns
+        .iter()
+        .skip(1)
+        .map(|column| format!("target.{column} IS DISTINCT FROM EXCLUDED.{column}"))
+        .collect::<Vec<_>>();
+    for batch in active_identities.chunks(PUBLICATION_BATCH_SIZE) {
+        let values = batch
             .iter()
-            .filter(|row| row.active && row.mdm_id == identity_row.mdm_id)
-            .collect::<Vec<_>>();
-        let mut columns = vec!["mdm_id".into()];
-        let mut values = vec![format!("'{}'::uuid", identity_row.mdm_id)];
-        for field in fields {
-            columns.push(quote_identifier(&field.name));
-            values.push(sql_literal(
-                &golden
-                    .get(&(identity_row.mdm_id, field.name.clone()))
-                    .and_then(|selection| selection.value.clone())
-                    .unwrap_or(Value::Null),
-                &field.type_name,
-            ));
-        }
-        columns.extend([
-            "member_count".into(),
-            "has_review".into(),
-            "last_change_revision".into(),
-        ]);
-        values.extend([
-            members.len().to_string(),
-            (open_reviews > 0).to_string(),
-            revision.to_string(),
-        ]);
-        let update_columns = columns
-            .iter()
-            .skip(1)
-            .map(|column| format!("{column} = EXCLUDED.{column}"))
-            .collect::<Vec<_>>();
-        let changed_columns = columns
-            .iter()
-            .skip(1)
-            .map(|column| format!("target.{column} IS DISTINCT FROM EXCLUDED.{column}"))
-            .collect::<Vec<_>>();
+            .map(|identity_row| {
+                let mut row_values = vec![format!("'{}'::uuid", identity_row.mdm_id)];
+                for field in fields {
+                    row_values.push(sql_literal(
+                        &golden
+                            .get(&(identity_row.mdm_id, field.name.clone()))
+                            .and_then(|selection| selection.value.clone())
+                            .unwrap_or(Value::Null),
+                        &field.type_name,
+                    ));
+                }
+                row_values.extend([
+                    member_counts
+                        .get(&identity_row.mdm_id)
+                        .copied()
+                        .unwrap_or_default()
+                        .to_string(),
+                    (open_reviews > 0).to_string(),
+                    revision.to_string(),
+                ]);
+                format!("({})", row_values.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         client
             .update(
                 &format!(
-                    "INSERT INTO mdm_out.{} AS target ({}) VALUES ({}) ON CONFLICT (mdm_id) DO UPDATE SET {} WHERE {}",
+                    "INSERT INTO mdm_out.{} AS target ({}) VALUES {} ON CONFLICT (mdm_id) DO UPDATE SET {} WHERE {}",
                     quote_identifier(&output_name),
                     columns.join(","),
-                    values.join(","),
+                    values,
                     update_columns.join(","),
                     changed_columns.join(" OR ")
                 ),
@@ -2387,25 +2472,42 @@ fn persist_outputs(
         .map(|row| row.mdm_id)
         .collect::<BTreeSet<_>>();
     delete_stale_output_rows(client, &output_name, "mdm_id", &entity_ids, mdm_scope)?;
-    let members_sql = format!(
-        "INSERT INTO mdm_out.{} AS target (source_record_id, source_name, source_id, mdm_id, active, first_membership_revision, last_membership_revision, membership_reason, last_change_revision) SELECT $1, s.source_name::name, pg_catalog.jsonb_build_object('source_record_key', pg_catalog.encode($2, 'hex')), $3, $4, $5, $6, $7, $8 FROM mdm_internal.source_records r JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id WHERE r.source_record_id = $1 ON CONFLICT (source_record_id) DO UPDATE SET source_name = EXCLUDED.source_name, source_id = EXCLUDED.source_id, mdm_id = EXCLUDED.mdm_id, active = EXCLUDED.active, first_membership_revision = EXCLUDED.first_membership_revision, last_membership_revision = EXCLUDED.last_membership_revision, membership_reason = EXCLUDED.membership_reason, last_change_revision = EXCLUDED.last_change_revision WHERE target.source_name IS DISTINCT FROM EXCLUDED.source_name OR target.source_id IS DISTINCT FROM EXCLUDED.source_id OR target.mdm_id IS DISTINCT FROM EXCLUDED.mdm_id OR target.active IS DISTINCT FROM EXCLUDED.active OR target.first_membership_revision IS DISTINCT FROM EXCLUDED.first_membership_revision OR target.last_membership_revision IS DISTINCT FROM EXCLUDED.last_membership_revision OR target.membership_reason IS DISTINCT FROM EXCLUDED.membership_reason OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision",
-        quote_identifier(&members_name)
-    );
-    for membership in &identity.memberships {
+    for batch in identity.memberships.chunks(PUBLICATION_BATCH_SIZE) {
+        let mut args = Vec::with_capacity(batch.len() * 8);
+        for membership in batch {
+            args.extend([
+                membership.source_record_id.into(),
+                membership.source_sort_key.clone().into(),
+                membership.mdm_id.into(),
+                membership.active.into(),
+                membership.first_membership_revision.into(),
+                membership.last_membership_revision.into(),
+                membership.membership_reason.clone().into(),
+                membership.last_change_revision.into(),
+            ]);
+        }
+        let values = values_placeholders(
+            batch.len(),
+            &[
+                "pg_catalog.uuid",
+                "pg_catalog.bytea",
+                "pg_catalog.uuid",
+                "pg_catalog.bool",
+                "pg_catalog.int8",
+                "pg_catalog.int8",
+                "pg_catalog.text",
+                "pg_catalog.int8",
+            ],
+            1,
+        );
         client
             .update(
-                &members_sql,
+                &format!(
+                    "INSERT INTO mdm_out.{} AS target (source_record_id, source_name, source_id, mdm_id, active, first_membership_revision, last_membership_revision, membership_reason, last_change_revision) SELECT batch.source_record_id, s.source_name::name, pg_catalog.jsonb_build_object('source_record_key', pg_catalog.encode(batch.source_record_key, 'hex')), batch.mdm_id, batch.active, batch.first_membership_revision, batch.last_membership_revision, batch.membership_reason, batch.last_change_revision FROM (VALUES {values}) AS batch(source_record_id, source_record_key, mdm_id, active, first_membership_revision, last_membership_revision, membership_reason, last_change_revision) JOIN mdm_internal.source_records r ON r.source_record_id = batch.source_record_id JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id ON CONFLICT (source_record_id) DO UPDATE SET source_name = EXCLUDED.source_name, source_id = EXCLUDED.source_id, mdm_id = EXCLUDED.mdm_id, active = EXCLUDED.active, first_membership_revision = EXCLUDED.first_membership_revision, last_membership_revision = EXCLUDED.last_membership_revision, membership_reason = EXCLUDED.membership_reason, last_change_revision = EXCLUDED.last_change_revision WHERE target.source_name IS DISTINCT FROM EXCLUDED.source_name OR target.source_id IS DISTINCT FROM EXCLUDED.source_id OR target.mdm_id IS DISTINCT FROM EXCLUDED.mdm_id OR target.active IS DISTINCT FROM EXCLUDED.active OR target.first_membership_revision IS DISTINCT FROM EXCLUDED.first_membership_revision OR target.last_membership_revision IS DISTINCT FROM EXCLUDED.last_membership_revision OR target.membership_reason IS DISTINCT FROM EXCLUDED.membership_reason OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision",
+                    quote_identifier(&members_name)
+                ),
                 None,
-                &[
-                    membership.source_record_id.into(),
-                    membership.source_sort_key.clone().into(),
-                    membership.mdm_id.into(),
-                    membership.active.into(),
-                    membership.first_membership_revision.into(),
-                    membership.last_membership_revision.into(),
-                    membership.membership_reason.clone().into(),
-                    membership.last_change_revision.into(),
-                ],
+                &args,
             )
             .map_err(|error| MdmError::OutputInvalid(error.to_string()))?;
     }
@@ -2425,29 +2527,54 @@ fn persist_outputs(
         "INSERT INTO mdm_out.{} AS target (review_id, issue_key, occurrence, status, severity, reason_code, subjects, masked_summary, opened_revision, resolved_revision, last_change_revision, concurrency_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (review_id) DO UPDATE SET issue_key = EXCLUDED.issue_key, occurrence = EXCLUDED.occurrence, status = EXCLUDED.status, severity = EXCLUDED.severity, reason_code = EXCLUDED.reason_code, subjects = EXCLUDED.subjects, opened_revision = EXCLUDED.opened_revision, resolved_revision = EXCLUDED.resolved_revision, last_change_revision = EXCLUDED.last_change_revision, concurrency_version = EXCLUDED.concurrency_version WHERE target.issue_key IS DISTINCT FROM EXCLUDED.issue_key OR target.occurrence IS DISTINCT FROM EXCLUDED.occurrence OR target.status IS DISTINCT FROM EXCLUDED.status OR target.severity IS DISTINCT FROM EXCLUDED.severity OR target.reason_code IS DISTINCT FROM EXCLUDED.reason_code OR target.subjects IS DISTINCT FROM EXCLUDED.subjects OR target.masked_summary IS DISTINCT FROM EXCLUDED.masked_summary OR target.opened_revision IS DISTINCT FROM EXCLUDED.opened_revision OR target.resolved_revision IS DISTINCT FROM EXCLUDED.resolved_revision OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision OR target.concurrency_version IS DISTINCT FROM EXCLUDED.concurrency_version",
         quote_identifier(&review_name)
     );
-    for review in reviews {
+    for batch in reviews.chunks(PUBLICATION_BATCH_SIZE) {
+        let mut args = Vec::with_capacity(batch.len() * 12);
+        for review in batch {
+            args.extend([
+                review.review_id.into(),
+                review.issue_key.to_vec().into(),
+                review.occurrence.into(),
+                (match review.status {
+                    ReviewStatus::Open => "open",
+                    ReviewStatus::Resolved => "resolved",
+                })
+                .into(),
+                review.severity.clone().into(),
+                review.reason_code.clone().into(),
+                JsonB(review.subjects.clone()).into(),
+                JsonB(review.masked_summary.clone()).into(),
+                review.opened_revision.into(),
+                review.resolved_revision.into(),
+                review.last_change_revision.into(),
+                review.concurrency_version.into(),
+            ]);
+        }
+        let values = values_placeholders(
+            batch.len(),
+            &[
+                "pg_catalog.uuid",
+                "pg_catalog.bytea",
+                "pg_catalog.int4",
+                "pg_catalog.text",
+                "pg_catalog.text",
+                "pg_catalog.text",
+                "pg_catalog.jsonb",
+                "pg_catalog.jsonb",
+                "pg_catalog.int8",
+                "pg_catalog.int8",
+                "pg_catalog.int8",
+                "pg_catalog.int8",
+            ],
+            1,
+        );
         client
             .update(
-                &review_sql,
+                &review_sql.replace(
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                    &format!("VALUES {values}"),
+                ),
                 None,
-                &[
-                    review.review_id.into(),
-                    review.issue_key.to_vec().into(),
-                    review.occurrence.into(),
-                    (match review.status {
-                        ReviewStatus::Open => "open",
-                        ReviewStatus::Resolved => "resolved",
-                    })
-                    .into(),
-                    review.severity.clone().into(),
-                    review.reason_code.clone().into(),
-                    JsonB(review.subjects.clone()).into(),
-                    JsonB(review.masked_summary.clone()).into(),
-                    review.opened_revision.into(),
-                    review.resolved_revision.into(),
-                    review.last_change_revision.into(),
-                    review.concurrency_version.into(),
-                ],
+                &args,
             )
             .map_err(|error| MdmError::OutputInvalid(error.to_string()))?;
     }
@@ -2706,17 +2833,111 @@ fn persist_refresh_inner(
                 ))],
             );
             client.update("INSERT INTO mdm_internal.publications (entity_id, publication_revision, definition_version, decision_epoch, operation_id, result_digest) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5::pg_catalog.uuid, $6)", None, &[context.entity_id.clone().into(), revision.into(), context.definition_version.into(), context.decision_epoch.into(), operation_id.clone().into(), result_digest.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
-            for row in &next_identity.registry {
-                client.update("INSERT INTO mdm_internal.identity_registry AS target (entity_id, mdm_id, created_revision, retired_revision, status) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5) ON CONFLICT (entity_id, mdm_id) DO UPDATE SET retired_revision = EXCLUDED.retired_revision, status = EXCLUDED.status WHERE target.retired_revision IS DISTINCT FROM EXCLUDED.retired_revision OR target.status IS DISTINCT FROM EXCLUDED.status", None, &[context.entity_id.clone().into(), row.mdm_id.into(), row.created_revision.into(), row.retired_revision.into(), format!("{:?}", row.status).to_lowercase().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            for batch in next_identity.registry.chunks(PUBLICATION_BATCH_SIZE) {
+                let mut args = Vec::with_capacity(batch.len() * 5);
+                for row in batch {
+                    args.extend([
+                        context.entity_id.clone().into(),
+                        row.mdm_id.into(),
+                        row.created_revision.into(),
+                        row.retired_revision.into(),
+                        format!("{:?}", row.status).to_lowercase().into(),
+                    ]);
+                }
+                let values = values_placeholders(
+                    batch.len(),
+                    &[
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.int8",
+                        "pg_catalog.int8",
+                        "pg_catalog.text",
+                    ],
+                    1,
+                );
+                client.update(
+                    &format!("INSERT INTO mdm_internal.identity_registry AS target (entity_id, mdm_id, created_revision, retired_revision, status) VALUES {values} ON CONFLICT (entity_id, mdm_id) DO UPDATE SET retired_revision = EXCLUDED.retired_revision, status = EXCLUDED.status WHERE target.retired_revision IS DISTINCT FROM EXCLUDED.retired_revision OR target.status IS DISTINCT FROM EXCLUDED.status"),
+                    None,
+                    &args,
+                ).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
-            for row in &next_identity.memberships {
-                client.update("INSERT INTO mdm_internal.memberships AS target (entity_id, source_record_id, source_name, source_id, mdm_id, active, first_membership_revision, last_membership_revision, membership_reason, last_change_revision) SELECT $1::pg_catalog.uuid, $2, s.source_name::name, pg_catalog.jsonb_build_object('source_record_key', pg_catalog.encode(r.source_record_key, 'hex')), $3, $4, $5, $6, $7, $8 FROM mdm_internal.source_records r JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id WHERE r.source_record_id = $2 ON CONFLICT (entity_id, source_record_id) DO UPDATE SET source_name = EXCLUDED.source_name, source_id = EXCLUDED.source_id, mdm_id = EXCLUDED.mdm_id, active = EXCLUDED.active, first_membership_revision = EXCLUDED.first_membership_revision, last_membership_revision = EXCLUDED.last_membership_revision, membership_reason = EXCLUDED.membership_reason, last_change_revision = EXCLUDED.last_change_revision WHERE target.source_name IS DISTINCT FROM EXCLUDED.source_name OR target.source_id IS DISTINCT FROM EXCLUDED.source_id OR target.mdm_id IS DISTINCT FROM EXCLUDED.mdm_id OR target.active IS DISTINCT FROM EXCLUDED.active OR target.first_membership_revision IS DISTINCT FROM EXCLUDED.first_membership_revision OR target.last_membership_revision IS DISTINCT FROM EXCLUDED.last_membership_revision OR target.membership_reason IS DISTINCT FROM EXCLUDED.membership_reason OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision", None, &[context.entity_id.clone().into(), row.source_record_id.into(), row.mdm_id.into(), row.active.into(), row.first_membership_revision.into(), row.last_membership_revision.into(), row.membership_reason.clone().into(), row.last_change_revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            for batch in next_identity.memberships.chunks(PUBLICATION_BATCH_SIZE) {
+                let mut args = Vec::with_capacity(batch.len() * 8);
+                for row in batch {
+                    args.extend([
+                        context.entity_id.clone().into(),
+                        row.source_record_id.into(),
+                        row.mdm_id.into(),
+                        row.active.into(),
+                        row.first_membership_revision.into(),
+                        row.last_membership_revision.into(),
+                        row.membership_reason.clone().into(),
+                        row.last_change_revision.into(),
+                    ]);
+                }
+                let values = values_placeholders(
+                    batch.len(),
+                    &[
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.bool",
+                        "pg_catalog.int8",
+                        "pg_catalog.int8",
+                        "pg_catalog.text",
+                        "pg_catalog.int8",
+                    ],
+                    1,
+                );
+                client.update(
+                    &format!("INSERT INTO mdm_internal.memberships AS target (entity_id, source_record_id, source_name, source_id, mdm_id, active, first_membership_revision, last_membership_revision, membership_reason, last_change_revision) SELECT batch.entity_id, batch.source_record_id, s.source_name::name, pg_catalog.jsonb_build_object('source_record_key', pg_catalog.encode(r.source_record_key, 'hex')), batch.mdm_id, batch.active, batch.first_membership_revision, batch.last_membership_revision, batch.membership_reason, batch.last_change_revision FROM (VALUES {values}) AS batch(entity_id, source_record_id, mdm_id, active, first_membership_revision, last_membership_revision, membership_reason, last_change_revision) JOIN mdm_internal.source_records r ON r.source_record_id = batch.source_record_id JOIN mdm_internal.source_identities s ON s.source_identity_id = r.source_identity_id ON CONFLICT (entity_id, source_record_id) DO UPDATE SET source_name = EXCLUDED.source_name, source_id = EXCLUDED.source_id, mdm_id = EXCLUDED.mdm_id, active = EXCLUDED.active, first_membership_revision = EXCLUDED.first_membership_revision, last_membership_revision = EXCLUDED.last_membership_revision, membership_reason = EXCLUDED.membership_reason, last_change_revision = EXCLUDED.last_change_revision WHERE target.source_name IS DISTINCT FROM EXCLUDED.source_name OR target.source_id IS DISTINCT FROM EXCLUDED.source_id OR target.mdm_id IS DISTINCT FROM EXCLUDED.mdm_id OR target.active IS DISTINCT FROM EXCLUDED.active OR target.first_membership_revision IS DISTINCT FROM EXCLUDED.first_membership_revision OR target.last_membership_revision IS DISTINCT FROM EXCLUDED.last_membership_revision OR target.membership_reason IS DISTINCT FROM EXCLUDED.membership_reason OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision"),
+                    None,
+                    &args,
+                ).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
-            for row in &next_identity.aliases {
-                client.update("INSERT INTO mdm_internal.identity_aliases (entity_id, alias_mdm_id, canonical_mdm_id, publication_revision) VALUES ($1::pg_catalog.uuid, $2, $3, $4) ON CONFLICT DO NOTHING", None, &[context.entity_id.clone().into(), row.alias_mdm_id.into(), row.canonical_mdm_id.into(), row.publication_revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            for batch in next_identity.aliases.chunks(PUBLICATION_BATCH_SIZE) {
+                let mut args = Vec::with_capacity(batch.len() * 4);
+                for row in batch {
+                    args.extend([
+                        context.entity_id.clone().into(),
+                        row.alias_mdm_id.into(),
+                        row.canonical_mdm_id.into(),
+                        row.publication_revision.into(),
+                    ]);
+                }
+                let values = values_placeholders(
+                    batch.len(),
+                    &[
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.int8",
+                    ],
+                    1,
+                );
+                client.update(&format!("INSERT INTO mdm_internal.identity_aliases (entity_id, alias_mdm_id, canonical_mdm_id, publication_revision) VALUES {values} ON CONFLICT DO NOTHING"), None, &args).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
-            for row in &next_identity.splits {
-                client.update("INSERT INTO mdm_internal.identity_splits (entity_id, parent_mdm_id, child_mdm_id, publication_revision) VALUES ($1::pg_catalog.uuid, $2, $3, $4) ON CONFLICT DO NOTHING", None, &[context.entity_id.clone().into(), row.parent_mdm_id.into(), row.child_mdm_id.into(), row.publication_revision.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            for batch in next_identity.splits.chunks(PUBLICATION_BATCH_SIZE) {
+                let mut args = Vec::with_capacity(batch.len() * 4);
+                for row in batch {
+                    args.extend([
+                        context.entity_id.clone().into(),
+                        row.parent_mdm_id.into(),
+                        row.child_mdm_id.into(),
+                        row.publication_revision.into(),
+                    ]);
+                }
+                let values = values_placeholders(
+                    batch.len(),
+                    &[
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.int8",
+                    ],
+                    1,
+                );
+                client.update(&format!("INSERT INTO mdm_internal.identity_splits (entity_id, parent_mdm_id, child_mdm_id, publication_revision) VALUES {values} ON CONFLICT DO NOTHING"), None, &args).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
             let snapshot_scope = prepared
                 .affected_records
@@ -2730,8 +2951,49 @@ fn persist_refresh_inner(
                 &evaluation::semantic_resolution_facts(resolution),
                 snapshot_scope,
             )?;
-            for row in next_reviews {
-                client.update("INSERT INTO mdm_internal.reviews AS target (review_id, entity_id, issue_key, occurrence, status, severity, reason_code, subjects, masked_summary, opened_revision, resolved_revision, last_change_revision, concurrency_version) VALUES ($1, $2::pg_catalog.uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (review_id) DO UPDATE SET status = EXCLUDED.status, severity = EXCLUDED.severity, reason_code = EXCLUDED.reason_code, subjects = EXCLUDED.subjects, masked_summary = EXCLUDED.masked_summary, resolved_revision = EXCLUDED.resolved_revision, last_change_revision = EXCLUDED.last_change_revision, concurrency_version = EXCLUDED.concurrency_version WHERE target.status IS DISTINCT FROM EXCLUDED.status OR target.severity IS DISTINCT FROM EXCLUDED.severity OR target.reason_code IS DISTINCT FROM EXCLUDED.reason_code OR target.subjects IS DISTINCT FROM EXCLUDED.subjects OR target.masked_summary IS DISTINCT FROM EXCLUDED.masked_summary OR target.resolved_revision IS DISTINCT FROM EXCLUDED.resolved_revision OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision OR target.concurrency_version IS DISTINCT FROM EXCLUDED.concurrency_version", None, &[row.review_id.into(), context.entity_id.clone().into(), row.issue_key.to_vec().into(), row.occurrence.into(), (match row.status { ReviewStatus::Open => "open", ReviewStatus::Resolved => "resolved" }).into(), row.severity.clone().into(), row.reason_code.clone().into(), JsonB(row.subjects.clone()).into(), JsonB(row.masked_summary.clone()).into(), row.opened_revision.into(), row.resolved_revision.into(), row.last_change_revision.into(), row.concurrency_version.into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+            for batch in next_reviews.chunks(PUBLICATION_BATCH_SIZE) {
+                let mut args = Vec::with_capacity(batch.len() * 13);
+                for row in batch {
+                    args.extend([
+                        row.review_id.into(),
+                        context.entity_id.clone().into(),
+                        row.issue_key.to_vec().into(),
+                        row.occurrence.into(),
+                        (match row.status {
+                            ReviewStatus::Open => "open",
+                            ReviewStatus::Resolved => "resolved",
+                        })
+                        .into(),
+                        row.severity.clone().into(),
+                        row.reason_code.clone().into(),
+                        JsonB(row.subjects.clone()).into(),
+                        JsonB(row.masked_summary.clone()).into(),
+                        row.opened_revision.into(),
+                        row.resolved_revision.into(),
+                        row.last_change_revision.into(),
+                        row.concurrency_version.into(),
+                    ]);
+                }
+                let values = values_placeholders(
+                    batch.len(),
+                    &[
+                        "pg_catalog.uuid",
+                        "pg_catalog.uuid",
+                        "pg_catalog.bytea",
+                        "pg_catalog.int4",
+                        "pg_catalog.text",
+                        "pg_catalog.text",
+                        "pg_catalog.text",
+                        "pg_catalog.jsonb",
+                        "pg_catalog.jsonb",
+                        "pg_catalog.int8",
+                        "pg_catalog.int8",
+                        "pg_catalog.int8",
+                        "pg_catalog.int8",
+                    ],
+                    1,
+                );
+                client.update(&format!("INSERT INTO mdm_internal.reviews AS target (review_id, entity_id, issue_key, occurrence, status, severity, reason_code, subjects, masked_summary, opened_revision, resolved_revision, last_change_revision, concurrency_version) VALUES {values} ON CONFLICT (review_id) DO UPDATE SET status = EXCLUDED.status, severity = EXCLUDED.severity, reason_code = EXCLUDED.reason_code, subjects = EXCLUDED.subjects, masked_summary = EXCLUDED.masked_summary, resolved_revision = EXCLUDED.resolved_revision, last_change_revision = EXCLUDED.last_change_revision, concurrency_version = EXCLUDED.concurrency_version WHERE target.status IS DISTINCT FROM EXCLUDED.status OR target.severity IS DISTINCT FROM EXCLUDED.severity OR target.reason_code IS DISTINCT FROM EXCLUDED.reason_code OR target.subjects IS DISTINCT FROM EXCLUDED.subjects OR target.masked_summary IS DISTINCT FROM EXCLUDED.masked_summary OR target.resolved_revision IS DISTINCT FROM EXCLUDED.resolved_revision OR target.last_change_revision IS DISTINCT FROM EXCLUDED.last_change_revision OR target.concurrency_version IS DISTINCT FROM EXCLUDED.concurrency_version"), None, &args).map_err(|error| MdmError::Spi(error.to_string()))?;
             }
             persist_outputs(
                 client,
@@ -4141,6 +4403,14 @@ pub(crate) fn preview_entity(request: Internal) -> JsonB {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_values_placeholders_preserve_order_and_casts() {
+        assert_eq!(
+            values_placeholders(2, &["pg_catalog.uuid", "pg_catalog.text"], 4),
+            "($4::pg_catalog.uuid, $5::pg_catalog.text), ($6::pg_catalog.uuid, $7::pg_catalog.text)"
+        );
+    }
 
     #[test]
     fn delta_relation_sql_accepts_only_pgtrickle_payloads() {

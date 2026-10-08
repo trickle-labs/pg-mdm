@@ -12,9 +12,15 @@ missing_log="$work_dir/missing.log"
 e2e_log="$work_dir/e2e-postgres.log"
 qualification_json="$work_dir/incremental-qualification.json"
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-source_revision=$(git -C "$repo_root" rev-parse HEAD)
+git_head=$(git -C "$repo_root" rev-parse HEAD)
+source_revision=$git_head
+candidate_key=${PG_MDM_CANDIDATE_KEY:-unknown}
+echo "E2E Git HEAD: $source_revision; candidate snapshot: $candidate_key"
 
 cleanup() {
+    if [[ -n ${PG_MDM_E2E_LOG_CAPTURE:-} ]]; then
+        docker logs "$container" > "$PG_MDM_E2E_LOG_CAPTURE" 2>&1 || true
+    fi
     docker rm -fv "$container" "$physical_container" >/dev/null 2>&1 || true
     docker run --rm --user root \
         -v "$physical_data:/cleanup/physical" -v "$missing_graph_data:/cleanup/missing" \
@@ -24,6 +30,11 @@ cleanup() {
 trap cleanup EXIT
 
 "$(dirname "$0")/build_e2e_image.sh"
+image_candidate_key=$(docker image inspect --format '{{index .Config.Labels "pg_mdm.candidate_key"}}' "$image")
+if [[ "$image_candidate_key" != "$candidate_key" ]]; then
+    echo "FAIL: E2E image candidate key $image_candidate_key differs from requested $candidate_key" >&2
+    exit 1
+fi
 docker run --detach --name "$container" -e POSTGRES_PASSWORD=postgres "$image" >/dev/null
 
 for _ in $(seq 1 60); do

@@ -70,4 +70,6 @@ COPY sql/configure_helper.sql /sql/configure_helper.sql
 RUN echo "shared_preload_libraries = 'pg_trickle'" >> /usr/share/postgresql/postgresql.conf.sample
 USER postgres
 ARG PG_MDM_SOURCE_REVISION=unknown
+ARG PG_MDM_CANDIDATE_KEY=unknown
 LABEL pg_mdm.source_revision=${PG_MDM_SOURCE_REVISION}
+LABEL pg_mdm.candidate_key=${PG_MDM_CANDIDATE_KEY}
