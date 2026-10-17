@@ -1,20 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG POSTGRES_IMAGE=postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf
 
-FROM ${POSTGRES_IMAGE} AS pg_trickle_release
-ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle/releases/download/v0.108.3/pg_trickle-0.108.3-pg18-linux-amd64.tar.gz
-ARG PG_TRICKLE_SHA256=e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL "$PG_TRICKLE_URL" -o /tmp/pg_trickle.tar.gz \
-    && echo "$PG_TRICKLE_SHA256  /tmp/pg_trickle.tar.gz" | sha256sum -c - \
-    && mkdir /pg_trickle \
-    && tar -xzf /tmp/pg_trickle.tar.gz -C /pg_trickle --strip-components=1 \
-    && cp /pg_trickle/lib/pg_trickle.so /usr/lib/postgresql/18/lib/ \
-    && cp -R /pg_trickle/extension/. /usr/share/postgresql/18/extension/
-
-FROM ${POSTGRES_IMAGE} AS builder
+FROM ${POSTGRES_IMAGE} AS build_tools
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates clang curl git libclang-dev libssl-dev pkg-config postgresql-server-dev-18 ripgrep \
@@ -24,6 +11,8 @@ ENV PATH=/root/.cargo/bin:$PATH
 RUN --mount=type=cache,target=/root/.cargo/registry \
     cargo install --locked cargo-pgrx --version 0.18.0 \
     && cargo pgrx init --pg18 /usr/bin/pg_config
+
+FROM build_tools AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock pg_mdm.control ./
 COPY .cargo/ .cargo/
@@ -40,6 +29,27 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     && mkdir -p /package \
     && cp -R target/release/pg_mdm-pg18/. /package/ \
     && find /package -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/pg_mdm-package-manifest.sha256
+
+FROM build_tools AS pg_trickle_release
+ARG PG_TRICKLE_REVISION=d8bb8eb5d45c5c9982e173e88914037433a1ee05
+ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle.git
+ARG PG_TRICKLE_SHA256=b8d4c59ca3770c305659255e09adde303b4d220228392c415ae363aa7be0a2da
+# GitHub's default archive excludes the lockfile, benches, and build generator.
+RUN git init /pg_trickle_source \
+    && cd /pg_trickle_source \
+    && git fetch --depth=1 "$PG_TRICKLE_URL" "$PG_TRICKLE_REVISION" \
+    && git checkout --detach "$PG_TRICKLE_REVISION" \
+    && printf '* -export-ignore\n' > .git/info/attributes \
+    && git archive --format=tar HEAD -o /tmp/pg_trickle.tar \
+    && echo "$PG_TRICKLE_SHA256  /tmp/pg_trickle.tar" | sha256sum -c -
+WORKDIR /pg_trickle_source
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/pg_trickle_source/target \
+    CARGO_BUILD_JOBS=2 cargo pgrx package --pg-config /usr/bin/pg_config --out-dir /pg_trickle_package \
+    && git diff --exit-code -- Cargo.lock \
+    && cp /pg_trickle_package/usr/lib/postgresql/18/lib/pg_trickle.so /usr/lib/postgresql/18/lib/ \
+    && cp -R /pg_trickle_package/usr/share/postgresql/18/extension/. /usr/share/postgresql/18/extension/
 
 FROM builder AS tester
 COPY --from=pg_trickle_release /usr/lib/postgresql/18/lib/pg_trickle.so /usr/lib/postgresql/18/lib/

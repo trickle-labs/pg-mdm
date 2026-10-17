@@ -65,11 +65,12 @@ grep -Eqi 'pg_trickle.*(not installed|not available)|(not installed|not availabl
 
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 \
     -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres \
-    -f /tests/e2e.sql | tee "$e2e_log"
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql | tee -a "$e2e_log"
+    -f /tests/e2e.sql 2>&1 | tee "$e2e_log"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql 2>&1 | tee -a "$e2e_log"
 docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 \
     -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres -d foundation \
     -f /tests/incremental_qualification.sql > "$qualification_json" 2> "$qualification_log"
+cat "$qualification_log" >> "$e2e_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "CREATE TABLE public.recompile_canary_source (
             id bigint PRIMARY KEY,

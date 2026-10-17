@@ -11,7 +11,7 @@ The project is built around a deliberate division of responsibility. [`pg_trickl
 
 ## Install v0.14
 
-The updated v0.14 adapter source supports PostgreSQL 18 with the checksum-pinned `pg_trickle` 0.108.3 package. The released pg_mdm 0.14.0 package was qualified with pg_trickle 0.108.0 and does not accept the v3 profile. Add `pg_trickle` to `shared_preload_libraries`, restart PostgreSQL, and install `pg_trickle` first. [`DEPENDENCIES.md`](DEPENDENCIES.md) records the package URL and checksum. Before upgrading pg_trickle to 0.108.3, request a resnapshot for each active output-delta consumer; the next pg_mdm refresh rebuilds its consumer state from the fresh snapshot.
+The compiler v11 source supports PostgreSQL 18 with the checksum-pinned `pg_trickle` 0.108.3 source repairs in [`DEPENDENCIES.md`](DEPENDENCIES.md). The released pg_mdm 0.14.0 package was qualified with pg_trickle 0.108.0 and does not accept the v3 profile. Install the pinned producer and adapter, add `pg_trickle` to `shared_preload_libraries`, and restart PostgreSQL. Before upgrading pg_trickle to 0.108.3, request a resnapshot for each active output-delta consumer; the next pg_mdm refresh rebuilds its consumer state from the fresh snapshot.
 
 The extension stores definitions, installs private Graph V1.2 members, consumes Delta V1.1 changes, and publishes PostgreSQL output tables in one transaction. The v0.14 CI suite compares differential and full results, tests affected resolution, and covers rollback, retry, policy intents, upgrade, and restore on PostgreSQL 18.
 
@@ -119,19 +119,18 @@ RESET ROLE;
 
 Grant consumers access to the three output tables after the first refresh creates them: `mdm_out.customer`, `mdm_out.customer_members`, and `mdm_out.customer_review`. Use `mdm.describe('customer', 'summary')` to inspect the definition and graph state. Use `mdm.preview()` to validate a proposed change before activating it.
 
-`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. Exact Delta V1 ranges are eligible for affected resolution only when both terminal consumers supply complete EXACT ranges. Compiler v11 has not been qualified against its pinned producer artifact; do not infer affected-refresh behavior from a DIFFERENTIAL mode declaration. Gaps, invalidations, contract changes, graph transitions, and uncertain limits use the full resolver. `mdm_admin.rebuild()` always uses the full resolver without replacing the identity ledger.
+`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. Exact Delta V1 ranges are eligible for affected resolution only when both terminal consumers supply complete EXACT ranges. Compiler v11 shares one deduplicated candidate set between pair output and exact statistics. When the graph executes differentially, ordinary insert, update, delete, connect, and split changes must retain complete terminal ranges; an unmatched input change can produce an empty EXACT range. Gaps, invalidations, contract changes, graph transitions, and uncertain limits use the full resolver. `mdm_admin.rebuild()` always uses the full resolver without replacing the identity ledger.
 
 ## Roll out compiler v11
 
-Compiler v11 is not rollout-qualified until `scripts/run_e2e_tests.sh` passes
-against the exact admitted candidate and retains the pinned producer artifact,
-effective graph modes, and terminal batch trace. The rollout steps below do not
-replace that qualification; a DIFFERENTIAL mode declaration alone is not
-evidence of affected refresh behavior.
+Run `scripts/run_e2e_tests.sh` against the exact deployment candidate before
+rollout. Retain the source commit, producer binary checksum, effective graph
+modes, and terminal batch trace. A DIFFERENTIAL mode declaration alone does
+not establish complete output capture.
 
 Keep `full_policy = 'ALLOW'` during the rollout. Use `ERROR` only in qualification tests.
 
-1. Request a resnapshot for each active output-delta consumer, upgrade `pg_trickle` to 0.108.3, then install the adapter containing this compatibility fix.
+1. Request a resnapshot for each active output-delta consumer, install the patched `pg_trickle` source pinned in `DEPENDENCIES.md` and the adapter containing compiler v11, then restart PostgreSQL.
 2. Pick one entity as the canary. Capture its public output rows and `mdm.describe('<entity>', 'summary')` result.
 3. Grant the entity administrator access to `mdm_admin.recompile(text)` and run `mdm_admin.recompile('<entity>')`.
 4. Run `mdm.refresh('<entity>', 'ALLOW')`. The first refresh after the graph transition uses the full resolver. Confirm that the public rows are unchanged and `delta_lag` is zero.
@@ -142,15 +141,18 @@ Alert when a steady-state refresh reports a full resolver fallback or an unexpec
 
 The Docker E2E run also executes `tests/incremental_qualification.sql`. It
 measures 30 affected-refresh samples after five warmups at 128 and 2,048
-records, and compares the complete public publication with an administrative
-full rebuild after every sample. The retained report is observational; it has
-no machine-dependent timing threshold.
+records, and compares the complete public publication, durable identities,
+provenance, result digest, and explanation results with an administrative full
+rebuild after every sample. It also covers no-change refreshes, an isolated
+change at 8,192 records, and a dense 32-record component. The retained report
+is observational; it has no machine-dependent timing threshold. Qualification
+sets `pg_trickle.refresh_strategy = 'differential'`; operator runs retain
+`ALLOW` and check the returned node modes and terminal ranges.
 
-Strict graph-wide `full_policy = 'ERROR'` qualification still depends on the
-pg-trickle changes in
+Use `full_policy = 'ERROR'` only for controlled steady-state qualification
+after bootstrap. Bootstrap, rebuild, transitions, and recovery must retain
+their safe full path. The producer capability contract is retained in
 [`PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md`](PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md).
-Do not treat the affected-resolver qualification as proof that every graph
-node is differential.
 
 ## Rebind restored entities
 

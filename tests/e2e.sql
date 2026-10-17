@@ -2295,7 +2295,25 @@ BEGIN
         'members', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m) ORDER BY m.source_record_id) FROM mdm_out.customer_members m), '[]'::jsonb),
         'entities', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) ORDER BY e.mdm_id) FROM mdm_out.customer e), '[]'::jsonb),
         'reviews', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.review_id) FROM mdm_out.customer_review r), '[]'::jsonb),
-        'durable_acknowledgement', COALESCE((SELECT o.outcome->'delta_acknowledged_token' FROM mdm_internal.operations o WHERE o.entity_name = 'customer' AND o.operation_kind IN ('refresh', 'rebuild') AND o.status = 'succeeded' ORDER BY o.completed_at DESC, o.operation_id DESC LIMIT 1), 'null'::jsonb),
+        'durable_acknowledgement', COALESCE((
+            SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+                'logical_id', c.logical_id, 'consumer_id', s.consumer_id,
+                'acknowledged_batch_token', s.acknowledged_batch_token,
+                'log_head', s.log_head, 'state', s.state, 'state_reason', s.state_reason,
+                'output_contract_digest', s.output_contract_digest,
+                'row_identity_version', s.row_identity_version
+            ) ORDER BY c.logical_id)
+            FROM pgtrickle.output_delta_consumer_status() s
+            JOIN mdm_internal.graph_delta_consumers c USING (consumer_id)
+            JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+            JOIN mdm_internal.entities e USING (entity_id)
+            WHERE e.entity_name = 'customer' AND b.definition_version = e.desired_version
+        ), '[]'::jsonb),
+        'graph_observations', COALESCE((
+            SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(o) ORDER BY o.observation_id)
+            FROM mdm_internal.publication_observations o
+            JOIN mdm_internal.entities e USING (entity_id) WHERE e.entity_name = 'customer'
+        ), '[]'::jsonb),
         'internal_changed', changed_categories
     );
 END
@@ -2549,6 +2567,25 @@ BEGIN
 END
 $$;
 
+CREATE TABLE public.e2e_split_consumers AS
+SELECT c.logical_id, registered.consumer_id
+FROM mdm_internal.graph_delta_consumers c
+JOIN mdm_internal.graph_members m USING (graph_binding_id, logical_id)
+JOIN mdm_internal.graph_bindings g USING (graph_binding_id)
+JOIN mdm_internal.entities e USING (entity_id)
+CROSS JOIN LATERAL pgtrickle.stream_table_contract(m.relation_name::regclass) contract
+CROSS JOIN LATERAL pgtrickle.register_output_delta_consumer(
+    m.relation_name::regclass, 'e2e_split/' || c.logical_id,
+    contract.contract_digest, 'RESNAPSHOT_REQUIRED') registered
+WHERE e.entity_name = 'customer'
+  AND g.graph_generation = (SELECT max(graph_generation)
+                           FROM mdm_internal.graph_bindings WHERE entity_id = e.entity_id);
+BEGIN;
+SELECT pgtrickle.ack_output_delta_resnapshot(c.consumer_id, snapshot.resnapshot_token)
+FROM public.e2e_split_consumers c
+CROSS JOIN LATERAL pgtrickle.begin_output_delta_resnapshot(c.consumer_id) snapshot;
+COMMIT;
+
 UPDATE public.crm_customer
 SET email_address = 'two@example.test', updated_at = statement_timestamp()
 WHERE id = 2;
@@ -2579,9 +2616,11 @@ DECLARE
     member_state jsonb;
     graph_binding uuid;
     source_ids uuid[];
+    current_logical_id text;
     current_relation text;
     current_rows jsonb;
     relation_rows jsonb := '{}'::jsonb;
+    terminal_batches jsonb;
 BEGIN
     SELECT gb.graph_binding_id INTO STRICT graph_binding
     FROM mdm_internal.graph_bindings gb
@@ -2589,10 +2628,27 @@ BEGIN
     WHERE e.entity_name = 'customer'
     ORDER BY gb.graph_generation DESC
     LIMIT 1;
+    SELECT pg_catalog.jsonb_object_agg(c.logical_id, pg_catalog.jsonb_build_object(
+        'mode', b.mode, 'row_count', b.row_count,
+        'rows_deleted', b.rows_deleted, 'rows_inserted', b.rows_inserted
+    ) ORDER BY c.logical_id)
+    INTO terminal_batches
+    FROM public.e2e_split_consumers c
+    CROSS JOIN LATERAL (
+        SELECT mode, row_count, rows_deleted, rows_inserted
+        FROM pgtrickle.output_delta_batches(c.consumer_id, NULL::bigint)
+        ORDER BY batch_token DESC LIMIT 1
+    ) b;
+    IF terminal_batches IS DISTINCT FROM '{
+        "evidence/customer":{"mode":"EXACT","row_count":1,"rows_deleted":1,"rows_inserted":0},
+        "golden/customer":{"mode":"EXACT","row_count":2,"rows_deleted":1,"rows_inserted":1}
+    }'::jsonb THEN
+        RAISE EXCEPTION 'split terminal batches omitted or invalidated the deleted evidence: %', terminal_batches;
+    END IF;
     SELECT array_agg(source_record_id ORDER BY source_record_id) INTO STRICT source_ids
     FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]);
-    FOR current_relation IN
-        SELECT relation_name
+    FOR current_logical_id, current_relation IN
+        SELECT logical_id, relation_name
         FROM mdm_internal.graph_members
         WHERE graph_binding_id = graph_binding
           AND logical_id IN (
@@ -2608,8 +2664,14 @@ BEGIN
             'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' - ''__pgt_count''), ''[]''::jsonb) FROM %s t WHERE (t.left_source_record_id = $1 AND t.right_source_record_id = $2) OR (t.left_source_record_id = $2 AND t.right_source_record_id = $1)',
             current_relation
         ) INTO current_rows USING source_ids[1], source_ids[2];
-        relation_rows := relation_rows || pg_catalog.jsonb_build_object(current_relation, current_rows);
+        relation_rows := relation_rows || pg_catalog.jsonb_build_object(current_logical_id, current_rows);
     END LOOP;
+    IF relation_rows IS DISTINCT FROM '{
+        "candidate-raw/customer":[], "candidate-set/customer":[],
+        "pairs/customer":[], "evidence/customer":[]
+    }'::jsonb THEN
+        RAISE EXCEPTION 'split retained a stale candidate or evidence row: %', relation_rows;
+    END IF;
     SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
         'source_record_id', m.source_record_id,
         'mdm_id', m.mdm_id,
@@ -2639,6 +2701,10 @@ BEGIN
     END IF;
 END
 $$;
+
+DELETE FROM pgtrickle.pgt_output_delta_consumers
+WHERE consumer_id IN (SELECT consumer_id FROM public.e2e_split_consumers);
+DROP TABLE public.e2e_split_consumers;
 
 CREATE TABLE public.release_output_checkpoint AS
 SELECT e.publication_revision,
@@ -2677,6 +2743,7 @@ BEGIN
        OR after_state->'members' IS DISTINCT FROM before_state->'members'
        OR after_state->'reviews' IS DISTINCT FROM before_state->'reviews'
        OR after_state->'durable_acknowledgement' IS DISTINCT FROM before_state->'durable_acknowledgement'
+       OR after_state->'graph_observations' IS DISTINCT FROM before_state->'graph_observations'
        OR after_state->'publication_revision' IS DISTINCT FROM before_state->'publication_revision'
        OR after_state->'publication_count' IS DISTINCT FROM before_state->'publication_count'
        OR after_state->'observation_count' IS DISTINCT FROM before_state->'observation_count' THEN

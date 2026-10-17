@@ -1072,6 +1072,19 @@ pub fn compile(entity: &Entity) -> Value {
         .golden_values
         .iter()
         .map(|golden| format!("normalized/{}", golden.field))
+        .chain(
+            entity
+                .fields
+                .iter()
+                .filter(|field| {
+                    !evidence_fields.contains(&field.name)
+                        && !entity
+                            .golden_values
+                            .iter()
+                            .any(|golden| golden.field == field.name)
+                })
+                .map(|field| format!("normalized/{}", field.name)),
+        )
         .chain([
             format!("pairs/{}", entity.name),
             format!("evidence/{}", entity.name),
@@ -1147,6 +1160,32 @@ mod tests {
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
+        artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
+    }
+
+    #[test]
+    fn unused_normalized_fields_remain_connected_to_golden_root() {
+        let entity = parse_entity(json!({
+            "name":"customer", "sources":[],
+            "fields":[
+                {"name":"label","type":"text","cleaner":"none","cleaner_options":{},"display":"masked"},
+                {"name":"amount","type":"numeric","cleaner":"none","cleaner_options":{},"display":"masked"}
+            ],
+            "matches":[],"golden_values":[],
+            "preset":null,"limits":{},"execution_role":null
+        }))
+        .expect("test entity parses");
+        let graph = compile(&entity);
+        assert_eq!(graph["roots"], json!(["golden/customer"]));
+        assert_eq!(
+            graph["nodes"].as_array().unwrap().last().unwrap()["dependencies"],
+            json!([
+                "normalized/label",
+                "normalized/amount",
+                "pairs/customer",
+                "evidence/customer"
+            ])
+        );
         artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
     }
 
