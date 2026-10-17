@@ -86,7 +86,7 @@ fn test_e2e_generated_normalization_sql_shape() {
     assert!(norm_dob_sql.contains("WHERE false"));
 
     let graph = compile(&entity);
-    assert_eq!(graph["compiler_version"], 10);
+    assert_eq!(graph["compiler_version"], 11);
     let nodes = graph["nodes"].as_array().expect("nodes array");
     assert!(nodes.iter().any(|n| n["logical_id"] == "records/crm"));
     assert!(nodes.iter().any(|n| n["logical_id"] == "normalized/email"));
@@ -112,16 +112,48 @@ fn test_e2e_generated_normalization_sql_shape() {
         .iter()
         .find(|node| node["logical_id"] == "evidence/customer")
         .expect("evidence node");
+    assert_eq!(evidence["dependencies"], json!(["pairs/customer"]));
+    let evidence_sql = evidence["defining_sql"].as_str().unwrap();
+    assert!(evidence_sql.contains("@{pairs/customer}"));
+    assert!(!evidence_sql.contains("normalized/"));
+    assert!(!evidence_sql.contains("GROUP BY"));
+    assert!(evidence_sql.contains("'exact_email'::text AS rule"));
+    let pairs = nodes
+        .iter()
+        .find(|node| node["logical_id"] == "pairs/customer")
+        .expect("bounded pair output node");
     assert!(
-        evidence["defining_sql"]
+        pairs["defining_sql"]
             .as_str()
             .unwrap()
-            .contains("l0.state = 'value'")
+            .contains("evidence_rule_0_class")
+    );
+    let candidate_set = nodes
+        .iter()
+        .find(|node| node["logical_id"] == "candidate-set/customer")
+        .expect("shared candidate result node");
+    assert!(
+        candidate_set["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("GROUP BY candidate.left_source_record_id, candidate.right_source_record_id")
     );
     assert!(
-        evidence["defining_sql"]
+        candidate_set["defining_sql"]
             .as_str()
             .unwrap()
-            .contains("r0.state = 'value'")
+            .contains("pg_catalog.min(candidate.left_sort_key)")
+    );
+    assert!(
+        pairs["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("mdm_graph.evidence_digest")
+    );
+    assert!(
+        pairs["defining_sql"]
+            .as_str()
+            .unwrap()
+            .contains("LEFT JOIN @{normalized/email} AS evidence_left_0")
     );
 }

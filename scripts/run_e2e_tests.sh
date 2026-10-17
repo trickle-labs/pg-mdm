@@ -11,7 +11,13 @@ missing_graph_data="$work_dir/missing-graph-data"
 missing_log="$work_dir/missing.log"
 e2e_log="$work_dir/e2e-postgres.log"
 qualification_json="$work_dir/incremental-qualification.json"
+qualification_log="$work_dir/incremental-qualification.log"
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
+producer_artifact_sha256=$(sed -n 's/^ARG PG_TRICKLE_SHA256=//p' "$repo_root/tests/Dockerfile.e2e")
+if [[ ! $producer_artifact_sha256 =~ ^[0-9a-f]{64}$ ]]; then
+    echo 'FAIL: tests/Dockerfile.e2e must pin one pg_trickle artifact SHA-256' >&2
+    exit 1
+fi
 git_head=$(git -C "$repo_root" rev-parse HEAD)
 source_revision=$git_head
 candidate_key=${PG_MDM_CANDIDATE_KEY:-unknown}
@@ -20,6 +26,9 @@ echo "E2E Git HEAD: $source_revision; candidate snapshot: $candidate_key"
 cleanup() {
     if [[ -n ${PG_MDM_E2E_LOG_CAPTURE:-} ]]; then
         docker logs "$container" > "$PG_MDM_E2E_LOG_CAPTURE" 2>&1 || true
+        if [[ -f "$qualification_log" ]]; then
+            cat "$qualification_log" >> "$PG_MDM_E2E_LOG_CAPTURE"
+        fi
     fi
     docker rm -fv "$container" "$physical_container" >/dev/null 2>&1 || true
     docker run --rm --user root \
@@ -38,7 +47,8 @@ fi
 docker run --detach --name "$container" -e POSTGRES_PASSWORD=postgres "$image" >/dev/null
 
 for _ in $(seq 1 60); do
-    if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then
+    if docker logs "$container" 2>&1 | grep -q 'PostgreSQL init process complete; ready for start up.' \
+        && docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then
         break
     fi
     sleep 1
@@ -53,10 +63,13 @@ if docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d missing_de
 fi
 grep -Eqi 'pg_trickle.*(not installed|not available)|(not installed|not available).*pg_trickle' "$missing_log"
 
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e.sql | tee "$e2e_log"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 \
+    -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres \
+    -f /tests/e2e.sql | tee "$e2e_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql | tee -a "$e2e_log"
-docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
-    -f /tests/incremental_qualification.sql > "$qualification_json"
+docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 \
+    -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres -d foundation \
+    -f /tests/incremental_qualification.sql > "$qualification_json" 2> "$qualification_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "CREATE TABLE public.recompile_canary_source (
             id bigint PRIMARY KEY,
@@ -147,9 +160,9 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
                 'previous_publication_revision', 1,
                 'graph_generation', (state->>'previous_graph_generation')::bigint + 1,
                 'previous_graph_generation', (state->>'previous_graph_generation')::bigint,
-                'compiler_versions', '[9, 10]'::jsonb,
+                'compiler_versions', '[9, 11]'::jsonb,
                 'terminal_consumers', 2, 'output_equal', true) THEN
-                RAISE EXCEPTION 'compiler v9 to v10 canary state is invalid: %', state;
+                RAISE EXCEPTION 'compiler v9 to v11 canary state is invalid: %', state;
             END IF;
         END \$\$;"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U mdm_test_login -d foundation \
@@ -1031,6 +1044,6 @@ echo 'PASS: physical backup recovery with populated and pending graph state'
 echo 'PASS: candidate AUTO/FULL exact-row comparisons, FULL source oracle, and reported node strategies'
 echo 'PASS: source writes after a returned boundary remain pending for the next refresh'
 echo 'PASS: Delta V1 consumer registration, resnapshot, acknowledgement, and observability'
-echo 'PASS: compiler v9 to v10 canary adoption preserves the complete publication'
+echo 'PASS: compiler v9 to v11 canary adoption preserves the complete publication'
 echo 'PASS: affected-resolution qualification matches full rebuilds at 128 and 2,048 records'
 echo 'PASS: decision and golden-override intervals use affected resolution or the invalidation fallback'

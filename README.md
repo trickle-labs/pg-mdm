@@ -119,9 +119,15 @@ RESET ROLE;
 
 Grant consumers access to the three output tables after the first refresh creates them: `mdm_out.customer`, `mdm_out.customer_members`, and `mdm_out.customer_review`. Use `mdm.describe('customer', 'summary')` to inspect the definition and graph state. Use `mdm.preview()` to validate a proposed change before activating it.
 
-`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. Exact Delta V1 ranges use affected resolution. Gaps, invalidations, contract changes, graph transitions, and uncertain limits use the full resolver. `mdm_admin.rebuild()` always uses the full resolver without replacing the identity ledger.
+`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. Exact Delta V1 ranges are eligible for affected resolution only when both terminal consumers supply complete EXACT ranges. Compiler v11 has not been qualified against its pinned producer artifact; do not infer affected-refresh behavior from a DIFFERENTIAL mode declaration. Gaps, invalidations, contract changes, graph transitions, and uncertain limits use the full resolver. `mdm_admin.rebuild()` always uses the full resolver without replacing the identity ledger.
 
-## Roll out compiler v10
+## Roll out compiler v11
+
+Compiler v11 is not rollout-qualified until `scripts/run_e2e_tests.sh` passes
+against the exact admitted candidate and retains the pinned producer artifact,
+effective graph modes, and terminal batch trace. The rollout steps below do not
+replace that qualification; a DIFFERENTIAL mode declaration alone is not
+evidence of affected refresh behavior.
 
 Keep `full_policy = 'ALLOW'` during the rollout. Use `ERROR` only in qualification tests.
 

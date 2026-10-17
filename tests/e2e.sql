@@ -2003,17 +2003,22 @@ INSERT INTO public.crm_customer VALUES
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
+SET mdm.trace_producer_artifact_sha256 = :'producer_artifact_sha256';
 DO $$
 DECLARE result jsonb;
 BEGIN
     PERFORM public.e2e_clear_helper_audit();
     result := mdm.refresh('customer', 'ALLOW');
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
-       OR result->>'resolver_fallback_reason' IS DISTINCT FROM 'delta_full_invalidation'
-       OR (result->>'affected_records')::bigint <> 4
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
+       OR result->>'resolver_fallback_reason' IS NOT NULL
+       OR (result->>'affected_records')::bigint <> 1
+       OR (result->>'affected_components')::bigint <> 1
+       OR result->>'delta_lag' IS DISTINCT FROM '0'
+       OR (result->>'delta_batch_count')::integer <> 2
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'INSERT') <> 1
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
-        RAISE EXCEPTION 'insert refresh changed unrelated helpers: %', result;
+        RAISE EXCEPTION 'insert refresh did not resolve one exact affected component: %', result;
     END IF;
 END
 $$;
@@ -2024,17 +2029,22 @@ DELETE FROM public.crm_customer WHERE id = 9901;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
+SET mdm.trace_producer_artifact_sha256 = :'producer_artifact_sha256';
 DO $$
 DECLARE result jsonb;
 BEGIN
     PERFORM public.e2e_clear_helper_audit();
     result := mdm.refresh('customer', 'ALLOW');
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
-       OR result->>'resolver_fallback_reason' IS DISTINCT FROM 'delta_full_invalidation'
-       OR (result->>'affected_records')::bigint <> 3
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
+       OR result->>'resolver_fallback_reason' IS NOT NULL
+       OR (result->>'affected_records')::bigint <> 1
+       OR (result->>'affected_components')::bigint <> 0
+       OR result->>'delta_lag' IS DISTINCT FROM '0'
+       OR (result->>'delta_batch_count')::integer <> 2
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name = 'source_records' AND action = 'UPDATE' AND old_active AND NOT new_active) <> 1
        OR (SELECT count(*) FROM public.e2e_helper_audit WHERE table_name <> 'source_records') <> 0 THEN
-        RAISE EXCEPTION 'delete refresh changed unrelated helpers: %', result;
+        RAISE EXCEPTION 'delete refresh did not resolve one exact affected component: %', result;
     END IF;
 END
 $$;
@@ -2364,6 +2374,8 @@ INSERT INTO public.crm_customer VALUES
     (2, 'Acme Two', 'same@example.test', statement_timestamp());
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
+SET mdm.trace_producer_artifact_sha256 = :'producer_artifact_sha256';
 DO $$
 DECLARE result jsonb; expected_revision bigint;
 BEGIN
@@ -2453,7 +2465,12 @@ BEGIN
     FROM mdm_internal.graph_members
     WHERE graph_binding_id = binding_id AND logical_id = 'normalized/email';
     EXECUTE pg_catalog.format(
-        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' - ''__pgt_count'' ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
+        'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            ''left_source_record_id'', t.left_source_record_id,
+            ''right_source_record_id'', t.right_source_record_id,
+            ''left_sort_key'', t.left_sort_key,
+            ''right_sort_key'', t.right_sort_key
+        ) ORDER BY t.left_sort_key, t.right_sort_key), ''[]''::jsonb) FROM %s t',
         pair_relation
     ) INTO pair_rows;
     EXECUTE pg_catalog.format(
@@ -2537,25 +2554,79 @@ SET email_address = 'two@example.test', updated_at = statement_timestamp()
 WHERE id = 2;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
+SET mdm.trace_producer_artifact_sha256 = :'producer_artifact_sha256';
 DO $$
 DECLARE result jsonb; expected_revision bigint;
 BEGIN
     expected_revision := (mdm.describe('customer', 'summary')->'publication'->>'publication_revision')::bigint + 1;
     result := mdm.refresh('customer', 'ALLOW');
     IF result->>'changed' <> 'true'
-       OR (result->>'publication_revision')::bigint <> expected_revision THEN
-        RAISE EXCEPTION 'update refresh did not publish the split: %', result;
+       OR (result->>'publication_revision')::bigint <> expected_revision
+       OR result->>'resolver_strategy' IS DISTINCT FROM 'affected'
+       OR result->>'resolver_fallback_reason' IS NOT NULL
+       OR (result->>'affected_records')::bigint <> 2
+       OR (result->>'delta_batch_count')::integer <> 2
+       OR result->>'delta_lag' IS DISTINCT FROM '0' THEN
+        RAISE EXCEPTION 'update refresh did not exactly publish the split: %', result;
     END IF;
 END
 $$;
 RESET ROLE;
 \connect foundation postgres
 DO $$
+DECLARE
+    member_state jsonb;
+    graph_binding uuid;
+    source_ids uuid[];
+    current_relation text;
+    current_rows jsonb;
+    relation_rows jsonb := '{}'::jsonb;
 BEGIN
+    SELECT gb.graph_binding_id INTO STRICT graph_binding
+    FROM mdm_internal.graph_bindings gb
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'customer'
+    ORDER BY gb.graph_generation DESC
+    LIMIT 1;
+    SELECT array_agg(source_record_id ORDER BY source_record_id) INTO STRICT source_ids
+    FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]);
+    FOR current_relation IN
+        SELECT relation_name
+        FROM mdm_internal.graph_members
+        WHERE graph_binding_id = graph_binding
+          AND logical_id IN (
+              'candidate-raw/customer', 'candidate-set/customer',
+              'pairs/customer', 'evidence/customer'
+          )
+        ORDER BY array_position(ARRAY[
+            'candidate-raw/customer', 'candidate-set/customer',
+            'pairs/customer', 'evidence/customer'
+        ]::text[], logical_id)
+    LOOP
+        EXECUTE pg_catalog.format(
+            'SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) - ''__pgt_row_id'' - ''__pgt_count''), ''[]''::jsonb) FROM %s t WHERE (t.left_source_record_id = $1 AND t.right_source_record_id = $2) OR (t.left_source_record_id = $2 AND t.right_source_record_id = $1)',
+            current_relation
+        ) INTO current_rows USING source_ids[1], source_ids[2];
+        relation_rows := relation_rows || pg_catalog.jsonb_build_object(current_relation, current_rows);
+    END LOOP;
+    SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'source_record_id', m.source_record_id,
+        'mdm_id', m.mdm_id,
+        'active', m.active,
+        'name', c.name
+    ) ORDER BY m.source_record_id), '[]'::jsonb)
+      INTO member_state
+      FROM mdm_out.customer_members m
+      JOIN mdm_out.customer c USING (mdm_id)
+     WHERE m.source_name = 'crm' AND m.active
+       AND m.source_record_id IN (
+           SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[])
+       );
     IF (SELECT count(DISTINCT mdm_id) FROM mdm_out.customer_members
         WHERE source_name = 'crm' AND active
           AND source_record_id IN (SELECT source_record_id FROM public.e2e_source_records(ARRAY[1, 2]::bigint[]))) <> 2 THEN
-        RAISE EXCEPTION 'update reference result did not split the records';
+        RAISE EXCEPTION 'update reference result did not split the records: active members %, graph rows %', member_state, relation_rows;
     END IF;
     IF NOT EXISTS (
         SELECT 1

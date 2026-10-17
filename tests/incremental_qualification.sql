@@ -163,17 +163,15 @@ BEGIN
         'resolver_strategy', result->'resolver_strategy',
         'unexpected_full_fallbacks', result->'unexpected_full_fallbacks');
     expected := '{
-        "affected_components":128,
-        "affected_records":128,
+        "affected_components":1,
+        "affected_records":1,
         "changed":true,
         "delta_lag":0,
         "entity_name":"incremental_qualification",
-        "resolver_fallback_reason":"delta_full_invalidation",
-        "resolver_strategy":"full",
+        "resolver_fallback_reason":null,
+        "resolver_strategy":"affected",
         "unexpected_full_fallbacks":[]
     }'::jsonb;
-    expected := pg_catalog.jsonb_set(expected, '{affected_components}', pg_catalog.to_jsonb(sample_population));
-    expected := pg_catalog.jsonb_set(expected, '{affected_records}', pg_catalog.to_jsonb(sample_population));
     IF actual IS DISTINCT FROM expected THEN
         RAISE EXCEPTION 'incremental qualification sample mismatch: expected %, actual %',
             expected, actual;
@@ -206,6 +204,8 @@ $function$;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
+SET mdm.trace_producer_artifact_sha256 = :'producer_artifact_sha256';
 DO $block$
 BEGIN
     FOR sample_number IN 1..35 LOOP
@@ -235,10 +235,10 @@ DO $block$
 DECLARE result jsonb;
 BEGIN
     result := mdm.refresh('incremental_qualification', 'ALLOW');
-    IF result->>'resolver_strategy' IS DISTINCT FROM 'full'
-       OR result->>'resolver_fallback_reason' IS DISTINCT FROM 'delta_full_invalidation'
-       OR (result->>'affected_records')::integer <> 2048
-       OR (result->>'affected_components')::integer <> 2048
+    IF result->>'resolver_strategy' IS DISTINCT FROM 'affected'
+       OR result->>'resolver_fallback_reason' IS NOT NULL
+       OR (result->>'affected_records')::integer <> 1920
+       OR (result->>'affected_components')::integer <> 1920
        OR result->>'delta_lag' IS DISTINCT FROM '0' THEN
         RAISE EXCEPTION 'qualification population growth mismatch: %', result;
     END IF;
@@ -256,6 +256,8 @@ ALTER ROLE mdm_test_login RESET auto_explain.log_timing;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
+SET mdm.trace_producer_artifact_sha256 = :'producer_artifact_sha256';
 DO $block$
 BEGIN
     FOR sample_number IN 1..35 LOOP
