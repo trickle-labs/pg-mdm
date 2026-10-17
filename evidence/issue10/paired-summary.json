@@ -1,0 +1,949 @@
+{
+  "profile": "PostgreSQL 18.4; identical patched producer; 2 CPUs; 4 GiB; JIT off; auto_explain analyze on, timing off",
+  "sides": {
+    "before": {
+      "metadata": {
+        "side": "before",
+        "image": "pg-mdm:issue10-final-measurement-before",
+        "image_id": "sha256:11fddbdcf5abce12e2b7dfbbdcf7933f1c49a60787ed1605c13f46077f4b71b7",
+        "architecture": "amd64",
+        "labels": {
+          "pg_mdm.candidate_key": "unknown",
+          "pg_mdm.source_revision": "3b55bc92a54156b697e3e7a99f00b8cbfa31651d"
+        },
+        "producer_binary_sha256": "edb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9",
+        "setup_graph_logical_ids": [
+          "records/crm",
+          "normalized/email",
+          "blocks/same_email",
+          "block-stats/same_email",
+          "block-overflow/same_email",
+          "normalized/name",
+          "pair-stats/customer",
+          "pair-overflow/customer",
+          "pairs/customer",
+          "evidence/customer",
+          "golden/customer"
+        ],
+        "session_settings": {
+          "jit": "off",
+          "work_mem": "4MB",
+          "max_parallel_workers_per_gather": "2"
+        },
+        "qualification_strategy": "differential",
+        "qualification_sql_sha256": "66333fcbc6757c1d5d94923a682ecd0b38ff68a2d1c72010ac30fac7f02db494",
+        "adapter_binary_sha256": "383b4be673b8fb109cf28ca935e2b2a4753a7ef07847af164ce614ed21bf0b46",
+        "nano_cpus": 2000000000,
+        "memory_bytes": 4294967296,
+        "docker_environment": {
+          "cpus": 10,
+          "memory_bytes": 8319504384,
+          "architecture": "aarch64",
+          "version": "29.8.1"
+        },
+        "started_at": "2026-10-17T19:26:20.789520+00:00",
+        "database_counters_before": {
+          "datid": "16388",
+          "datname": "foundation",
+          "blks_hit": 151962,
+          "sessions": 5,
+          "blks_read": 44,
+          "conflicts": 0,
+          "deadlocks": 0,
+          "temp_bytes": 0,
+          "temp_files": 0,
+          "active_time": 1089.839,
+          "numbackends": 2,
+          "stats_reset": null,
+          "tup_deleted": 284,
+          "tup_fetched": 72113,
+          "tup_updated": 1681,
+          "xact_commit": 23,
+          "session_time": 1235.228,
+          "tup_inserted": 10137,
+          "tup_returned": 95770,
+          "blk_read_time": 0,
+          "xact_rollback": 0,
+          "blk_write_time": 0,
+          "sessions_fatal": 0,
+          "sessions_killed": 0,
+          "checksum_failures": 0,
+          "sessions_abandoned": 0,
+          "checksum_last_failure": null,
+          "idle_in_transaction_time": 9.861,
+          "parallel_workers_launched": 0,
+          "parallel_workers_to_launch": 0
+        },
+        "finished_at": "2026-10-17T19:29:14.980644+00:00",
+        "database_counters_after": {
+          "datid": "16388",
+          "datname": "foundation",
+          "blks_hit": 40117560,
+          "sessions": 19,
+          "blks_read": 10869,
+          "conflicts": 0,
+          "deadlocks": 0,
+          "temp_bytes": 218234880,
+          "temp_files": 106,
+          "active_time": 174486.728,
+          "numbackends": 1,
+          "stats_reset": null,
+          "tup_deleted": 406081,
+          "tup_fetched": 4428138,
+          "tup_updated": 127121,
+          "xact_commit": 440,
+          "session_time": 175260.895,
+          "tup_inserted": 514423,
+          "tup_returned": 45586144,
+          "blk_read_time": 0,
+          "xact_rollback": 1,
+          "blk_write_time": 0,
+          "sessions_fatal": 0,
+          "sessions_killed": 0,
+          "checksum_failures": 0,
+          "sessions_abandoned": 0,
+          "checksum_last_failure": null,
+          "idle_in_transaction_time": 9.861,
+          "parallel_workers_launched": 0,
+          "parallel_workers_to_launch": 0
+        }
+      },
+      "populations": [
+        {
+          "population": 128,
+          "warmup_samples": 5,
+          "measured_samples": 30,
+          "elapsed_ms": {
+            "p50": 769.852,
+            "p95": 840.1125999999998
+          },
+          "graph_refresh_ms": {
+            "p50": 708.5,
+            "p95": 775.8499999999999
+          },
+          "mdm_resolution_ms": {
+            "p50": 5.0,
+            "p95": 6.0
+          },
+          "publication_ms": {
+            "p50": 29.0,
+            "p95": 31.549999999999997
+          },
+          "strategies": {
+            "full": 30
+          },
+          "fallbacks": {
+            "delta_full_invalidation": 30
+          },
+          "affected_records": [
+            128
+          ],
+          "affected_components": [
+            128
+          ],
+          "delta_rows": [
+            2
+          ]
+        },
+        {
+          "population": 2048,
+          "warmup_samples": 5,
+          "measured_samples": 30,
+          "elapsed_ms": {
+            "p50": 1431.1365,
+            "p95": 1576.3056000000001
+          },
+          "graph_refresh_ms": {
+            "p50": 1085.5,
+            "p95": 1206.1499999999999
+          },
+          "mdm_resolution_ms": {
+            "p50": 69.0,
+            "p95": 77.0
+          },
+          "publication_ms": {
+            "p50": 232.5,
+            "p95": 259.84999999999997
+          },
+          "strategies": {
+            "full": 30
+          },
+          "fallbacks": {
+            "delta_full_invalidation": 30
+          },
+          "affected_records": [
+            2048
+          ],
+          "affected_components": [
+            2048
+          ],
+          "delta_rows": [
+            2
+          ]
+        }
+      ],
+      "additional_workloads": [
+        {
+          "workload": "dense",
+          "population": 8192,
+          "changed_records": 32,
+          "elapsed_ms": 3849.413,
+          "resolver_strategy": "full",
+          "resolver_fallback_reason": "delta_full_invalidation",
+          "affected_records": 8192,
+          "affected_components": 8161,
+          "component_checks": 496,
+          "delta_row_count": 64,
+          "delta_lag": 0,
+          "effective_node_modes": {
+            "FULL": 1,
+            "DIFFERENTIAL": 10
+          },
+          "stage_timings_ms": {
+            "publication": 908,
+            "graph_refresh": 2561,
+            "mdm_resolution": 265,
+            "elapsed_before_operation_completion": 3823
+          }
+        },
+        {
+          "workload": "larger",
+          "population": 8192,
+          "changed_records": 1,
+          "elapsed_ms": 3902.408,
+          "resolver_strategy": "full",
+          "resolver_fallback_reason": "delta_full_invalidation",
+          "affected_records": 8192,
+          "affected_components": 8192,
+          "component_checks": 0,
+          "delta_row_count": 2,
+          "delta_lag": 0,
+          "effective_node_modes": {
+            "FULL": 1,
+            "DIFFERENTIAL": 10
+          },
+          "stage_timings_ms": {
+            "publication": 964,
+            "graph_refresh": 2463,
+            "mdm_resolution": 336,
+            "elapsed_before_operation_completion": 3867
+          }
+        },
+        {
+          "workload": "no_change",
+          "population": 2048,
+          "changed_records": 0,
+          "elapsed_ms": 1169.768,
+          "resolver_strategy": "skipped",
+          "resolver_fallback_reason": null,
+          "affected_records": 0,
+          "affected_components": 0,
+          "component_checks": 0,
+          "delta_row_count": 0,
+          "delta_lag": 0,
+          "effective_node_modes": {
+            "DIFFERENTIAL": 11
+          },
+          "stage_timings_ms": {
+            "publication": 18,
+            "graph_refresh": 971,
+            "mdm_resolution": 1,
+            "elapsed_before_operation_completion": 1063
+          }
+        }
+      ],
+      "ordinary_node_work": {
+        "block-overflow/same_email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 20.685499999999998,
+            "p95": 24.6591
+          }
+        },
+        "block-stats/same_email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 23.22,
+            "p95": 29.388399999999997
+          }
+        },
+        "blocks/same_email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 23.377,
+            "p95": 31.6181
+          }
+        },
+        "evidence/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "FULL": 60
+          },
+          "duration_ms": {
+            "p50": 98.163,
+            "p95": 124.81315
+          }
+        },
+        "golden/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 105.9445,
+            "p95": 137.21255
+          }
+        },
+        "normalized/email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 127.3005,
+            "p95": 212.80525
+          }
+        },
+        "normalized/name": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 126.1635,
+            "p95": 199.09730000000002
+          }
+        },
+        "pair-overflow/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 6.977,
+            "p95": 8.466399999999998
+          }
+        },
+        "pair-stats/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 49.4675,
+            "p95": 60.124949999999984
+          }
+        },
+        "pairs/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 53.711,
+            "p95": 67.76604999999999
+          }
+        },
+        "records/crm": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 30.014,
+            "p95": 37.8243
+          }
+        }
+      },
+      "database_counter_deltas": {
+        "blks_hit": 39965598,
+        "blks_read": 10825,
+        "temp_bytes": 218234880,
+        "temp_files": 106,
+        "tup_returned": 45490374,
+        "tup_fetched": 4356025,
+        "tup_inserted": 504286,
+        "tup_updated": 125440,
+        "tup_deleted": 405797,
+        "active_time": 173396.889
+      },
+      "graph_queries": {
+        "records/crm": {
+          "original": "",
+          "normalized": "SELECT 'crm'::text AS source_name, pgtrickle.encode_row_id_v2('SCAN_KEY', ROW((SELECT entity_id FROM mdm_graph.source_identity_map WHERE entity_name = 'incremental_qualification' AND source_name = 'crm'), (SELECT source_identity_id FROM mdm_graph.source_identity_map WHERE entity_name = 'incremental_qualification' AND source_name = 'crm'), \"id\")) AS source_record_key, \"email_address\" AS \"email\", 'present'::text AS \"email_state\", \"display_name\" AS \"name\", 'present'::text AS \"name_state\", \"updated_at\" AS row_changed_at FROM public.incremental_qualification_source",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "2bdb4a2d48b06408b5875b28bacb46c7f0beedd5246f722b7d0cfdad4ca003dc",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "normalized/email": {
+          "original": "",
+          "normalized": "SELECT 'crm'::text AS source_name, r.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, 'email'::text AS field_name, r.\"email\"::text AS raw_value, r.row_changed_at::timestamptz AS row_changed_at, n.state AS state, n.normalized AS normalized, n.canonical_bytes AS canonical_bytes FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_0\" AS r CROSS JOIN LATERAL mdm_graph.normalize_text((r.\"email\")::text, 'email', 1, r.\"email_state\", '{}'::jsonb) AS n JOIN mdm_graph.source_records sr ON sr.source_record_key = r.source_record_key AND sr.active JOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = 'crm'",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "c86e3fb61484682c75797fd2283124c05ee026434e11212ebb5206c90a0fa823",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "blocks/same_email": {
+          "original": "",
+          "normalized": "SELECT source_record_id, field_name, 'same_email'::text AS channel_id, canonical_bytes AS block_key, source_sort_key FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_1\" WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "af08752bb6f5604a45796f27505e0cd3aedd0792d2e0fea048dee0fbc4814efe",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "block-stats/same_email": {
+          "original": "",
+          "normalized": "SELECT channel_id, block_key, pg_catalog.count(*)::bigint AS block_records FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_2\" GROUP BY channel_id, block_key",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "8149d509bceed76f1ede7350363bb3371c112bcf188e97e4dabc082e14058249",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "block-overflow/same_email": {
+          "original": "",
+          "normalized": "SELECT channel_id, block_key, block_records, 10000::bigint AS max_block_records FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_3\" WHERE block_records > 10000",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "ab4572189fbc3e4681ea8eab617690eb51f44879aed5a0c8e49b3a5a40f7f49b",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "normalized/name": {
+          "original": "",
+          "normalized": "SELECT 'crm'::text AS source_name, r.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, 'name'::text AS field_name, r.\"name\"::text AS raw_value, r.row_changed_at::timestamptz AS row_changed_at, n.state AS state, n.normalized AS normalized, n.canonical_bytes AS canonical_bytes FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_0\" AS r CROSS JOIN LATERAL mdm_graph.normalize_text((r.\"name\")::text, 'company_name', 1, r.\"name_state\", '{}'::jsonb) AS n JOIN mdm_graph.source_records sr ON sr.source_record_key = r.source_record_key AND sr.active JOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = 'crm'",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "51f27696ac9e021bed63101bd9a697afef0cfe34ef3b896a066d887c6bd5107f",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "pair-stats/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM (SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key FROM ( SELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_2\" l JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_3\" s ON s.channel_id = l.channel_id AND s.block_key = l.block_key JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_2\" r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key WHERE s.block_records <= 10000 ) AS candidate_pairs GROUP BY 1, 2, 3, 4) AS pairs",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "277c29e4e305948f527c90002bc1f4dfbfee51b51e0533d32cf224d798ae6224",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "pair-overflow/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT candidate_pairs, 1000000::bigint AS max_candidate_pairs FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_6\" WHERE candidate_pairs > 1000000",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "a76ae6b659e470711c7e70d9916e5cab657ae6824e6e725fce68725dc526bf4e",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "pairs/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key FROM ( SELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_2\" l JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_3\" s ON s.channel_id = l.channel_id AND s.block_key = l.block_key JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_2\" r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key WHERE s.block_records <= 10000 ) AS candidate_pairs GROUP BY 1, 2, 3, 4",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "c88645133071527a1c378096a05fad79efc8d948b2afbbb25ba0c454df4d268d",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "evidence/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT evidence.left_source_record_id, evidence.right_source_record_id, evidence.left_sort_key, evidence.right_sort_key, evidence.rule, evidence.evidence_group, evidence.class, evidence.score, evidence.comparator, evidence.comparator_version, evidence.left_value_digest, evidence.right_value_digest FROM (SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, 'same_email'::text AS rule, 'email'::text AS evidence_group, CASE WHEN l0.state = 'value' AND r0.state = 'value' AND l0.canonical_bytes IS NOT NULL AND r0.canonical_bytes IS NOT NULL THEN CASE WHEN l0.canonical_bytes = r0.canonical_bytes THEN 'agree'::text ELSE 'disagree'::text END ELSE 'no_evidence'::text END AS class, CASE WHEN l0.state = 'value' AND r0.state = 'value' AND l0.canonical_bytes IS NOT NULL AND r0.canonical_bytes IS NOT NULL THEN NULL::smallint ELSE NULL::smallint END AS score, 'exact_v1'::text AS comparator, 1::smallint AS comparator_version, CASE WHEN l0.state = 'value' AND r0.state = 'value' AND l0.canonical_bytes IS NOT NULL AND r0.canonical_bytes IS NOT NULL THEN mdm_graph.evidence_digest(COALESCE(l0.normalized, ''::text)) ELSE NULL::bytea END AS left_value_digest, CASE WHEN l0.state = 'value' AND r0.state = 'value' AND l0.canonical_bytes IS NOT NULL AND r0.canonical_bytes IS NOT NULL THEN mdm_graph.evidence_digest(COALESCE(r0.normalized, ''::text)) ELSE NULL::bytea END AS right_value_digest FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_8\" p LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_1\" l0 ON l0.source_record_id = p.left_source_record_id AND l0.field_name = 'email' LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_1\" r0 ON r0.source_record_id = p.right_source_record_id AND r0.field_name = 'email') AS evidence LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_2\" AS dependency_0 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_3\" AS dependency_1 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_4\" AS dependency_2 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_1\" AS dependency_3 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_5\" AS dependency_4 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_8\" AS dependency_5 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_6\" AS dependency_6 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_7\" AS dependency_7 ON false",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "2221559b7e9014fb715ac197faf7f5ae0db1027d61263fea3450167d3d667fd7",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "golden/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name WHEN 'crm' THEN 0 ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes FROM mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_5\" n LEFT JOIN mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_9\" AS evidence_dependency ON false WHERE n.field_name = 'name' /* mdm_graph.\"mdm_g_01a14b54595c7017b9ba1a4054f5c56c_9\" */",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "c85131bf8575a66f882613680e270b354d99a397808b210604bbfb168f7e5eee",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        }
+      }
+    },
+    "after": {
+      "metadata": {
+        "side": "after",
+        "image": "pg-mdm:issue10-final-measurement-after",
+        "image_id": "sha256:697de08128008f2a90d02406cd15d704fb5745fc3090a2df4159823a21020496",
+        "architecture": "amd64",
+        "labels": {
+          "pg_mdm.candidate_key": "c26f56fad04c6bad043700c2eba4bf7dd785532df2716d57e13055045535f3a1",
+          "pg_mdm.source_revision": "307cbaea029f4c1ecb5e96805c81819d44b68dec"
+        },
+        "producer_binary_sha256": "edb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9",
+        "setup_graph_logical_ids": [
+          "records/crm",
+          "normalized/email",
+          "blocks/same_email",
+          "block-stats/same_email",
+          "block-overflow/same_email",
+          "candidate-raw/customer",
+          "candidate-set/customer",
+          "normalized/name",
+          "pair-stats/customer",
+          "pair-overflow/customer",
+          "pairs/customer",
+          "evidence/customer",
+          "golden/customer"
+        ],
+        "session_settings": {
+          "jit": "off",
+          "work_mem": "4MB",
+          "max_parallel_workers_per_gather": "2"
+        },
+        "qualification_strategy": "differential",
+        "qualification_sql_sha256": "763ff4f2d58b3a0e3f4a06e99dfc7b583018142cab28fede983bddd5316f8824",
+        "adapter_binary_sha256": "46c967d9f0f2c0fa2a2c0fd925e702a42cbc8b8cce80a428bd8abcbbc1310cdf",
+        "nano_cpus": 2000000000,
+        "memory_bytes": 4294967296,
+        "docker_environment": {
+          "cpus": 10,
+          "memory_bytes": 8319504384,
+          "architecture": "aarch64",
+          "version": "29.8.1"
+        },
+        "started_at": "2026-10-17T19:29:27.597384+00:00",
+        "database_counters_before": {
+          "datid": "16388",
+          "datname": "foundation",
+          "blks_hit": 155430,
+          "sessions": 5,
+          "blks_read": 44,
+          "conflicts": 0,
+          "deadlocks": 0,
+          "temp_bytes": 0,
+          "temp_files": 0,
+          "active_time": 1058.968,
+          "numbackends": 2,
+          "stats_reset": null,
+          "tup_deleted": 319,
+          "tup_fetched": 73727,
+          "tup_updated": 1715,
+          "xact_commit": 23,
+          "session_time": 1217.211,
+          "tup_inserted": 10461,
+          "tup_returned": 98458,
+          "blk_read_time": 0,
+          "xact_rollback": 0,
+          "blk_write_time": 0,
+          "sessions_fatal": 0,
+          "sessions_killed": 0,
+          "checksum_failures": 0,
+          "sessions_abandoned": 0,
+          "checksum_last_failure": null,
+          "idle_in_transaction_time": 23.644,
+          "parallel_workers_launched": 0,
+          "parallel_workers_to_launch": 0
+        },
+        "finished_at": "2026-10-17T19:32:12.534431+00:00",
+        "database_counters_after": {
+          "datid": "16388",
+          "datname": "foundation",
+          "blks_hit": 32871343,
+          "sessions": 19,
+          "blks_read": 12623,
+          "conflicts": 0,
+          "deadlocks": 0,
+          "temp_bytes": 240750592,
+          "temp_files": 160,
+          "active_time": 165155.912,
+          "numbackends": 1,
+          "stats_reset": null,
+          "tup_deleted": 400062,
+          "tup_fetched": 4093905,
+          "tup_updated": 34491,
+          "xact_commit": 509,
+          "session_time": 165989.774,
+          "tup_inserted": 509716,
+          "tup_returned": 35459237,
+          "blk_read_time": 0,
+          "xact_rollback": 1,
+          "blk_write_time": 0,
+          "sessions_fatal": 0,
+          "sessions_killed": 0,
+          "checksum_failures": 0,
+          "sessions_abandoned": 0,
+          "checksum_last_failure": null,
+          "idle_in_transaction_time": 23.644,
+          "parallel_workers_launched": 0,
+          "parallel_workers_to_launch": 0
+        }
+      },
+      "populations": [
+        {
+          "population": 128,
+          "warmup_samples": 5,
+          "measured_samples": 30,
+          "elapsed_ms": {
+            "p50": 803.0474999999999,
+            "p95": 871.8924
+          },
+          "graph_refresh_ms": {
+            "p50": 762.5,
+            "p95": 830.75
+          },
+          "mdm_resolution_ms": {
+            "p50": 3.0,
+            "p95": 4.0
+          },
+          "publication_ms": {
+            "p50": 14.0,
+            "p95": 16.099999999999994
+          },
+          "strategies": {
+            "affected": 30
+          },
+          "fallbacks": {
+            "None": 30
+          },
+          "affected_records": [
+            1
+          ],
+          "affected_components": [
+            1
+          ],
+          "delta_rows": [
+            2
+          ]
+        },
+        {
+          "population": 2048,
+          "warmup_samples": 5,
+          "measured_samples": 30,
+          "elapsed_ms": {
+            "p50": 1265.9685,
+            "p95": 1327.3843
+          },
+          "graph_refresh_ms": {
+            "p50": 1145.5,
+            "p95": 1196.6499999999999
+          },
+          "mdm_resolution_ms": {
+            "p50": 19.0,
+            "p95": 21.0
+          },
+          "publication_ms": {
+            "p50": 58.0,
+            "p95": 63.55
+          },
+          "strategies": {
+            "affected": 30
+          },
+          "fallbacks": {
+            "None": 30
+          },
+          "affected_records": [
+            1
+          ],
+          "affected_components": [
+            1
+          ],
+          "delta_rows": [
+            2
+          ]
+        }
+      ],
+      "additional_workloads": [
+        {
+          "workload": "dense",
+          "population": 8192,
+          "changed_records": 32,
+          "elapsed_ms": 2858.203,
+          "resolver_strategy": "affected",
+          "resolver_fallback_reason": null,
+          "affected_records": 32,
+          "affected_components": 1,
+          "component_checks": 496,
+          "delta_row_count": 560,
+          "delta_lag": 0,
+          "effective_node_modes": {
+            "DIFFERENTIAL": 13
+          },
+          "stage_timings_ms": {
+            "publication": 202,
+            "graph_refresh": 2471,
+            "mdm_resolution": 85,
+            "elapsed_before_operation_completion": 2838
+          }
+        },
+        {
+          "workload": "larger",
+          "population": 8192,
+          "changed_records": 1,
+          "elapsed_ms": 2588.061,
+          "resolver_strategy": "affected",
+          "resolver_fallback_reason": null,
+          "affected_records": 1,
+          "affected_components": 1,
+          "component_checks": 0,
+          "delta_row_count": 2,
+          "delta_lag": 0,
+          "effective_node_modes": {
+            "DIFFERENTIAL": 13
+          },
+          "stage_timings_ms": {
+            "publication": 196,
+            "graph_refresh": 2213,
+            "mdm_resolution": 68,
+            "elapsed_before_operation_completion": 2564
+          }
+        },
+        {
+          "workload": "no_change",
+          "population": 2048,
+          "changed_records": 0,
+          "elapsed_ms": 1114.105,
+          "resolver_strategy": "skipped",
+          "resolver_fallback_reason": null,
+          "affected_records": 0,
+          "affected_components": 0,
+          "component_checks": 0,
+          "delta_row_count": 0,
+          "delta_lag": 0,
+          "effective_node_modes": {
+            "DIFFERENTIAL": 13
+          },
+          "stage_timings_ms": {
+            "publication": 12,
+            "graph_refresh": 918,
+            "mdm_resolution": 2,
+            "elapsed_before_operation_completion": 999
+          }
+        }
+      ],
+      "ordinary_node_work": {
+        "block-overflow/same_email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 19.3575,
+            "p95": 21.775699999999993
+          }
+        },
+        "block-stats/same_email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 21.997,
+            "p95": 25.747649999999997
+          }
+        },
+        "blocks/same_email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 23.032,
+            "p95": 27.7391
+          }
+        },
+        "candidate-raw/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 75.2485,
+            "p95": 85.04820000000001
+          }
+        },
+        "candidate-set/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 6.9625,
+            "p95": 9.073
+          }
+        },
+        "evidence/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 6.85,
+            "p95": 9.23805
+          }
+        },
+        "golden/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 156.6625,
+            "p95": 202.46564999999995
+          }
+        },
+        "normalized/email": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 121.17150000000001,
+            "p95": 194.42895
+          }
+        },
+        "normalized/name": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 122.74249999999999,
+            "p95": 189.37175
+          }
+        },
+        "pair-overflow/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 6.516,
+            "p95": 7.997149999999999
+          }
+        },
+        "pair-stats/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 6.8545,
+            "p95": 8.0627
+          }
+        },
+        "pairs/incremental_qualification": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 109.30449999999999,
+            "p95": 126.42885
+          }
+        },
+        "records/crm": {
+          "executions": 60,
+          "actions": {
+            "DIFFERENTIAL": 60
+          },
+          "duration_ms": {
+            "p50": 29.4785,
+            "p95": 32.96274999999999
+          }
+        }
+      },
+      "database_counter_deltas": {
+        "blks_hit": 32715913,
+        "blks_read": 12579,
+        "temp_bytes": 240750592,
+        "temp_files": 160,
+        "tup_returned": 35360779,
+        "tup_fetched": 4020178,
+        "tup_inserted": 499255,
+        "tup_updated": 32776,
+        "tup_deleted": 399743,
+        "active_time": 164096.94400000002
+      },
+      "graph_queries": {
+        "records/crm": {
+          "original": "",
+          "normalized": "SELECT 'crm'::text AS source_name, pgtrickle.encode_row_id_v2('SCAN_KEY', ROW((SELECT entity_id FROM mdm_graph.source_identity_map WHERE entity_name = 'incremental_qualification' AND source_name = 'crm'), (SELECT source_identity_id FROM mdm_graph.source_identity_map WHERE entity_name = 'incremental_qualification' AND source_name = 'crm'), \"id\")) AS source_record_key, \"email_address\" AS \"email\", 'present'::text AS \"email_state\", \"display_name\" AS \"name\", 'present'::text AS \"name_state\", \"updated_at\" AS row_changed_at FROM public.incremental_qualification_source",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "2bdb4a2d48b06408b5875b28bacb46c7f0beedd5246f722b7d0cfdad4ca003dc",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "normalized/email": {
+          "original": "",
+          "normalized": "SELECT 'crm'::text AS source_name, r.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, 'email'::text AS field_name, r.\"email\"::text AS raw_value, r.row_changed_at::timestamptz AS row_changed_at, n.state AS state, n.normalized AS normalized, n.canonical_bytes AS canonical_bytes FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_0\" AS r CROSS JOIN LATERAL mdm_graph.normalize_text((r.\"email\")::text, 'email', 1, r.\"email_state\", '{}'::jsonb) AS n JOIN mdm_graph.source_records sr ON sr.source_record_key = r.source_record_key AND sr.active JOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = 'crm'",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "16a954ba952b2e696827092e8a3ca65acdd04101297e024a3c933521b166722f",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "blocks/same_email": {
+          "original": "",
+          "normalized": "SELECT source_record_id, field_name, 'same_email'::text AS channel_id, canonical_bytes AS block_key, source_sort_key FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_1\" WHERE field_name = 'email' AND state = 'value' AND canonical_bytes IS NOT NULL",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "ed0bcafb1e8b11fb29290bcf93c2adb973f6d6d2bff78f74e7330d7ba7336c00",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "block-stats/same_email": {
+          "original": "",
+          "normalized": "SELECT channel_id, block_key, pg_catalog.count(*)::bigint AS block_records FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_2\" GROUP BY channel_id, block_key",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "28fbd04f01ce326938ff3a2343d859970e8cb01bcd307460cde2f5f08fa974e0",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "block-overflow/same_email": {
+          "original": "",
+          "normalized": "SELECT channel_id, block_key, block_records, 10000::bigint AS max_block_records FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_3\" WHERE block_records > 10000",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "6f31b9a9d9b53576d8eaa79a43b6a17ee927be7f6bd6202aaa70a3fd466343de",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "candidate-raw/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT 'same_email'::text AS candidate_channel, l.block_key::text AS candidate_block_key, l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_2\" l JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_3\" s ON s.channel_id = l.channel_id AND s.block_key = l.block_key JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_2\" r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_4\" AS overflow ON overflow.channel_id = l.channel_id AND overflow.block_key = l.block_key WHERE s.block_records <= 10000 AND overflow.channel_id IS NULL",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "dfbe8832946d7c99ebaca2bdc00f214ca799eb23b266bb679e47a7323aba9715",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "candidate-set/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT candidate.left_source_record_id, candidate.right_source_record_id, pg_catalog.min(candidate.left_sort_key) AS left_sort_key, pg_catalog.min(candidate.right_sort_key) AS right_sort_key FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_5\" AS candidate GROUP BY candidate.left_source_record_id, candidate.right_source_record_id",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "a7a89fd83bab3463ae37694e3b0226fddeb06c5322e0541a422ffcef43427fae",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "normalized/name": {
+          "original": "",
+          "normalized": "SELECT 'crm'::text AS source_name, r.source_record_key AS source_record_key, sr.source_record_id AS source_record_id, sr.source_record_key AS source_sort_key, 'name'::text AS field_name, r.\"name\"::text AS raw_value, r.row_changed_at::timestamptz AS row_changed_at, n.state AS state, n.normalized AS normalized, n.canonical_bytes AS canonical_bytes FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_0\" AS r CROSS JOIN LATERAL mdm_graph.normalize_text((r.\"name\")::text, 'company_name', 1, r.\"name_state\", '{}'::jsonb) AS n JOIN mdm_graph.source_records sr ON sr.source_record_key = r.source_record_key AND sr.active JOIN mdm_graph.source_identity_map si ON si.source_identity_id = sr.source_identity_id AND si.source_name = 'crm'",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "46b38da405d2ea6baabcfd0932e1886e169ed77ca297d8d15c8cc36fbc7bbd60",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "pair-stats/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_6\"",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "a6386265bcc469f447fb60da4df5d0b8922868cc6814f8d2d3662395567d25df",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "pair-overflow/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT candidate_pairs, 1000000::bigint AS max_candidate_pairs FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_8\" WHERE candidate_pairs > 1000000",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "a6aa27e2e409213fe8434e029245b3bf41d0ffa62e5451f12aca2d12dad880c4",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "pairs/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT candidate.left_source_record_id, candidate.right_source_record_id, candidate.left_sort_key, candidate.right_sort_key, evidence_left_0.state AS \"left_evidence_email_state\", evidence_left_0.normalized AS \"left_evidence_email_normalized\", evidence_left_0.canonical_bytes AS \"left_evidence_email_canonical_bytes\", evidence_right_0.state AS \"right_evidence_email_state\", evidence_right_0.normalized AS \"right_evidence_email_normalized\", evidence_right_0.canonical_bytes AS \"right_evidence_email_canonical_bytes\", CASE WHEN evidence_left_0.state = 'value' AND evidence_right_0.state = 'value' AND evidence_left_0.canonical_bytes IS NOT NULL AND evidence_right_0.canonical_bytes IS NOT NULL THEN CASE WHEN evidence_left_0.canonical_bytes = evidence_right_0.canonical_bytes THEN 'agree'::text ELSE 'disagree'::text END ELSE 'no_evidence'::text END AS \"evidence_rule_0_class\", CASE WHEN evidence_left_0.state = 'value' AND evidence_right_0.state = 'value' AND evidence_left_0.canonical_bytes IS NOT NULL AND evidence_right_0.canonical_bytes IS NOT NULL THEN NULL::smallint ELSE NULL::smallint END AS \"evidence_rule_0_score\", CASE WHEN evidence_left_0.state = 'value' AND evidence_right_0.state = 'value' AND evidence_left_0.canonical_bytes IS NOT NULL AND evidence_right_0.canonical_bytes IS NOT NULL THEN mdm_graph.evidence_digest(COALESCE(evidence_left_0.normalized, ''::text)) ELSE NULL::bytea END AS \"evidence_rule_0_left_value_digest\", CASE WHEN evidence_left_0.state = 'value' AND evidence_right_0.state = 'value' AND evidence_left_0.canonical_bytes IS NOT NULL AND evidence_right_0.canonical_bytes IS NOT NULL THEN mdm_graph.evidence_digest(COALESCE(evidence_right_0.normalized, ''::text)) ELSE NULL::bytea END AS \"evidence_rule_0_right_value_digest\" FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_6\" AS candidate LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_1\" AS evidence_left_0 ON evidence_left_0.source_record_id = candidate.left_source_record_id AND evidence_left_0.field_name = 'email' LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_1\" AS evidence_right_0 ON evidence_right_0.source_record_id = candidate.right_source_record_id AND evidence_right_0.field_name = 'email' LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_9\" AS overflow ON true WHERE overflow.candidate_pairs IS NULL",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "bbd8baf0c3c6695d162c570f3d306597f15ef1e7a4adbb27a15a88d7717d833a",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "evidence/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, 'same_email'::text AS rule, 'email'::text AS evidence_group, p.\"evidence_rule_0_class\" AS class, p.\"evidence_rule_0_score\" AS score, 'exact_v1'::text AS comparator, 1::smallint AS comparator_version, p.\"evidence_rule_0_left_value_digest\" AS left_value_digest, p.\"evidence_rule_0_right_value_digest\" AS right_value_digest FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_10\" AS p",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "90dbb5b476195f6debd2d7d1b563540a4b15196ea7ec4cd4207000a5d2add6c9",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        },
+        "golden/incremental_qualification": {
+          "original": "",
+          "normalized": "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name WHEN 'crm' THEN 0 ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes FROM mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_7\" n LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_7\" AS dependency_0 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_10\" AS dependency_1 ON false LEFT JOIN mdm_graph.\"mdm_g_01a14b57332775a2bbf9eaa2ffec2643_11\" AS dependency_2 ON false WHERE n.field_name = 'name'",
+          "original_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "normalized_digest": "2c87977a3bfcc39f24350eeeb7411e8b507fcb75b5fab6f269b6fa02861efec5",
+          "defining_search_path": "pg_catalog, mdm_internal, pg_temp"
+        }
+      }
+    }
+  }
+}

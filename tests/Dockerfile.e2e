@@ -22,9 +22,11 @@ COPY tests/ tests/
 COPY scripts/ scripts/
 COPY sql/ sql/
 COPY justfile ./
+# Branch changes can leave source mtimes older than the shared target cache.
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/build/target \
     rm -rf target/release/pg_mdm-pg18 \
+    && cargo clean --release -p pg_mdm \
     && cargo pgrx package --pg-config /usr/bin/pg_config \
     && mkdir -p /package \
     && cp -R target/release/pg_mdm-pg18/. /package/ \

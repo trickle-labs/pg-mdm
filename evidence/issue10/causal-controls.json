@@ -1,0 +1,29 @@
+{
+  "release_control": {
+    "commit": "ce709f06327b4801f79fc48934bc96107b450907",
+    "release": "v0.108.3",
+    "archive_sha256": "e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f",
+    "binary_sha256": "9f0939804ff2b2114b92874ec71be5172ad0e6705cd28d66990a66505562e8d1",
+    "evidence": "release-control.log.gz",
+    "finding": "All 13 graph modes DIFFERENTIAL can still yield a missing split deletion: evidence EXACT0, golden D1/I1. A mode declaration is insufficient."
+  },
+  "upstream_1166_control": {
+    "commit": "ceca8f6aa47a8738416e36072aae8e215134f194",
+    "binary_sha256": "b74433f9b7f3990957d4816bf8ed3f16b4e1d39ffe0821d331c6bea5ab9050b2",
+    "evidence": "upstream-1166-control.log.gz",
+    "finding": "Minimal split expected EXACT DELETE(1,2,same,same), actually FULL_INVALIDATION0. Keyless scan returned before registering its delta; nested snapshot used current payload. Reconciliation repairs the stale row outside the bounded delta, so invalidation is required."
+  },
+  "snapshot_only_control": {
+    "base_commit": "ce709f06327b4801f79fc48934bc96107b450907",
+    "changes": "Four-line keyless scan registration only",
+    "binary_sha256": "904621b2839c76e303d3829b6477d545a552e88236a498c3d43411e69d55bbb9",
+    "evidence": "snapshot-only-control.log.gz",
+    "finding": "Split/connect/delete pass. Unmatched source insert incorrectly publishes FULL_INVALIDATION instead of EXACT0 because the conservative max1 graph-work count is treated as a proven output write."
+  },
+  "final_source": {
+    "commit": "d8bb8eb5d45c5c9982e173e88914037433a1ee05",
+    "source_archive_sha256": "b8d4c59ca3770c305659255e09adde303b4d220228392c415ae363aa7be0a2da",
+    "proof": "Optimized artifact passed all 36 focused runtime checks and the complete pg-mdm E2E runner, including 70 rebuild comparisons, larger/dense/no-change workloads, recovery, concurrency, authorization, and atomic failure/retry.",
+    "binary_sha256": "edb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9"
+  }
+}

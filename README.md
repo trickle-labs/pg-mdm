@@ -149,6 +149,10 @@ is observational; it has no machine-dependent timing threshold. Qualification
 sets `pg_trickle.refresh_strategy = 'differential'`; operator runs retain
 `ALLOW` and check the returned node modes and terminal ranges.
 
+The [issue #10 qualification evidence](evidence/issue10/README.md) retains
+producer controls, exact artifact identities, raw samples, recovery results,
+and paired execution measurements.
+
 Use `full_policy = 'ERROR'` only for controlled steady-state qualification
 after bootstrap. Bootstrap, rebuild, transitions, and recovery must retain
 their safe full path. The producer capability contract is retained in
