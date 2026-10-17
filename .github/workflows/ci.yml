@@ -35,7 +35,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Includes a cold producer build and 70 full-rebuild qualification samples.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - shell: bash
