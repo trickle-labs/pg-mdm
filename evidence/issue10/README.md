@@ -72,6 +72,17 @@ JIT off, 4 MiB work_mem, two parallel workers per gather and auto_explain
 analysis with node timing off. Each side retains all 70 raw samples and
 complete rebuild comparisons plus no-change, larger and dense workloads.
 
+The archived measurement runner labeled its strategy `differential` without
+setting the producer GUC. Those historical runs used the default `auto`;
+`paired-summary.json` corrects that label and retains the original value.
+The recorded node actions and complete rebuild comparisons remain unchanged.
+The CI repair now explicitly pins differential execution for qualification
+and resets the fixture role afterward; it does not reinterpret these timings
+as measurements of the newly pinned profile.
+The pinned fixture passed all 70 rebuild comparisons and three extras in a
+JIT-off correctness run. A control inherited FULL and failed the old affected
+assertion; the pinned fixture passed that same update and full-rebuild oracle.
+
 The table uses only the 30 measured samples per population; percentiles were
 independently recomputed from the raw samples. Stage p95 values are not additive.
 

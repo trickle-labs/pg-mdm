@@ -38,6 +38,8 @@ CREATE TABLE public.incremental_qualification_workloads (
     result jsonb NOT NULL
 );
 GRANT INSERT, SELECT ON public.incremental_qualification_workloads TO mdm_administrator;
+-- AUTO can choose FULL from observed timings; this fixture qualifies differential execution.
+ALTER ROLE mdm_test_login SET pg_trickle.refresh_strategy = 'differential';
 ALTER ROLE mdm_test_login SET session_preload_libraries = 'auto_explain';
 ALTER ROLE mdm_test_login SET auto_explain.log_min_duration = '0';
 ALTER ROLE mdm_test_login SET auto_explain.log_nested_statements = 'on';
@@ -468,6 +470,7 @@ END
 $block$;
 RESET ROLE;
 \connect foundation postgres
+ALTER ROLE mdm_test_login RESET pg_trickle.refresh_strategy;
 DROP FUNCTION public.run_incremental_qualification_sample(integer, integer, boolean);
 DROP FUNCTION public.incremental_qualification_explanations(jsonb);
 DROP FUNCTION public.incremental_qualification_publication();

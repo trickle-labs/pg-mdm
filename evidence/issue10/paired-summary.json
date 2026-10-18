@@ -30,7 +30,7 @@
           "work_mem": "4MB",
           "max_parallel_workers_per_gather": "2"
         },
-        "qualification_strategy": "differential",
+        "qualification_strategy": "auto",
         "qualification_sql_sha256": "66333fcbc6757c1d5d94923a682ecd0b38ff68a2d1c72010ac30fac7f02db494",
         "adapter_binary_sha256": "383b4be673b8fb109cf28ca935e2b2a4753a7ef07847af164ce614ed21bf0b46",
         "nano_cpus": 2000000000,
@@ -106,7 +106,8 @@
           "idle_in_transaction_time": 9.861,
           "parallel_workers_launched": 0,
           "parallel_workers_to_launch": 0
-        }
+        },
+        "original_qualification_strategy_label": "differential"
       },
       "populations": [
         {
@@ -487,7 +488,7 @@
           "work_mem": "4MB",
           "max_parallel_workers_per_gather": "2"
         },
-        "qualification_strategy": "differential",
+        "qualification_strategy": "auto",
         "qualification_sql_sha256": "763ff4f2d58b3a0e3f4a06e99dfc7b583018142cab28fede983bddd5316f8824",
         "adapter_binary_sha256": "46c967d9f0f2c0fa2a2c0fd925e702a42cbc8b8cce80a428bd8abcbbc1310cdf",
         "nano_cpus": 2000000000,
@@ -563,7 +564,8 @@
           "idle_in_transaction_time": 23.644,
           "parallel_workers_launched": 0,
           "parallel_workers_to_launch": 0
-        }
+        },
+        "original_qualification_strategy_label": "differential"
       },
       "populations": [
         {
