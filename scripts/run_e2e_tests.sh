@@ -82,6 +82,7 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 \
     -f /tests/e2e.sql 2>&1 | tee "$e2e_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql 2>&1 | tee -a "$e2e_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/source_sync.sql 2>&1 | tee -a "$e2e_log"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/scoped_state.sql 2>&1 | tee -a "$e2e_log"
 docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 \
     -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres -d foundation \
     -f /tests/incremental_qualification.sql > "$qualification_json" 2> "$qualification_log" || {
@@ -1131,7 +1132,7 @@ fi
 
 docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -f /tests/operating_envelope.sql > "$work_dir/database-envelope.json"
-python3 "$repo_root/scripts/record_e2e_evidence.py" \
+python3 -B "$repo_root/scripts/record_e2e_evidence.py" \
     "$container" "$image" "$source_revision" \
     "$work_dir/database-envelope.json" "$qualification_json" "$e2e_log"
 

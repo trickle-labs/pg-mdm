@@ -268,7 +268,8 @@ BEGIN
         (result #>> '{stage_timings_ms,graph_refresh}')::bigint,
         (result #>> '{stage_timings_ms,mdm_resolution}')::bigint,
         (result #>> '{stage_timings_ms,publication}')::bigint,
-        result->'stage_timings_ms',
+        result->'stage_timings_ms' || pg_catalog.jsonb_build_object(
+            'full_evaluation_state_loading', rebuilt #> '{stage_timings_ms,evaluation_state_loading}'),
         (result->>'delta_row_count')::integer);
 END
 $function$;

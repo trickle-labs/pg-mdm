@@ -1970,9 +1970,14 @@ fn load_decisions_for_scope(
 fn load_old_identity(
     client: &mut SpiClient<'_>,
     context: &Context,
+    scope: Option<&BTreeSet<Uuid>>,
 ) -> Result<IdentityState, MdmError> {
+    let args = &[
+        context.entity_id.clone().into(),
+        scope.map(uuid_json).into(),
+    ];
     let registry = client
-        .select("SELECT mdm_id, created_revision, retired_revision, status FROM mdm_internal.identity_registry WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into()])
+        .select("SELECT mdm_id, created_revision, retired_revision, status FROM mdm_internal.identity_registry WHERE entity_id = $1::pg_catalog.uuid AND ($2::jsonb IS NULL OR mdm_id IN (SELECT mdm_id FROM mdm_internal.memberships WHERE entity_id = $1::uuid AND source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::jsonb))))", None, args)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .into_iter()
         .map(|row| {
@@ -1987,19 +1992,20 @@ fn load_old_identity(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let memberships = client
-        .select("SELECT m.source_record_id, r.source_record_key, m.mdm_id, m.active, m.first_membership_revision, m.last_membership_revision, m.membership_reason, m.last_change_revision FROM mdm_internal.memberships m JOIN mdm_internal.source_records r ON r.entity_id = m.entity_id AND r.source_record_id = m.source_record_id WHERE m.entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into()])
+        .select("SELECT m.source_record_id, r.source_record_key, m.mdm_id, m.active, m.first_membership_revision, m.last_membership_revision, m.membership_reason, m.last_change_revision FROM mdm_internal.memberships m JOIN mdm_internal.source_records r ON r.entity_id = m.entity_id AND r.source_record_id = m.source_record_id WHERE m.entity_id = $1::pg_catalog.uuid AND ($2::jsonb IS NULL OR m.source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::jsonb)))", None, args)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .into_iter()
         .map(|row| Ok(identity::IdentityMembership { source_record_id: row.get::<Uuid>(1).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership source ID is NULL".into()))?, source_sort_key: row.get::<Vec<u8>>(2).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership sort key is NULL".into()))?, mdm_id: row.get::<Uuid>(3).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership MDM ID is NULL".into()))?, active: row.get::<bool>(4).map_err(|error| MdmError::Spi(error.to_string()))?.unwrap_or(false), first_membership_revision: row.get::<i64>(5).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership first revision is NULL".into()))?, last_membership_revision: row.get::<i64>(6).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership last revision is NULL".into()))?, membership_reason: row.get::<String>(7).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership reason is NULL".into()))?, last_change_revision: row.get::<i64>(8).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("membership change revision is NULL".into()))? }))
         .collect::<Result<Vec<_>, _>>()?;
+    // Historical alias/split rows are retained by global publication assembly.
     let aliases = client
-        .select("SELECT alias_mdm_id, canonical_mdm_id, publication_revision FROM mdm_internal.identity_aliases WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into()])
+        .select("SELECT alias_mdm_id, canonical_mdm_id, publication_revision FROM mdm_internal.identity_aliases WHERE entity_id = $1::pg_catalog.uuid AND $2::jsonb IS NULL", None, args)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .into_iter()
         .map(|row| Ok(identity::IdentityAlias { alias_mdm_id: row.get::<Uuid>(1).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("alias ID is NULL".into()))?, canonical_mdm_id: row.get::<Uuid>(2).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("canonical ID is NULL".into()))?, publication_revision: row.get::<i64>(3).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("alias revision is NULL".into()))? }))
         .collect::<Result<Vec<_>, _>>()?;
     let splits = client
-        .select("SELECT parent_mdm_id, child_mdm_id, publication_revision FROM mdm_internal.identity_splits WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into()])
+        .select("SELECT parent_mdm_id, child_mdm_id, publication_revision FROM mdm_internal.identity_splits WHERE entity_id = $1::pg_catalog.uuid AND $2::jsonb IS NULL", None, args)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .into_iter()
         .map(|row| Ok(identity::IdentitySplit { parent_mdm_id: row.get::<Uuid>(1).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("split parent ID is NULL".into()))?, child_mdm_id: row.get::<Uuid>(2).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("split child ID is NULL".into()))?, publication_revision: row.get::<i64>(3).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("split revision is NULL".into()))? }))
@@ -2013,9 +2019,22 @@ fn load_old_identity(
 }
 
 #[allow(clippy::useless_conversion)]
-fn load_reviews(client: &mut SpiClient<'_>, context: &Context) -> Result<Vec<Review>, MdmError> {
+fn load_reviews(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    scope: Option<(&BTreeSet<Uuid>, &BTreeSet<Uuid>)>,
+) -> Result<Vec<Review>, MdmError> {
+    let subjects = scope.map(|(records, mdm_ids)| {
+        JsonB(json!(
+            records
+                .iter()
+                .chain(mdm_ids)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        ))
+    });
     client
-        .select("SELECT review_id, issue_key, occurrence, status, severity, reason_code, subjects, masked_summary, opened_revision, resolved_revision, last_change_revision, concurrency_version FROM mdm_internal.reviews WHERE entity_id = $1::pg_catalog.uuid", None, &[context.entity_id.clone().into()])
+        .select("SELECT review_id, issue_key, occurrence, status, severity, reason_code, subjects, masked_summary, opened_revision, resolved_revision, last_change_revision, concurrency_version FROM mdm_internal.reviews WHERE entity_id = $1::pg_catalog.uuid AND ($2::jsonb IS NULL OR pg_catalog.jsonb_path_exists(subjects, '$.** ? (@ == $ids[*])', pg_catalog.jsonb_build_object('ids', $2::jsonb)))", None, &[context.entity_id.clone().into(), subjects.into()])
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .into_iter()
         .map(|row| Ok(Review { review_id: row.get::<Uuid>(1).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review ID is NULL".into()))?, issue_key: row.get::<Vec<u8>>(2).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review issue key is NULL".into()))?.try_into().map_err(|_| MdmError::Spi("review issue key is not 32 bytes".into()))?, occurrence: row.get::<i32>(3).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review occurrence is NULL".into()))?, status: match row.get::<String>(4).map_err(|error| MdmError::Spi(error.to_string()))?.as_deref() { Some("open") => ReviewStatus::Open, Some("resolved") => ReviewStatus::Resolved, _ => return Err(MdmError::Spi("review status is invalid".into())) }, severity: row.get::<String>(5).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review severity is NULL".into()))?, reason_code: row.get::<String>(6).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review reason is NULL".into()))?, subjects: row.get::<JsonB>(7).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review subjects are NULL".into()))?.0, masked_summary: row.get::<JsonB>(8).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review summary is NULL".into()))?.0, opened_revision: row.get::<i64>(9).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review opened revision is NULL".into()))?, resolved_revision: row.get::<i64>(10).map_err(|error| MdmError::Spi(error.to_string()))?, last_change_revision: row.get::<i64>(11).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review change revision is NULL".into()))?, concurrency_version: row.get::<i64>(12).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("review version is NULL".into()))? }))
@@ -2086,8 +2105,10 @@ fn load_golden_rows_scope(
 fn load_overrides(
     client: &mut SpiClient<'_>,
     context: &Context,
+    scope: Option<&BTreeSet<Uuid>>,
 ) -> Result<BTreeMap<String, Vec<GoldenOverride>>, MdmError> {
-    let rows = client.select("SELECT field_name::text, override_id, anchor_source_record_id, (extract(epoch FROM created_at) * 1000000)::bigint, value FROM mdm_internal.golden_override_directives WHERE entity_id = $1::pg_catalog.uuid AND is_current AND action = 'SET' ORDER BY field_name, created_at, override_id", None, &[context.entity_id.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
+    // One outside anchor per field preserves the full evaluator's inactive-anchor issue.
+    let rows = client.select("SELECT field_name::text, override_id, anchor_source_record_id, (extract(epoch FROM created_at) * 1000000)::bigint, value FROM mdm_internal.golden_override_directives WHERE entity_id = $1::pg_catalog.uuid AND is_current AND action = 'SET' AND ($2::jsonb IS NULL OR anchor_source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::jsonb)) OR override_id IN (SELECT DISTINCT ON (field_name) override_id FROM mdm_internal.golden_override_directives WHERE entity_id = $1::uuid AND is_current AND action = 'SET' AND anchor_source_record_id NOT IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::jsonb)) ORDER BY field_name, created_at, override_id)) ORDER BY field_name, created_at, override_id", None, &[context.entity_id.clone().into(), scope.map(uuid_json).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
     let mut result: BTreeMap<String, Vec<GoldenOverride>> = BTreeMap::new();
     for row in rows {
         let field = row
@@ -2229,6 +2250,20 @@ fn load_control_changes(
             ],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if !override_rows.is_empty() {
+        // Override edits can change inactive-anchor reviews on every golden identity.
+        let subjects = client.select(
+            "SELECT source_record_id FROM mdm_internal.memberships WHERE entity_id = $1::uuid UNION SELECT source_record_id FROM mdm_internal.source_records WHERE entity_id = $1::uuid AND active",
+            None, &[context.entity_id.clone().into()],
+        ).map_err(|error| MdmError::Spi(error.to_string()))?;
+        for row in subjects {
+            changes.seeds.insert(
+                row.get::<Uuid>(1)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("override control subject is NULL".into()))?,
+            );
+        }
+    }
     for row in override_rows {
         let epoch = row
             .get::<i64>(1)
@@ -2293,14 +2328,19 @@ fn allocate_ids(client: &mut SpiClient<'_>, count: usize) -> Result<Vec<Uuid>, M
         .collect()
 }
 
-fn load_current_golden(client: &SpiClient<'_>, context: &Context) -> Result<Value, MdmError> {
+fn load_current_golden(
+    client: &SpiClient<'_>,
+    context: &Context,
+    scope: Option<&BTreeSet<Uuid>>,
+) -> Result<Value, MdmError> {
     let rows = client
         .select(
-            "SELECT mdm_id, field_name::text, value, normalized_value, status, winning_source_record_id, policy, policy_version, tie_break, contributors FROM mdm_internal.golden_provenance WHERE entity_id = $1::pg_catalog.uuid AND publication_revision = $2 ORDER BY mdm_id, field_name",
+            "SELECT mdm_id, field_name::text, value, normalized_value, status, winning_source_record_id, policy, policy_version, tie_break, contributors FROM mdm_internal.golden_provenance WHERE entity_id = $1::pg_catalog.uuid AND publication_revision = $2 AND ($3::jsonb IS NULL OR mdm_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($3::jsonb))) ORDER BY mdm_id, field_name",
             None,
             &[
                 context.entity_id.clone().into(),
                 context.publication_revision.into(),
+                scope.map(uuid_json).into(),
             ],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
@@ -2339,14 +2379,16 @@ fn load_current_golden(client: &SpiClient<'_>, context: &Context) -> Result<Valu
 fn load_current_resolution_facts(
     client: &SpiClient<'_>,
     context: &Context,
+    scope: Option<&BTreeSet<Uuid>>,
 ) -> Result<Value, MdmError> {
     let rows = client
         .select(
-            "SELECT pg_catalog.convert_from(subject_key, 'UTF8'), fact_kind, fact->>'reason_code', fact->'evidence_groups' FROM mdm_internal.resolution_facts WHERE entity_id = $1::pg_catalog.uuid AND publication_revision = $2 AND subject_kind = 'pair'",
+            "SELECT pg_catalog.convert_from(subject_key, 'UTF8'), fact_kind, fact->>'reason_code', fact->'evidence_groups' FROM mdm_internal.resolution_facts WHERE entity_id = $1::pg_catalog.uuid AND publication_revision = $2 AND subject_kind = 'pair' AND ($3::jsonb IS NULL OR (pg_catalog.split_part(pg_catalog.convert_from(subject_key, 'UTF8'), ':', 1)::uuid IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($3::jsonb)) AND pg_catalog.split_part(pg_catalog.convert_from(subject_key, 'UTF8'), ':', 2)::uuid IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($3::jsonb))))",
             None,
             &[
                 context.entity_id.clone().into(),
                 context.publication_revision.into(),
+                scope.map(uuid_json).into(),
             ],
         )
         .map_err(|error| MdmError::Spi(error.to_string()))?;
@@ -3094,7 +3136,7 @@ fn persist_refresh_inner(
             let mdm_resolution_ms = resolution_started.elapsed().as_millis() as u64;
             let publication_started = Instant::now();
             client.update("INSERT INTO mdm_internal.publication_observations (entity_id, publication_revision, decision_epoch, artifact_id, operation_id, graph_refresh_id, source_boundary, source_boundary_digest, node_results) VALUES ($1::pg_catalog.uuid, $2, $3, $4::pg_catalog.uuid, $5::pg_catalog.uuid, $6, $7, $8, $9)", None, &[context.entity_id.clone().into(), context.publication_revision.into(), context.decision_epoch.into(), context.artifact_id.clone().into(), operation_id.clone().into(), graph.id.into(), JsonB(graph.boundary.clone()).into(), graph.boundary_digest.clone().into(), JsonB(graph.node_results.clone()).into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
-            let reviews = load_reviews(client, &context)?;
+            let reviews = load_reviews(client, &context, None)?;
             project_policy_cases(
                 client,
                 &context.entity_id,
@@ -3136,6 +3178,10 @@ fn persist_refresh_inner(
                     "graph_helper_sync": graph.helper_sync_ms + request.sources.timings_ms["graph_definition_sync"].as_u64().unwrap_or(0),
                     "end_to_end": request.started.elapsed().as_millis() as u64,
                     "mdm_resolution": mdm_resolution_ms,
+                    "evaluation_state_loading": 0.0,
+                    "merged_state_construction": 0.0,
+                    "digest_generation": 0.0,
+                    "snapshot_copying": 0.0,
                     "publication": publication_started.elapsed().as_millis() as u64,
                     "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
                 }),
@@ -3255,16 +3301,15 @@ fn persist_refresh_inner(
         } else {
             context.publication_revision
         };
+        let mut digest_ms = 0.0;
+        let mut snapshot_copy_ms = 0.0;
         if changed {
+            let digest_started = Instant::now();
             let result_digest = digest(
                 "pg_mdm/publication/v1",
-                &[&json_bytes(&semantic_projection_with_values(
-                    &prepared.merged_identity,
-                    prepared.merged_golden.clone(),
-                    &prepared.merged_reviews,
-                    prepared.merged_resolution_facts.clone(),
-                ))],
+                &[&json_bytes(&prepared.merged_projection)],
             );
+            digest_ms = digest_started.elapsed().as_secs_f64() * 1000.0;
             client.update("INSERT INTO mdm_internal.publications (entity_id, publication_revision, definition_version, decision_epoch, operation_id, result_digest) VALUES ($1::pg_catalog.uuid, $2, $3, $4, $5::pg_catalog.uuid, $6)", None, &[context.entity_id.clone().into(), revision.into(), context.definition_version.into(), context.decision_epoch.into(), operation_id.clone().into(), result_digest.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?;
             for batch in next_identity.registry.chunks(PUBLICATION_BATCH_SIZE) {
                 let mut args = Vec::with_capacity(batch.len() * 5);
@@ -3376,6 +3421,7 @@ fn persist_refresh_inner(
                 .affected_records
                 .as_ref()
                 .zip(prepared.affected_mdm_ids.as_ref());
+            let snapshot_started = Instant::now();
             persist_publication_snapshots(
                 client,
                 &context,
@@ -3384,6 +3430,7 @@ fn persist_refresh_inner(
                 &evaluation::semantic_resolution_facts(resolution),
                 snapshot_scope,
             )?;
+            snapshot_copy_ms = snapshot_started.elapsed().as_secs_f64() * 1000.0;
             for batch in next_reviews.chunks(PUBLICATION_BATCH_SIZE) {
                 let mut args = Vec::with_capacity(batch.len() * 13);
                 for row in batch {
@@ -3446,7 +3493,7 @@ fn persist_refresh_inner(
         let policy_reviews = if changed {
             next_reviews.clone()
         } else {
-            load_reviews(client, &context)?
+            load_reviews(client, &context, None)?
         };
         project_policy_cases(
             client,
@@ -3476,6 +3523,7 @@ fn persist_refresh_inner(
         let delta_lag = delta.iter().map(|consumer| consumer.lag).max();
         let (effective_node_modes, unexpected_full_fallbacks) =
             node_mode_summary(&graph.node_results);
+        let (identities, open_reviews) = load_publication_counts(client, &context)?;
         let result = RefreshResult {
             operation_id: operation_id.clone(),
             entity_name: context.entity.name.clone(),
@@ -3486,17 +3534,8 @@ fn persist_refresh_inner(
             source_boundary_digest: hex(&graph.boundary_digest),
             node_results: graph.node_results,
             active_records: active_record_count,
-            identities: prepared
-                .merged_identity
-                .registry
-                .iter()
-                .filter(|row| row.status == identity::IdentityStatus::Active)
-                .count(),
-            open_reviews: prepared
-                .merged_reviews
-                .iter()
-                .filter(|row| row.status == ReviewStatus::Open)
-                .count(),
+            identities,
+            open_reviews,
             stage_timings_ms: json!({
                 "graph_refresh": graph_refresh_ms,
                 "source_access": request.sources.timings_ms["source_access"],
@@ -3507,6 +3546,10 @@ fn persist_refresh_inner(
                 "graph_helper_sync": graph.helper_sync_ms + request.sources.timings_ms["graph_definition_sync"].as_u64().unwrap_or(0),
                 "end_to_end": request.started.elapsed().as_millis() as u64,
                 "mdm_resolution": mdm_resolution_ms,
+                "evaluation_state_loading": prepared.state_loading_ms,
+                "merged_state_construction": prepared.merged_state_ms,
+                "digest_generation": digest_ms,
+                "snapshot_copying": snapshot_copy_ms,
                 "publication": publication_ms,
                 "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
             }),
@@ -3918,6 +3961,7 @@ fn selected_mdm_ids(identity: &IdentityState, selected: &BTreeSet<Uuid>) -> BTre
         .collect()
 }
 
+#[cfg(test)]
 fn splice_identity(
     old: &IdentityState,
     selected: &BTreeSet<Uuid>,
@@ -3959,6 +4003,7 @@ fn splice_identity(
     }
 }
 
+#[cfg(test)]
 fn splice_golden(
     old: &Value,
     selected_mdm_ids: &BTreeSet<Uuid>,
@@ -3996,24 +4041,7 @@ fn splice_golden(
     Value::Array(rows)
 }
 
-fn splice_reviews(
-    old: &[Review],
-    selected: &BTreeSet<Uuid>,
-    selected_mdm_ids: &BTreeSet<Uuid>,
-    scoped: &[Review],
-) -> Vec<Review> {
-    let ids = selected
-        .iter()
-        .chain(selected_mdm_ids)
-        .map(ToString::to_string)
-        .collect::<BTreeSet<_>>();
-    old.iter()
-        .filter(|review| !json_mentions_any(&review.subjects, &ids))
-        .cloned()
-        .chain(scoped.iter().cloned())
-        .collect()
-}
-
+#[cfg(test)]
 fn fact_is_scoped(row: &Value, selected: &BTreeSet<Uuid>) -> bool {
     row.get(0)
         .and_then(Value::as_str)
@@ -4027,6 +4055,7 @@ fn fact_is_scoped(row: &Value, selected: &BTreeSet<Uuid>) -> bool {
         .is_some_and(|(left, right)| selected.contains(&left) && selected.contains(&right))
 }
 
+#[cfg(test)]
 fn splice_resolution_facts(
     old: &Value,
     selected: &BTreeSet<Uuid>,
@@ -4050,26 +4079,11 @@ fn splice_resolution_facts(
     Value::Array(rows)
 }
 
-fn semantic_projection_with_values(
-    identity: &IdentityState,
-    golden: Value,
-    reviews: &[Review],
-    resolution_facts: Value,
-) -> Value {
-    json!({
-        "identity": evaluation::semantic_identity(identity),
-        "golden": golden,
-        "reviews": evaluation::semantic_reviews(reviews),
-        "resolution_facts": resolution_facts
-    })
-}
-
 struct PreparedEvaluation {
     evaluation: evaluation::EvaluationResult,
-    merged_identity: IdentityState,
-    merged_golden: Value,
-    merged_reviews: Vec<Review>,
-    merged_resolution_facts: Value,
+    merged_projection: Value,
+    state_loading_ms: f64,
+    merged_state_ms: f64,
     affected_records: Option<BTreeSet<Uuid>>,
     affected_mdm_ids: Option<BTreeSet<Uuid>>,
     review_scope: Option<BTreeSet<Uuid>>,
@@ -4081,6 +4095,7 @@ struct AffectedScope {
     cannot_links: Vec<DecisionEdge>,
     pair_decisions: Vec<crate::pair::PairDecision>,
     selected: BTreeSet<Uuid>,
+    membership_ids_read: usize,
 }
 
 fn validate_graph_block_limits(client: &SpiClient<'_>, context: &Context) -> Result<(), MdmError> {
@@ -4204,12 +4219,12 @@ fn load_affected_scope(
     context: &Context,
     limits: &ResolverLimits,
     seeds: BTreeSet<Uuid>,
-    old_identity: &IdentityState,
 ) -> Result<AffectedScope, MdmError> {
     if seeds.is_empty() {
         return Err(MdmError::AffectedClosure("affected seeds are empty".into()));
     }
     let mut selected = seeds.clone();
+    let mut membership_ids_read = 0;
     let mut matches = BTreeMap::<Uuid, DecisionEdge>::new();
     let mut cannot = BTreeMap::<Uuid, DecisionEdge>::new();
     let mut pairs = BTreeMap::<(Uuid, Uuid), crate::pair::PairDecision>::new();
@@ -4218,6 +4233,21 @@ fn load_affected_scope(
         .map(|source| (source.id, source.source_name))
         .collect::<BTreeMap<_, _>>();
     loop {
+        let historical_members = client
+            .select(
+                "SELECT source_record_id FROM mdm_internal.memberships WHERE entity_id = $1::uuid AND mdm_id IN (SELECT mdm_id FROM mdm_internal.memberships WHERE entity_id = $1::uuid AND source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::jsonb)))",
+                Some(limits.max_active_records.saturating_add(1) as i64),
+                &[context.entity_id.clone().into(), uuid_json(&selected).into()],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        membership_ids_read += historical_members.len();
+        for row in historical_members {
+            selected.insert(
+                row.get::<Uuid>(1)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .ok_or_else(|| MdmError::Spi("historical member ID is NULL".into()))?,
+            );
+        }
         if selected.len() > limits.max_active_records {
             return Err(MdmError::AffectedClosure(
                 "affected closure exceeds the active-record limit".into(),
@@ -4269,8 +4299,8 @@ fn load_affected_scope(
             ));
         }
         let affected = crate::affected::build(
-            seeds.iter().copied(),
-            &old_identity.memberships,
+            selected.iter().copied(),
+            &[],
             &matches.values().cloned().collect::<Vec<_>>(),
             &pairs.values().cloned().collect::<Vec<_>>(),
         )?
@@ -4281,21 +4311,6 @@ fn load_affected_scope(
         selected = affected;
     }
     let records = load_sources_by_ids(client, context, &selected)?;
-    let known = records
-        .iter()
-        .map(|record| record.id)
-        .chain(
-            old_identity
-                .memberships
-                .iter()
-                .map(|membership| membership.source_record_id),
-        )
-        .collect::<BTreeSet<_>>();
-    if selected.iter().any(|record| !known.contains(record)) {
-        return Err(MdmError::AffectedClosure(
-            "affected delta references an unknown source record".into(),
-        ));
-    }
     let manual_matches = matches
         .into_values()
         .filter(|decision| {
@@ -4323,7 +4338,53 @@ fn load_affected_scope(
         cannot_links,
         pair_decisions,
         selected,
+        membership_ids_read,
     })
+}
+
+fn trace_prior_state(
+    client: &SpiClient<'_>,
+    context: &Context,
+    strategy: &str,
+    decoded: &Value,
+    scope_records: Option<usize>,
+) -> Result<(), MdmError> {
+    let enabled = client
+        .select(
+            "SELECT pg_catalog.current_setting('mdm.trace_graph_deltas', true) = 'on'",
+            Some(1),
+            &[],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .first()
+        .get::<bool>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .unwrap_or(false);
+    if enabled {
+        let baseline = client.select(
+            "SELECT pg_catalog.jsonb_build_object(
+                'registry', (SELECT count(*) FROM mdm_internal.identity_registry WHERE entity_id = $1::uuid),
+                'memberships', (SELECT count(*) FROM mdm_internal.memberships WHERE entity_id = $1::uuid),
+                'aliases', (SELECT count(*) FROM mdm_internal.identity_aliases WHERE entity_id = $1::uuid),
+                'splits', (SELECT count(*) FROM mdm_internal.identity_splits WHERE entity_id = $1::uuid),
+                'reviews', (SELECT count(*) FROM mdm_internal.reviews WHERE entity_id = $1::uuid),
+                'golden', (SELECT count(*) FROM mdm_internal.golden_provenance WHERE entity_id = $1::uuid AND publication_revision = $2),
+                'facts', (SELECT count(*) FROM mdm_internal.resolution_facts WHERE entity_id = $1::uuid AND publication_revision = $2 AND subject_kind = 'pair'),
+                'overrides', (SELECT count(*) FROM mdm_internal.golden_override_directives WHERE entity_id = $1::uuid AND is_current AND action = 'SET'))",
+            Some(1), &[context.entity_id.clone().into(), context.publication_revision.into()],
+        ).map_err(|error| MdmError::Spi(error.to_string()))?.first().get::<JsonB>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("prior state baseline is NULL".into()))?.0;
+        pgrx::notice!(
+            "PG_MDM_PRIOR_STATE_TRACE {}",
+            json!({
+                "entity_name": context.entity.name, "strategy": strategy,
+            "scope_records": scope_records,
+                "decoded": decoded, "entity_wide_baseline": baseline
+            })
+        );
+    }
+    Ok(())
 }
 
 fn evaluate_full(
@@ -4332,6 +4393,7 @@ fn evaluate_full(
     limits: ResolverLimits,
     revision: i64,
 ) -> Result<PreparedEvaluation, MdmError> {
+    let loading_started = Instant::now();
     let sources = load_sources(client, context, limits.max_active_records)?;
     let active = sources.iter().map(|row| row.id).collect::<BTreeSet<_>>();
     let records = sources
@@ -4348,12 +4410,27 @@ fn evaluate_full(
         .map(|source| (source.id, source.source_name.clone()))
         .collect::<BTreeMap<_, _>>();
     let pair_decisions = load_pair_decisions(client, context, &active, &source_names, None)?;
-    let old_identity = load_old_identity(client, context)?;
-    let old_reviews = load_reviews(client, context)?;
-    let old_golden = load_current_golden(client, context)?;
-    let old_resolution_facts = load_current_resolution_facts(client, context)?;
+    let old_identity = load_old_identity(client, context, None)?;
+    let old_reviews = load_reviews(client, context, None)?;
+    let old_golden = load_current_golden(client, context, None)?;
+    let old_resolution_facts = load_current_resolution_facts(client, context, None)?;
     let golden_rows = load_golden_rows(client, context)?;
-    let overrides = load_overrides(client, context)?;
+    let overrides = load_overrides(client, context, None)?;
+    let state_loading_ms = loading_started.elapsed().as_secs_f64() * 1000.0;
+    trace_prior_state(
+        client,
+        context,
+        "full",
+        &json!({
+            "closure_membership_ids": 0,
+            "registry": old_identity.registry.len(), "memberships": old_identity.memberships.len(),
+            "aliases": old_identity.aliases.len(), "splits": old_identity.splits.len(),
+            "reviews": old_reviews.len(), "golden": old_golden.as_array().map_or(0, Vec::len),
+            "facts": old_resolution_facts.as_array().map_or(0, Vec::len),
+            "overrides": overrides.values().map(Vec::len).sum::<usize>()
+        }),
+        None,
+    )?;
     let mut ids = allocate_ids(
         client,
         sources
@@ -4380,11 +4457,18 @@ fn evaluate_full(
         overrides: &overrides,
         allocator: &mut allocator,
     })?;
+    let merge_started = Instant::now();
+    let merged_projection = evaluation::semantic_projection(
+        &evaluation.identity,
+        &evaluation.golden,
+        &evaluation.reviews,
+        &evaluation.resolution,
+    );
+    let merged_state_ms = merge_started.elapsed().as_secs_f64() * 1000.0;
     Ok(PreparedEvaluation {
-        merged_identity: evaluation.identity.clone(),
-        merged_golden: evaluation::semantic_golden(&evaluation.golden),
-        merged_reviews: evaluation.reviews.clone(),
-        merged_resolution_facts: evaluation::semantic_resolution_facts(&evaluation.resolution),
+        merged_projection,
+        state_loading_ms,
+        merged_state_ms,
         evaluation,
         affected_records: None,
         affected_mdm_ids: None,
@@ -4400,17 +4484,30 @@ fn evaluate_affected(
     revision: i64,
     seeds: BTreeSet<Uuid>,
 ) -> Result<PreparedEvaluation, MdmError> {
-    let old_identity = load_old_identity(client, context)?;
-    let old_reviews = load_reviews(client, context)?;
-    let old_golden = load_current_golden(client, context)?;
-    let old_resolution_facts = load_current_resolution_facts(client, context)?;
-    let scope = load_affected_scope(client, context, &limits, seeds, &old_identity)?;
+    let loading_started = Instant::now();
+    let scope = load_affected_scope(client, context, &limits, seeds)?;
+    let old_identity = load_old_identity(client, context, Some(&scope.selected))?;
+    let known = scope
+        .records
+        .iter()
+        .map(|record| record.id)
+        .chain(
+            old_identity
+                .memberships
+                .iter()
+                .map(|row| row.source_record_id),
+        )
+        .collect::<BTreeSet<_>>();
+    if !scope.selected.is_subset(&known) {
+        return Err(MdmError::AffectedClosure(
+            "affected delta references an unknown source record".into(),
+        ));
+    }
     let selected_mdm_ids = selected_mdm_ids(&old_identity, &scope.selected);
-    let scoped_old_identity = scope_identity(&old_identity, &scope.selected);
-    let scoped_old_reviews = scope_reviews(&old_reviews, &scope.selected, &selected_mdm_ids);
-    let scoped_old_golden = scope_current_golden(old_golden.clone(), &selected_mdm_ids);
-    let scoped_old_resolution_facts =
-        scope_resolution_facts(&old_resolution_facts, &scope.selected);
+    let old_reviews = load_reviews(client, context, Some((&scope.selected, &selected_mdm_ids)))?;
+    let old_golden = load_current_golden(client, context, Some(&selected_mdm_ids))?;
+    let old_resolution_facts =
+        load_current_resolution_facts(client, context, Some(&scope.selected))?;
     let records = scope
         .records
         .iter()
@@ -4421,23 +4518,27 @@ fn evaluate_affected(
         })
         .collect::<Vec<_>>();
     let golden_rows = load_golden_rows_scope(client, context, Some(&scope.selected))?;
-    let overrides = load_overrides(client, context)?
-        .into_iter()
-        .map(|(field, values)| {
-            (
-                field,
-                values
-                    .into_iter()
-                    .filter(|value| scope.selected.contains(&value.anchor_source_record_id))
-                    .collect(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    let overrides = load_overrides(client, context, Some(&scope.selected))?;
+    let state_loading_ms = loading_started.elapsed().as_secs_f64() * 1000.0;
+    trace_prior_state(
+        client,
+        context,
+        "affected",
+        &json!({
+            "closure_membership_ids": scope.membership_ids_read,
+            "registry": old_identity.registry.len(), "memberships": old_identity.memberships.len(),
+            "aliases": old_identity.aliases.len(), "splits": old_identity.splits.len(),
+            "reviews": old_reviews.len(), "golden": old_golden.as_array().map_or(0, Vec::len),
+            "facts": old_resolution_facts.as_array().map_or(0, Vec::len),
+            "overrides": overrides.values().map(Vec::len).sum::<usize>()
+        }),
+        Some(scope.selected.len()),
+    )?;
     let mut ids = allocate_ids(
         client,
         records
             .len()
-            .saturating_add(scoped_old_reviews.len())
+            .saturating_add(old_reviews.len())
             .saturating_add(scope.pair_decisions.len())
             .saturating_add(1),
     )?;
@@ -4451,28 +4552,39 @@ fn evaluate_affected(
         cannot_links: scope.cannot_links,
         pair_decisions: scope.pair_decisions,
         limits,
-        old_identity: &scoped_old_identity,
-        old_reviews: &scoped_old_reviews,
-        old_golden: &scoped_old_golden,
-        old_resolution_facts: &scoped_old_resolution_facts,
+        old_identity: &old_identity,
+        old_reviews: &old_reviews,
+        old_golden: &old_golden,
+        old_resolution_facts: &old_resolution_facts,
         golden_rows: &golden_rows,
         overrides: &overrides,
         allocator: &mut allocator,
     })?;
-    let merged_identity = splice_identity(&old_identity, &scope.selected, &evaluation.identity);
-    let merged_golden = splice_golden(&old_golden, &selected_mdm_ids, &evaluation.golden);
-    let merged_reviews = splice_reviews(
-        &old_reviews,
-        &scope.selected,
-        &selected_mdm_ids,
-        &evaluation.reviews,
-    );
-    let merged_resolution_facts = splice_resolution_facts(
-        &old_resolution_facts,
-        &scope.selected,
-        &evaluation.resolution,
-    );
-    let mut review_scope = scoped_old_reviews
+    let merge_started = Instant::now();
+    let merged_projection = if evaluation.changed {
+        client.select(include_str!("merged_projection.sql"), Some(1), &[
+            context.entity_id.clone().into(), context.publication_revision.into(),
+            uuid_json(&scope.selected).into(), uuid_json(&selected_mdm_ids).into(),
+            JsonB(json!({
+                "identity": evaluation::semantic_identity(&evaluation.identity),
+                "aliases": evaluation.identity.aliases.iter().map(|row| json!([
+                    row.alias_mdm_id.to_string(), row.canonical_mdm_id.to_string(), row.publication_revision
+                ])).collect::<Vec<_>>(),
+                "splits": evaluation.identity.splits.iter().map(|row| json!([
+                    row.parent_mdm_id.to_string(), row.child_mdm_id.to_string(), row.publication_revision
+                ])).collect::<Vec<_>>(),
+                "reviews": evaluation::semantic_reviews(&evaluation.reviews),
+                "golden": evaluation::semantic_golden(&evaluation.golden),
+                "resolution_facts": evaluation::semantic_resolution_facts(&evaluation.resolution)
+            })).into(),
+        ]).map_err(|error| MdmError::Spi(error.to_string()))?.first().get::<JsonB>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::Spi("merged publication is NULL".into()))?.0
+    } else {
+        Value::Null
+    };
+    let merged_state_ms = merge_started.elapsed().as_secs_f64() * 1000.0;
+    let mut review_scope = old_reviews
         .iter()
         .map(|review| review.review_id)
         .collect::<BTreeSet<_>>();
@@ -4481,10 +4593,9 @@ fn evaluate_affected(
     affected_mdm_ids.extend(evaluation.identity.registry.iter().map(|row| row.mdm_id));
     Ok(PreparedEvaluation {
         evaluation,
-        merged_identity,
-        merged_golden,
-        merged_reviews,
-        merged_resolution_facts,
+        merged_projection,
+        state_loading_ms,
+        merged_state_ms,
         affected_records: Some(scope.selected),
         affected_mdm_ids: Some(affected_mdm_ids),
         review_scope: Some(review_scope),
@@ -4713,7 +4824,7 @@ fn preview_run(
         .collect::<BTreeMap<_, _>>();
     let (manual_matches, cannot_links) = load_decisions(client, context, &all_active)?;
     let pair_decisions = load_pair_decisions(client, context, &all_active, &source_names, None)?;
-    let old_identity_all = load_old_identity(client, context)?;
+    let old_identity_all = load_old_identity(client, context, None)?;
     let (selected_ids, source_ids, requested_mdm_ids) = if let Some((source_ids, mdm_ids)) = scope {
         let seeds = validate_scoped_subjects(
             client,
@@ -4746,20 +4857,23 @@ fn preview_run(
         .collect::<BTreeSet<_>>();
     let old_identity = scope_identity(&old_identity_all, &selected_ids);
     let old_reviews = scope_reviews(
-        &load_reviews(client, context)?,
+        &load_reviews(client, context, None)?,
         &selected_ids,
         &selected_mdm_ids,
     );
-    let old_golden = scope_current_golden(load_current_golden(client, context)?, &selected_mdm_ids);
+    let old_golden = scope_current_golden(
+        load_current_golden(client, context, None)?,
+        &selected_mdm_ids,
+    );
     let old_resolution_facts = scope_resolution_facts(
-        &load_current_resolution_facts(client, context)?,
+        &load_current_resolution_facts(client, context, None)?,
         &selected_ids,
     );
     let golden_rows = load_golden_rows(client, context)?
         .into_iter()
         .filter(|row| selected_ids.contains(&row.source_record_id))
         .collect::<Vec<_>>();
-    let overrides = load_overrides(client, context)?
+    let overrides = load_overrides(client, context, None)?
         .into_iter()
         .map(|(field, values)| {
             (

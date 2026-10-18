@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from check_publication_digests import check_cases
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if len(sys.argv) != 7:
@@ -20,8 +22,12 @@ if len(sys.argv) != 7:
 container, image, source_revision, database_json, qualification_json, log_path = sys.argv[1:]
 
 source_work = []
+prior_state_work = []
 with Path(log_path).open(encoding="utf-8") as e2e_stream:
     for line in e2e_stream:
+        prior_marker = "PG_MDM_PRIOR_STATE_TRACE "
+        if prior_marker in line:
+            prior_state_work.append(json.loads(line.split(prior_marker, 1)[1]))
         marker = "PG_MDM_SOURCE_SYNC_TRACE "
         if marker not in line:
             continue
@@ -70,6 +76,29 @@ def sha256_bytes(value):
 
 def sha256_file(path):
     return sha256_bytes(Path(path).read_bytes())
+
+
+digest_cases = json.loads(run([
+    "docker", "exec", container, "psql", "-XAt", "-U", "postgres", "-d", "foundation", "-c",
+    "SELECT jsonb_agg(to_jsonb(c) ORDER BY label) FROM public.scoped_state_cases c",
+]))
+if [case["label"] for case in digest_cases] != [
+    "bootstrap", "conflict_recurs", "control_only", "inactive_anchor", "inactive_control_only",
+    "merge_conflict", "reactivation", "remote_override_dependency", "retired_reactivation", "retirement", "split_resolves",
+]:
+    raise SystemExit("scoped-state history scenarios are incomplete")
+digest_checks = check_cases(digest_cases)
+isolated_state_work = [trace for trace in prior_state_work
+    if trace["entity_name"] == "incremental_qualification" and trace["strategy"] == "affected"
+    and trace["scope_records"] == 1
+    and trace["entity_wide_baseline"]["memberships"] in (128, 2048)]
+for trace in isolated_state_work:
+    expected = {"closure_membership_ids": 1, "registry": 1, "memberships": 1, "aliases": 0, "splits": 0,
+                "reviews": 0, "golden": 1, "facts": 0, "overrides": 0}
+    if trace["decoded"] != expected:
+        raise SystemExit(f"isolated refresh decoded unexpected prior rows: {trace}")
+if [trace["entity_wide_baseline"]["memberships"] for trace in isolated_state_work] != [128] * 36 + [2048] * 36:
+    raise SystemExit("scoped-state work observations are incomplete")
 
 
 if run(["git", "rev-parse", "HEAD"]) != source_revision:
@@ -198,11 +227,14 @@ report = {
     "metrics": metrics,
     "incremental_qualification": qualification,
     "source_sync_work": source_work,
+    "prior_state_work": prior_state_work,
+    "publication_digest_checks": digest_checks,
     "inputs": {
         "organization_fixture_sha256": sha256_file(ROOT / "tests/fixtures/organization_domain_v1.json"),
         "e2e_sql_sha256": sha256_file(ROOT / "tests/e2e.sql"),
         "e2e_policy_sql_sha256": sha256_file(ROOT / "tests/e2e_policy.sql"),
         "source_sync_sql_sha256": sha256_file(ROOT / "tests/source_sync.sql"),
+        "scoped_state_sql_sha256": sha256_file(ROOT / "tests/scoped_state.sql"),
         "restore_sql_sha256": sha256_file(ROOT / "tests/restore.sql"),
         "operating_envelope_sql_sha256": sha256_file(ROOT / "tests/operating_envelope.sql"),
         "incremental_qualification_sql_sha256": sha256_file(

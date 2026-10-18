@@ -153,6 +153,16 @@ separate from terminal-output EXACT qualification and affected resolution.
 Synchronizing graph helper tables and checking entity-wide counts still require
 global work.
 
+Affected evaluation loads prior identities, historical memberships, reviews,
+golden provenance, pair facts, and overrides through its closed scope. A remote
+override anchor per field retains inactive-anchor review semantics; override
+edits can require an entity-wide scope. Complete semantic publication assembly,
+canonical digest generation, and retained snapshot copying still do global work.
+`stage_timings_ms` reports `evaluation_state_loading`, `merged_state_construction`,
+`digest_generation`, and `snapshot_copying` separately. The existing diagnostic
+trace records decoded prior rows and closure membership-ID reads against entity
+totals when `mdm.trace_graph_deltas` is enabled.
+
 The [source synchronization evidence](evidence/issue11/README.md) retains key-read
 plans, lifecycle and concurrency checks, and before/after measurements with their
 exact adapter and producer checksums.
