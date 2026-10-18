@@ -195,6 +195,8 @@ current_revision=$(docker exec "$container" psql -X -At -U postgres -d foundatio
 expected_revision=$((current_revision + 1))
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
+-- The marker uses a row trigger, which FULL refresh suppresses.
+ALTER ROLE mdm_test_login SET pg_trickle.refresh_strategy = 'differential';
 SELECT pgtrickle.request_output_delta_resnapshot(c.consumer_id)
 FROM mdm_internal.graph_delta_consumers c JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
 JOIN mdm_internal.entities e USING (entity_id)
@@ -369,6 +371,7 @@ BEGIN
 END
 $$;
 DROP TABLE public.e2e_source_fence_gate;
+ALTER ROLE mdm_test_login RESET pg_trickle.refresh_strategy;
 INSERT INTO public.crm_customer VALUES (5, 'Concurrent refresh', 'concurrent@example.test', statement_timestamp());
 CREATE TRIGGER delay_concurrent_output
 BEFORE INSERT OR UPDATE ON mdm_out.customer

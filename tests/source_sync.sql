@@ -135,7 +135,6 @@ ALTER ROLE mdm_test_login SET pg_trickle.refresh_strategy = 'differential';
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
 SET mdm.trace_graph_deltas = 'on';
-SET mdm.trace_graph_deltas = 'on';
 SELECT * FROM mdm.create(mdm.entity(
     name => 'source_sync', sources => ARRAY[
         mdm.source(name => 'crm', relation => 'public.source_sync_crm'::regclass,
@@ -306,13 +305,29 @@ SELECT mdm.refresh('source_sync');
 SELECT public.assert_source_sync();
 \connect foundation postgres
 DO $$
-DECLARE observed jsonb;
+DECLARE observed jsonb; expected jsonb; relation regclass; consumer uuid;
 BEGIN
     SELECT jsonb_agg(jsonb_build_object('mode', b.mode, 'rows', b.row_count, 'inserted', b.rows_inserted, 'deleted', b.rows_deleted)
         ORDER BY b.batch_token) INTO observed
     FROM public.source_sync_sibling c CROSS JOIN LATERAL pgtrickle.output_delta_batches(c.consumer_id, NULL) b;
     IF observed IS DISTINCT FROM '[{"mode":"EXACT","rows":2,"inserted":1,"deleted":1},{"mode":"EXACT","rows":0,"inserted":0,"deleted":0}]'::jsonb THEN
         RAISE EXCEPTION 'source resnapshot lost a sibling consumer pending key range: %', observed;
+    END IF;
+    SELECT s.delta_relation::regclass, s.consumer_id INTO STRICT relation, consumer
+    FROM pgtrickle.output_delta_consumer_status() s JOIN public.source_sync_sibling c USING (consumer_id);
+    EXECUTE format(
+        $query$SELECT jsonb_agg(jsonb_build_object('action', d.action, 'key', encode(d.source_record_key, 'hex'))
+            ORDER BY d.action, d.source_record_key) FROM %s d
+            JOIN pgtrickle.output_delta_batches($1, NULL) b USING (batch_token)$query$, relation)
+    INTO observed USING consumer;
+    SELECT jsonb_agg(jsonb_build_object('action', change.action, 'key',
+        encode(pgtrickle.encode_row_id_v2('SCAN_KEY', ROW(e.entity_id, s.source_identity_id, change.tenant, change.id)), 'hex'))
+        ORDER BY change.action) INTO expected
+    FROM mdm_internal.entities e JOIN mdm_internal.source_identities s USING (entity_id)
+    CROSS JOIN (VALUES ('DELETE', 9::bigint, 9::bigint), ('INSERT', 8::bigint, 8::bigint)) change(action, tenant, id)
+    WHERE e.entity_name = 'source_sync' AND s.source_name = 'crm';
+    IF observed IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION 'sibling pending keys differ: expected %, actual %', expected, observed;
     END IF;
 END
 $$;
