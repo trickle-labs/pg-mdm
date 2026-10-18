@@ -1,0 +1,148 @@
+{
+  "candidate": "d0c512ecac3d9393b1c199a405ec538ecd8f1eec",
+  "git_tree": "a9c9c13537578b7baf9d4c3a049d1fe9e9c60f83",
+  "ci_source": "ff570616e8f86c7ebc3c81dfb21f8ea83b57b38e",
+  "ci_envelope_sha256": "59eecacff5c23905a76050d798038fd067b9774821203596485481d1a0a34ec0",
+  "runtime_source": "8f362be3080cc643a41670badfef29fcbea9c119",
+  "retained_manifest_entries": {
+    "10": [
+      "README.md",
+      "baseline-clean-build.log.gz",
+      "baseline-source-binding.json.gz",
+      "candidate-clean-build.log.gz",
+      "causal-controls.json",
+      "functional-envelope.json.gz",
+      "functional-run.log.gz",
+      "measurement-after.sql.gz",
+      "measurement-before.sql.gz",
+      "measurement-plans.py.gz",
+      "measurement-runner.py.gz",
+      "measurement-setup.sql.gz",
+      "measurement-summary.py.gz",
+      "paired-after.json.gz",
+      "paired-before.json.gz",
+      "paired-summary.json",
+      "plan-work.json.gz",
+      "producer-package-manifest.sha256",
+      "qualification-binding.json.gz",
+      "qualified-candidate.patch.gz",
+      "release-control.log.gz",
+      "snapshot-only-control.log.gz",
+      "terminal-traces.json.gz",
+      "upstream-1166-control.log.gz"
+    ],
+    "11": [
+      "README.md",
+      "after-e2e.log.gz",
+      "after-envelope.json.gz",
+      "after-package-manifest.sha256",
+      "after-source-plans.json.gz",
+      "before-e2e.log.gz",
+      "before-envelope.json.gz",
+      "before-package-manifest.sha256",
+      "before-source-plans.json.gz",
+      "exact-sibling-source-sync.log.gz",
+      "extract-source-plans.py",
+      "functional-driver.sh.gz",
+      "functional-run.log.gz",
+      "sdk-checks.log.gz",
+      "source-fence-refresh.log.gz",
+      "source-plan-work.json",
+      "source-sync-setup.sql.gz"
+    ],
+    "12": [
+      "README.md",
+      "after-e2e.log.gz",
+      "after-envelope.json.gz",
+      "after-package-manifest.sha256",
+      "after-runner.log.gz",
+      "after-state-plans.json.gz",
+      "after-state-work.json",
+      "before-e2e.log.gz",
+      "before-package-manifest.sha256",
+      "before-qualification.json.gz",
+      "before-qualification.log.gz",
+      "before-state-plans.json.gz",
+      "collector.patch",
+      "digest-cases.json.gz",
+      "extract-state-plans.py",
+      "identities.json",
+      "linux-sdk-checks.log.gz",
+      "measurement-summary.json"
+    ]
+  },
+  "issue12_percentiles_recomputed": true,
+  "qualification_samples": 70,
+  "traced_isolated_calls": 71,
+  "checked_canonical_digests": [
+    {
+      "label": "bootstrap",
+      "result_digest": "c7130380dc26b501c3b06173c7fc5e267305026faf28038f3e8fd9b2c7340efb"
+    },
+    {
+      "label": "conflict_recurs",
+      "result_digest": "a924670e5191f71efd643505a34a04bf7934dbd56c53f5d137d8ac5b38a3ce10"
+    },
+    {
+      "label": "control_only",
+      "result_digest": "ff79b457d7e4cbfd88173e1b4d2019a3394348ff19851d910c0207867be321b8"
+    },
+    {
+      "label": "inactive_anchor",
+      "result_digest": "d1c22b01fd5bdea07c90f6b310cf0b8d47de74fa603bd1ceabf851975f90c5ec"
+    },
+    {
+      "label": "inactive_control_only",
+      "result_digest": "18f3f499f6495c4bf2e2967164d96da97479653eeff336c2c4557ea3d8d88ff0"
+    },
+    {
+      "label": "merge_conflict",
+      "result_digest": "39975d78cd5c113866b7580e8ae98485232a9ef10334e3cc65ccdc780448a50e"
+    },
+    {
+      "label": "reactivation",
+      "result_digest": "11135ddfaa9744463d14ac21d2e81fecac5935dde91f97c4f4913b40e42ad9c0"
+    },
+    {
+      "label": "remote_override_dependency",
+      "result_digest": "82adf9c714dc9d46985889bc75faba9f63f6a09b7c339b9567741d3902a09fe8"
+    },
+    {
+      "label": "retired_reactivation",
+      "result_digest": "4c73e1d21de0a6a96063c57abcfda3a889e83693956e44f67b1caa328ed966ec"
+    },
+    {
+      "label": "retirement",
+      "result_digest": "4005ed9ba8992f8ec707c32f0e98f85d3648a4fe64a10d409dae4f362b275df9"
+    },
+    {
+      "label": "split_resolves",
+      "result_digest": "a0675564ac5a0a267e206ac3355f1887fe9c728a9dd18271978518568b66c4da"
+    }
+  ],
+  "retained_review_flag_mismatches": [
+    [
+      "reactivation",
+      "Second",
+      2,
+      false,
+      true
+    ],
+    [
+      "retired_reactivation",
+      "Second",
+      2,
+      false,
+      true
+    ],
+    [
+      "retirement",
+      "Second",
+      2,
+      false,
+      true
+    ]
+  ],
+  "evidence_identity_checks": "passed",
+  "parent_acceptance": "changes_needed"
+}

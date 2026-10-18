@@ -1,0 +1,18 @@
+{
+  "recorded_at_utc": "2026-10-18T20:43:20.469109+00:00",
+  "subject_commit": "d0c512ecac3d9393b1c199a405ec538ecd8f1eec",
+  "reported_independence": "self_check",
+  "verdict": "CHANGES_NEEDED",
+  "fresh_tests": {
+    "passed": 142,
+    "failed": 0
+  },
+  "same_boundary_regression_exit_code": 3,
+  "main_ci": {
+    "run_id": 39163088441,
+    "test": "success",
+    "e2e": "in_progress"
+  },
+  "remote_effects": [],
+  "runtime_repairs": false
+}

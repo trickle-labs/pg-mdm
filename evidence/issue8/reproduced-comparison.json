@@ -1,0 +1,38 @@
+{
+  "full_rows": [
+    [
+      "Record 3",
+      2,
+      true
+    ],
+    [
+      "Record 5",
+      1,
+      true
+    ],
+    [
+      "Second",
+      2,
+      true
+    ]
+  ],
+  "affected_rows": [
+    [
+      "Record 3",
+      2,
+      true
+    ],
+    [
+      "Record 5",
+      1,
+      true
+    ],
+    [
+      "Second",
+      2,
+      false
+    ]
+  ],
+  "full_strategy": "full",
+  "affected_strategy": "affected"
+}
