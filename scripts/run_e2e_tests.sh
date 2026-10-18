@@ -24,6 +24,20 @@ candidate_key=${PG_MDM_CANDIDATE_KEY:-unknown}
 echo "E2E Git HEAD: $source_revision; candidate snapshot: $candidate_key"
 
 cleanup() {
+    if [[ -n ${PG_MDM_E2E_EVIDENCE_DIR:-} ]]; then
+        mkdir -p "$PG_MDM_E2E_EVIDENCE_DIR"
+        if [[ -f "$qualification_json" ]]; then
+            cp "$qualification_json" "$PG_MDM_E2E_EVIDENCE_DIR/incremental-qualification.json"
+        fi
+        if [[ ! -f "$PG_MDM_E2E_EVIDENCE_DIR/docker-e2e-envelope.json" ]]; then
+            docker logs "$container" > "$PG_MDM_E2E_EVIDENCE_DIR/docker-failure.log" 2>&1 || true
+            for e2e_step_log in "$work_dir"/*.log; do
+                if [[ -f "$e2e_step_log" ]]; then
+                    cp "$e2e_step_log" "$PG_MDM_E2E_EVIDENCE_DIR/"
+                fi
+            done
+        fi
+    fi
     if [[ -n ${PG_MDM_E2E_LOG_CAPTURE:-} ]]; then
         docker logs "$container" > "$PG_MDM_E2E_LOG_CAPTURE" 2>&1 || true
         if [[ -f "$qualification_log" ]]; then
@@ -186,6 +200,8 @@ FROM mdm_internal.graph_delta_consumers c JOIN mdm_internal.graph_bindings b USI
 JOIN mdm_internal.entities e USING (entity_id)
 WHERE e.entity_name = 'customer' AND c.logical_id = 'records/crm'
   AND b.graph_generation = (SELECT max(graph_generation) FROM mdm_internal.graph_bindings WHERE entity_id = e.entity_id);
+CREATE TABLE public.e2e_source_fence_gate (released boolean NOT NULL);
+INSERT INTO public.e2e_source_fence_gate VALUES (false);
 CREATE FUNCTION public.delay_release_output()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -210,9 +226,10 @@ BEGIN
 END
 $$;
 SQL
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+docker exec -e PGAPPNAME=mdm_preboundary_writer "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c "BEGIN; INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
-        SELECT pg_catalog.pg_advisory_xact_lock(718110, 110971); SELECT pg_catalog.pg_sleep(3); COMMIT;" \
+        SELECT pg_catalog.pg_advisory_xact_lock(718110, 110971);
+        DO 'BEGIN WHILE NOT (SELECT released FROM public.e2e_source_fence_gate) LOOP PERFORM pg_catalog.pg_sleep(0.05); END LOOP; END'; COMMIT;" \
     >"$work_dir/preboundary_writer.log" 2>&1 &
 preboundary_writer=$!
 preboundary_captured=false
@@ -228,7 +245,7 @@ if [[ $preboundary_captured != true ]]; then
     echo 'FAIL: pending source writer did not reach its pre-boundary marker' >&2
     exit 1
 fi
-docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
+docker exec -i -e PGAPPNAME=mdm_source_waiting_refresh "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb; expected_revision bigint;
@@ -246,6 +263,21 @@ END
 $$;
 SQL
 boundary_refresh=$!
+source_waited=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_stat_activity r, pg_catalog.pg_stat_activity w WHERE r.application_name = 'mdm_source_waiting_refresh' AND w.application_name = 'mdm_preboundary_writer' AND w.pid = ANY(pg_catalog.pg_blocking_pids(r.pid)))") == t ]]; then
+        source_waited=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $source_waited != true ]]; then
+    echo 'FAIL: refresh did not wait for the pending source writer' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "UPDATE public.e2e_source_fence_gate SET released = true" >/dev/null
 if ! wait "$preboundary_writer"; then cat "$work_dir/preboundary_writer.log"; exit 1; fi
 boundary_captured=false
 for _ in $(seq 1 600); do
@@ -336,6 +368,7 @@ BEGIN
     END IF;
 END
 $$;
+DROP TABLE public.e2e_source_fence_gate;
 INSERT INTO public.crm_customer VALUES (5, 'Concurrent refresh', 'concurrent@example.test', statement_timestamp());
 CREATE TRIGGER delay_concurrent_output
 BEFORE INSERT OR UPDATE ON mdm_out.customer

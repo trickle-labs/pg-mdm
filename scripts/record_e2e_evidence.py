@@ -20,19 +20,20 @@ if len(sys.argv) != 7:
 container, image, source_revision, database_json, qualification_json, log_path = sys.argv[1:]
 
 source_work = []
-for line in Path(log_path).read_text(encoding="utf-8").splitlines():
-    marker = "PG_MDM_SOURCE_SYNC_TRACE "
-    if marker not in line:
-        continue
-    trace = json.loads(line.split(marker, 1)[1])
-    source_work.append({
-        "entity_name": trace["entity_name"],
-        "stage_timings_ms": trace["stage_timings_ms"],
-        "capture": trace["capture"],
-        "sources": [{"source_name": s["source_name"], "complete_scan": s["complete_scan"],
-                     "present_keys": len(s["keys"]), "deleted_keys": len(s["deleted_keys"])}
-                    for s in trace["sources"]],
-    })
+with Path(log_path).open(encoding="utf-8") as e2e_stream:
+    for line in e2e_stream:
+        marker = "PG_MDM_SOURCE_SYNC_TRACE "
+        if marker not in line:
+            continue
+        trace = json.loads(line.split(marker, 1)[1])
+        source_work.append({
+            "entity_name": trace["entity_name"],
+            "stage_timings_ms": trace["stage_timings_ms"],
+            "capture": trace["capture"],
+            "sources": [{"source_name": s["source_name"], "complete_scan": s["complete_scan"],
+                         "present_keys": len(s["keys"]), "deleted_keys": len(s["deleted_keys"])}
+                        for s in trace["sources"]],
+        })
 
 # Fixed lifecycle ordering includes rolled-back attempts, whose notices remain observable.
 fixture_work = [

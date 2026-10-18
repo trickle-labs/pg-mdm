@@ -40,10 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - shell: bash
+        env:
+          PG_MDM_E2E_EVIDENCE_DIR: ${{ runner.temp }}/e2e-evidence
         run: scripts/run_e2e_tests.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pg_mdm-0.14.1-e2e-log
-          path: ${{ runner.temp }}/e2e.log
+          path: |
+            ${{ runner.temp }}/e2e.log
+            ${{ runner.temp }}/e2e-evidence/
           if-no-files-found: warn
