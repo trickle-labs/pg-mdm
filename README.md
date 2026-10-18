@@ -153,6 +153,10 @@ separate from terminal-output EXACT qualification and affected resolution.
 Synchronizing graph helper tables and checking entity-wide counts still require
 global work.
 
+The [source synchronization evidence](evidence/issue11/README.md) retains key-read
+plans, lifecycle and concurrency checks, and before/after measurements with their
+exact adapter and producer checksums.
+
 The Docker E2E run also executes `tests/incremental_qualification.sql`. It
 measures 30 affected-refresh samples after five warmups at 128 and 2,048
 records, and compares the complete public publication, durable identities,
