@@ -19,6 +19,45 @@ if len(sys.argv) != 7:
 
 container, image, source_revision, database_json, qualification_json, log_path = sys.argv[1:]
 
+source_work = []
+with Path(log_path).open(encoding="utf-8") as e2e_stream:
+    for line in e2e_stream:
+        marker = "PG_MDM_SOURCE_SYNC_TRACE "
+        if marker not in line:
+            continue
+        trace = json.loads(line.split(marker, 1)[1])
+        source_work.append({
+            "entity_name": trace["entity_name"],
+            "stage_timings_ms": trace["stage_timings_ms"],
+            "capture": trace["capture"],
+            "sources": [{"source_name": s["source_name"], "complete_scan": s["complete_scan"],
+                         "present_keys": len(s["keys"]), "deleted_keys": len(s["deleted_keys"])}
+                        for s in trace["sources"]],
+        })
+
+# Fixed lifecycle ordering includes rolled-back attempts, whose notices remain observable.
+fixture_work = [
+    [(s["complete_scan"], s["present_keys"], s["deleted_keys"]) for s in trace["sources"]]
+    for trace in source_work if trace["entity_name"] == "source_sync"
+]
+if fixture_work != [
+    [(True, 2, 0), (True, 1, 0)],       # bootstrap
+    [(False, 0, 0), (False, 0, 0)],     # no change
+    [(False, 1, 1), (False, 0, 0)],     # old/new composite key
+    [(False, 1, 1), (False, 0, 1)],     # insert, soft delete and delete
+    [(False, 1, 0), (False, 1, 0)],     # reactivation
+    [(False, 0, 0), (False, 1, 0)],     # entity-wide overflow, rolled back
+    [(False, 0, 0), (False, 0, 0)],     # unregistered insert/delete cancel
+    [(False, 1, 0), (False, 0, 0)],     # publication failure, rolled back
+    [(False, 1, 0), (False, 0, 0)],     # retry
+    [(True, 3, 0), (True, 1, 0)],       # explicit complete-scan rebuild
+    [(True, 3, 0), (False, 0, 0)],      # resnapshot, sibling still pending
+    [(False, 0, 0), (False, 0, 0)],
+    [(True, 3, 0), (False, 0, 0)],      # gap recovery
+    [(True, 3, 0), (False, 0, 0)],      # full invalidation
+]:
+    raise SystemExit(f"source-key work differs from the lifecycle fixture: {fixture_work}")
+
 
 def run(args):
     return subprocess.run(args, cwd=ROOT, text=True, stdout=subprocess.PIPE,
@@ -86,12 +125,17 @@ for item in qualification["populations"]:
     if set(item) != {
         "population", "measured_samples", "warmup_samples", "elapsed_ms",
         "graph_refresh_ms", "mdm_resolution_ms", "publication_ms", "delta_rows",
+        "source_stage_timings_ms",
     }:
         raise SystemExit("incremental qualification population fields are incomplete")
     if item["measured_samples"] != 30 or item["warmup_samples"] != 5:
         raise SystemExit("incremental qualification sample coverage changed")
     if any(value < 0 for value in item["elapsed_ms"].values()):
         raise SystemExit("incremental qualification elapsed timing is invalid")
+    if set(item["source_stage_timings_ms"]) != {
+        "source_access", "source_capture", "source_scan", "source_sync", "graph_helper_sync", "end_to_end",
+    }:
+        raise SystemExit("source synchronization stage observations are incomplete")
 
 container_info = json.loads(run(["docker", "inspect", container]))[0]
 image_info = json.loads(run(["docker", "image", "inspect", image]))[0]
@@ -153,10 +197,12 @@ report = {
     "retained_log_scope": "Main PostgreSQL script output plus policy qualification output and a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
     "metrics": metrics,
     "incremental_qualification": qualification,
+    "source_sync_work": source_work,
     "inputs": {
         "organization_fixture_sha256": sha256_file(ROOT / "tests/fixtures/organization_domain_v1.json"),
         "e2e_sql_sha256": sha256_file(ROOT / "tests/e2e.sql"),
         "e2e_policy_sql_sha256": sha256_file(ROOT / "tests/e2e_policy.sql"),
+        "source_sync_sql_sha256": sha256_file(ROOT / "tests/source_sync.sql"),
         "restore_sql_sha256": sha256_file(ROOT / "tests/restore.sql"),
         "operating_envelope_sql_sha256": sha256_file(ROOT / "tests/operating_envelope.sql"),
         "incremental_qualification_sql_sha256": sha256_file(

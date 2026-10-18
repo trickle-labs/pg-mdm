@@ -24,6 +24,20 @@ candidate_key=${PG_MDM_CANDIDATE_KEY:-unknown}
 echo "E2E Git HEAD: $source_revision; candidate snapshot: $candidate_key"
 
 cleanup() {
+    if [[ -n ${PG_MDM_E2E_EVIDENCE_DIR:-} ]]; then
+        mkdir -p "$PG_MDM_E2E_EVIDENCE_DIR"
+        if [[ -f "$qualification_json" ]]; then
+            cp "$qualification_json" "$PG_MDM_E2E_EVIDENCE_DIR/incremental-qualification.json"
+        fi
+        if [[ ! -f "$PG_MDM_E2E_EVIDENCE_DIR/docker-e2e-envelope.json" ]]; then
+            docker logs "$container" > "$PG_MDM_E2E_EVIDENCE_DIR/docker-failure.log" 2>&1 || true
+            for e2e_step_log in "$work_dir"/*.log; do
+                if [[ -f "$e2e_step_log" ]]; then
+                    cp "$e2e_step_log" "$PG_MDM_E2E_EVIDENCE_DIR/"
+                fi
+            done
+        fi
+    fi
     if [[ -n ${PG_MDM_E2E_LOG_CAPTURE:-} ]]; then
         docker logs "$container" > "$PG_MDM_E2E_LOG_CAPTURE" 2>&1 || true
         if [[ -f "$qualification_log" ]]; then
@@ -67,6 +81,7 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 \
     -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres \
     -f /tests/e2e.sql 2>&1 | tee "$e2e_log"
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/e2e_policy.sql 2>&1 | tee -a "$e2e_log"
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -f /tests/source_sync.sql 2>&1 | tee -a "$e2e_log"
 docker exec "$container" psql -X -qAt -v ON_ERROR_STOP=1 \
     -v producer_artifact_sha256="$producer_artifact_sha256" -U postgres -d foundation \
     -f /tests/incremental_qualification.sql > "$qualification_json" 2> "$qualification_log" || {
@@ -148,7 +163,8 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
                 'compiler_versions', (SELECT pg_catalog.jsonb_agg(a.compiler_version ORDER BY a.compiler_version)
                     FROM mdm_internal.definition_artifacts a WHERE a.entity_id = e.entity_id),
                 'terminal_consumers', (SELECT count(*) FROM mdm_internal.graph_delta_consumers c
-                    WHERE c.graph_binding_id = (SELECT graph_binding_id FROM mdm_internal.graph_bindings
+                    WHERE c.logical_id NOT LIKE 'records/%'
+                      AND c.graph_binding_id = (SELECT graph_binding_id FROM mdm_internal.graph_bindings
                         WHERE entity_id = e.entity_id ORDER BY graph_generation DESC LIMIT 1)),
                 'output_equal', s.output IS NOT DISTINCT FROM (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(o) ORDER BY o.mdm_id)
                     FROM mdm_out.recompile_canary o))
@@ -179,11 +195,19 @@ current_revision=$(docker exec "$container" psql -X -At -U postgres -d foundatio
 expected_revision=$((current_revision + 1))
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation <<'SQL'
-INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
+-- The marker uses a row trigger, which FULL refresh suppresses.
+ALTER ROLE mdm_test_login SET pg_trickle.refresh_strategy = 'differential';
+SELECT pgtrickle.request_output_delta_resnapshot(c.consumer_id)
+FROM mdm_internal.graph_delta_consumers c JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+JOIN mdm_internal.entities e USING (entity_id)
+WHERE e.entity_name = 'customer' AND c.logical_id = 'records/crm'
+  AND b.graph_generation = (SELECT max(graph_generation) FROM mdm_internal.graph_bindings WHERE entity_id = e.entity_id);
+CREATE TABLE public.e2e_source_fence_gate (released boolean NOT NULL);
+INSERT INTO public.e2e_source_fence_gate VALUES (false);
 CREATE FUNCTION public.delay_release_output()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    -- Give the outer test a deterministic marker for the publication boundary.
+    -- Stop inside source capture, before registration, while the source fence is held.
     IF pg_catalog.current_setting('mdm.e2e_release_waited', true) IS DISTINCT FROM 'on' THEN
         PERFORM pg_catalog.set_config('mdm.e2e_release_waited', 'on', true);
         PERFORM pg_catalog.pg_advisory_xact_lock(718110, 110972);
@@ -192,11 +216,38 @@ BEGIN
     RETURN NEW;
 END
 $$;
-CREATE TRIGGER delay_release_output
-BEFORE INSERT OR UPDATE ON mdm_out.customer
-FOR EACH ROW EXECUTE FUNCTION public.delay_release_output();
+DO $$
+DECLARE source_relation regclass;
+BEGIN
+    SELECT m.relation_oid::regclass INTO STRICT source_relation
+    FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'customer' AND m.logical_id = 'records/crm'
+    ORDER BY b.graph_generation DESC LIMIT 1;
+    EXECUTE format('CREATE TRIGGER delay_release_output BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION public.delay_release_output()', source_relation);
+END
+$$;
 SQL
-docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
+docker exec -e PGAPPNAME=mdm_preboundary_writer "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "BEGIN; INSERT INTO public.crm_customer VALUES (3, 'Before boundary', 'before@example.test', statement_timestamp());
+        SELECT pg_catalog.pg_advisory_xact_lock(718110, 110971);
+        DO 'BEGIN WHILE NOT (SELECT released FROM public.e2e_source_fence_gate) LOOP PERFORM pg_catalog.pg_sleep(0.05); END LOOP; END'; COMMIT;" \
+    >"$work_dir/preboundary_writer.log" 2>&1 &
+preboundary_writer=$!
+preboundary_captured=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND classid = 718110::oid AND objid = 110971::oid AND objsubid = 2 AND granted)") == t ]]; then
+        preboundary_captured=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $preboundary_captured != true ]]; then
+    echo 'FAIL: pending source writer did not reach its pre-boundary marker' >&2
+    exit 1
+fi
+docker exec -i -e PGAPPNAME=mdm_source_waiting_refresh "$container" psql -X -v ON_ERROR_STOP=1 -v expected_revision="$expected_revision" -U mdm_test_login -d foundation <<'SQL' >"$work_dir/boundary_refresh.log" 2>&1 &
 SET ROLE mdm_administrator;
 DO $$
 DECLARE result jsonb; expected_revision bigint;
@@ -214,6 +265,22 @@ END
 $$;
 SQL
 boundary_refresh=$!
+source_waited=false
+for _ in $(seq 1 600); do
+    if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
+        -c "SELECT EXISTS (SELECT FROM pg_catalog.pg_stat_activity r, pg_catalog.pg_stat_activity w WHERE r.application_name = 'mdm_source_waiting_refresh' AND w.application_name = 'mdm_preboundary_writer' AND w.pid = ANY(pg_catalog.pg_blocking_pids(r.pid)))") == t ]]; then
+        source_waited=true
+        break
+    fi
+    sleep 0.1
+done
+if [[ $source_waited != true ]]; then
+    echo 'FAIL: refresh did not wait for the pending source writer' >&2
+    exit 1
+fi
+docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
+    -c "UPDATE public.e2e_source_fence_gate SET released = true" >/dev/null
+if ! wait "$preboundary_writer"; then cat "$work_dir/preboundary_writer.log"; exit 1; fi
 boundary_captured=false
 for _ in $(seq 1 600); do
     if [[ $(docker exec "$container" psql -X -At -U postgres -d foundation \
@@ -278,7 +345,33 @@ BEGIN
     END IF;
 END
 $$;
-DROP TRIGGER delay_release_output ON mdm_out.customer;
+DO $$
+DECLARE source_relation regclass; expected_keys jsonb; ledger_keys jsonb; member_keys jsonb;
+BEGIN
+    SELECT m.relation_oid::regclass INTO STRICT source_relation
+    FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b USING (graph_binding_id)
+    JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'customer' AND m.logical_id = 'records/crm'
+    ORDER BY b.graph_generation DESC LIMIT 1;
+    EXECUTE format('DROP TRIGGER delay_release_output ON %s', source_relation);
+    SELECT jsonb_agg(encode(pgtrickle.encode_row_id_v2('SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id)), 'hex')
+        ORDER BY encode(pgtrickle.encode_row_id_v2('SCAN_KEY', ROW(e.entity_id, s.source_identity_id, c.id)), 'hex'))
+    INTO expected_keys FROM public.crm_customer c CROSS JOIN mdm_internal.entities e
+    JOIN mdm_internal.source_identities s USING (entity_id)
+    WHERE e.entity_name = 'customer' AND s.source_name = 'crm';
+    SELECT jsonb_agg(encode(r.source_record_key, 'hex') ORDER BY encode(r.source_record_key, 'hex'))
+    INTO ledger_keys FROM mdm_internal.source_records r JOIN mdm_internal.entities e USING (entity_id)
+    WHERE e.entity_name = 'customer' AND r.active;
+    SELECT jsonb_agg(source_id->>'source_record_key' ORDER BY source_id->>'source_record_key')
+    INTO member_keys FROM mdm_out.customer_members WHERE active;
+    IF ledger_keys IS DISTINCT FROM expected_keys OR member_keys IS DISTINCT FROM expected_keys THEN
+        RAISE EXCEPTION 'source-capture fence lost concurrent source keys: expected %, registry %, members %',
+            expected_keys, ledger_keys, member_keys;
+    END IF;
+END
+$$;
+DROP TABLE public.e2e_source_fence_gate;
+ALTER ROLE mdm_test_login RESET pg_trickle.refresh_strategy;
 INSERT INTO public.crm_customer VALUES (5, 'Concurrent refresh', 'concurrent@example.test', statement_timestamp());
 CREATE TRIGGER delay_concurrent_output
 BEFORE INSERT OR UPDATE ON mdm_out.customer

@@ -1,0 +1,29 @@
+{
+  "baseline": {
+    "source_sync_input_key_counts": [
+      128,
+      2048
+    ],
+    "enumeration_or_preflight_rows": [
+      128.0,
+      2048.0
+    ]
+  },
+  "candidate": {
+    "source_sync_input_key_counts": [
+      128,
+      1,
+      1920,
+      1
+    ],
+    "enumeration_or_preflight_rows": [
+      0.0,
+      128.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+}

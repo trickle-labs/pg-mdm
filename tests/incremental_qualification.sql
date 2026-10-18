@@ -26,6 +26,7 @@ CREATE TABLE public.incremental_qualification_results (
     graph_refresh_ms bigint NOT NULL,
     mdm_resolution_ms bigint NOT NULL,
     publication_ms bigint NOT NULL,
+    stage_timings_ms jsonb NOT NULL,
     delta_rows integer NOT NULL,
     PRIMARY KEY (population, sample)
 );
@@ -48,6 +49,7 @@ ALTER ROLE mdm_test_login SET auto_explain.log_timing = 'off';
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+SET mdm.trace_graph_deltas = 'on';
 DO $block$
 DECLARE
     created record;
@@ -102,6 +104,14 @@ BEGIN
             expected, actual;
     END IF;
     RAISE NOTICE 'spi trace population=128 pid=% result=%', pg_catalog.pg_backend_pid(), result;
+    UPDATE public.incremental_qualification_source SET display_name = 'Qualification trace 128' WHERE id = 1;
+    result := mdm.refresh('incremental_qualification', 'ALLOW');
+    IF pg_catalog.jsonb_build_object('strategy', result->'resolver_strategy',
+        'affected', result->'affected_records', 'lag', result->'delta_lag')
+        IS DISTINCT FROM '{"strategy":"affected","affected":1,"lag":0}'::jsonb THEN
+        RAISE EXCEPTION 'isolated 128-record source trace failed: %', result;
+    END IF;
+    PERFORM mdm.refresh('incremental_qualification', 'ALLOW');
 END
 $block$;
 RESET ROLE;
@@ -249,7 +259,7 @@ BEGIN
 
     INSERT INTO public.incremental_qualification_results (
         population, sample, measured, elapsed_ms, graph_refresh_ms,
-        mdm_resolution_ms, publication_ms, delta_rows)
+        mdm_resolution_ms, publication_ms, stage_timings_ms, delta_rows)
     VALUES (
         sample_population,
         sample_number,
@@ -258,6 +268,7 @@ BEGIN
         (result #>> '{stage_timings_ms,graph_refresh}')::bigint,
         (result #>> '{stage_timings_ms,mdm_resolution}')::bigint,
         (result #>> '{stage_timings_ms,publication}')::bigint,
+        result->'stage_timings_ms',
         (result->>'delta_row_count')::integer);
 END
 $function$;
@@ -303,6 +314,14 @@ BEGIN
         RAISE EXCEPTION 'qualification population growth mismatch: %', result;
     END IF;
     RAISE NOTICE 'spi trace population=2048 pid=% result=%', pg_catalog.pg_backend_pid(), result;
+    UPDATE public.incremental_qualification_source SET display_name = 'Qualification trace 2048' WHERE id = 1;
+    result := mdm.refresh('incremental_qualification', 'ALLOW');
+    IF pg_catalog.jsonb_build_object('strategy', result->'resolver_strategy',
+        'affected', result->'affected_records', 'lag', result->'delta_lag')
+        IS DISTINCT FROM '{"strategy":"affected","affected":1,"lag":0}'::jsonb THEN
+        RAISE EXCEPTION 'isolated 2048-record source trace failed: %', result;
+    END IF;
+    PERFORM mdm.refresh('incremental_qualification', 'ALLOW');
 END
 $block$;
 RESET ROLE;
@@ -451,10 +470,24 @@ SELECT pg_catalog.jsonb_build_object(
                        'publication_ms', pg_catalog.jsonb_build_object(
                            'p95', pg_catalog.percentile_cont(0.95) WITHIN GROUP (ORDER BY publication_ms)
                                FILTER (WHERE measured)),
+                       'source_stage_timings_ms', (
+                           SELECT pg_catalog.jsonb_object_agg(stage, timings)
+                           FROM (
+                               SELECT key AS stage, pg_catalog.jsonb_build_object(
+                                   'p50', pg_catalog.percentile_cont(0.50) WITHIN GROUP (ORDER BY value::numeric),
+                                   'p95', pg_catalog.percentile_cont(0.95) WITHIN GROUP (ORDER BY value::numeric),
+                                   'max', max(value::numeric)) AS timings
+                               FROM public.incremental_qualification_results samples
+                               CROSS JOIN LATERAL pg_catalog.jsonb_each_text(samples.stage_timings_ms)
+                               WHERE samples.population = r.population AND samples.measured
+                                 AND key IN ('source_access', 'source_capture', 'source_scan',
+                                     'source_sync', 'graph_helper_sync', 'end_to_end')
+                               GROUP BY key
+                           ) stages),
                        'delta_rows', pg_catalog.jsonb_build_object(
                            'min', min(delta_rows) FILTER (WHERE measured),
                            'max', max(delta_rows) FILTER (WHERE measured))) AS summary
-              FROM public.incremental_qualification_results
+              FROM public.incremental_qualification_results r
              GROUP BY population
         ) AS grouped),
     'additional_workloads', (SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(w) ORDER BY w.workload) FROM public.incremental_qualification_workloads w),
