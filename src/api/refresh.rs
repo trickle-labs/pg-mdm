@@ -105,6 +105,7 @@ struct DeltaConsumer {
     batch_count: usize,
     row_count: usize,
     saw_full_invalidation: bool,
+    observed_batches: Vec<Value>,
     affected_records: BTreeSet<Uuid>,
     lag: i64,
 }
@@ -1056,6 +1057,7 @@ fn ensure_delta_consumers(
             batch_count: 0,
             row_count: 0,
             saw_full_invalidation: false,
+            observed_batches: Vec::new(),
             affected_records: BTreeSet::new(),
             lag: status.lag,
         };
@@ -1175,6 +1177,15 @@ fn read_delta_batches(
                 &consumer.contract_digest,
                 consumer.row_identity_version,
             )?;
+            consumer.observed_batches.push(json!({
+                "batch_token": batch.token,
+                "mode": batch.mode,
+                "row_count": batch.row_count,
+                "rows_inserted": batch.rows_inserted,
+                "rows_deleted": batch.rows_deleted,
+                "output_contract_digest": hex(&batch.contract_digest),
+                "row_identity_version": batch.row_identity_version
+            }));
             let payload = client
                 .select(
                     &format!(
@@ -1438,10 +1449,10 @@ fn load_pair_decisions(
     let (max_rows, fetch_limit) =
         pair_evidence_fetch_limit(max_candidate_pairs, context.entity.matches.len())?;
     let query = format!(
-        "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key, rule, evidence_group, class, score, comparator, comparator_version, left_value_digest, right_value_digest FROM {}{} ORDER BY left_sort_key, right_sort_key, rule LIMIT $1::bigint",
+        "SELECT evidence.left_source_record_id, evidence.right_source_record_id, evidence.left_sort_key, evidence.right_sort_key, evidence.rule, evidence.evidence_group, evidence.class, evidence.score, evidence.comparator, evidence.comparator_version, evidence.left_value_digest, evidence.right_value_digest FROM {} AS evidence{} ORDER BY evidence.left_sort_key, evidence.right_sort_key, evidence.rule LIMIT $1::bigint",
         context.evidence_relation,
         scope.map_or_else(String::new, |_| {
-            " WHERE left_source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::pg_catalog.jsonb)) OR right_source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::pg_catalog.jsonb))".into()
+            " WHERE evidence.left_source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::pg_catalog.jsonb)) OR evidence.right_source_record_id IN (SELECT value::uuid FROM pg_catalog.jsonb_array_elements_text($2::pg_catalog.jsonb))".into()
         })
     );
     let mut query_args = vec![fetch_limit.into()];
@@ -2624,6 +2635,85 @@ fn persist_refresh_inner(
         let graph_refresh_ms = graph_refresh_started.elapsed().as_millis() as u64;
         if delta_admitted {
             read_delta_batches(client, &mut delta)?;
+            if client
+                .select(
+                    "SELECT pg_catalog.current_setting('mdm.trace_graph_deltas', true) = 'on'",
+                    Some(1),
+                    &[],
+                )
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .first()
+                .get::<bool>(1)
+                .map_err(|error| MdmError::Spi(error.to_string()))?
+                .unwrap_or(false)
+            {
+                let members = client
+                    .select(
+                        "SELECT logical_id, relation_oid::text, contract->>'refresh_mode', COALESCE(contract->>'defining_query', contract->>'query') FROM mdm_internal.graph_members WHERE graph_binding_id = $1::pg_catalog.uuid ORDER BY topological_ordinal",
+                        None,
+                        &[context.graph_binding_id.clone().into()],
+                    )
+                    .map_err(|error| MdmError::Spi(error.to_string()))?;
+                let graph_nodes = members
+                    .into_iter()
+                    .map(|row| {
+                        let logical_id = row.get::<String>(1).unwrap_or(None).unwrap_or_default();
+                        let relation_oid = row.get::<String>(2).unwrap_or(None).unwrap_or_default();
+                        let requested_mode = row.get::<String>(3).unwrap_or(None);
+                        let defining_sql = row.get::<String>(4).unwrap_or(None);
+                        let result = graph.node_results.get(&relation_oid);
+                        json!({
+                            "logical_id": logical_id,
+                            "relation_oid": relation_oid,
+                            "requested_mode": requested_mode,
+                            "effective_mode": result.and_then(|value| value.get("action")),
+                            "defining_sql": defining_sql,
+                            "result": result
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let producer_version = client
+                    .select(
+                        "SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pg_trickle'",
+                        Some(1),
+                        &[],
+                    )
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .first()
+                    .get::<String>(1)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?;
+                let producer_artifact_sha256 = client
+                    .select(
+                        "SELECT pg_catalog.current_setting('mdm.trace_producer_artifact_sha256', true)",
+                        Some(1),
+                        &[],
+                    )
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .first()
+                    .get::<String>(1)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?;
+                let trace = json!({
+                    "artifact_id": context.artifact_id,
+                    "artifact_digest": hex(&context.artifact_digest),
+                    "graph_binding_id": context.graph_binding_id,
+                    "graph_digest": hex(&context.graph_digest),
+                    "producer": {
+                        "extension": "pg_trickle",
+                        "version": producer_version,
+                        "package_sha256": producer_artifact_sha256
+                    },
+                    "graph_nodes": graph_nodes,
+                    "terminal_consumers": delta.iter().map(|consumer| json!({
+                        "logical_id": consumer.logical_id,
+                        "consumer_id": consumer.consumer_id.to_string(),
+                        "acknowledged_token": consumer.acknowledged_token,
+                        "log_head": consumer.log_head,
+                        "state": consumer.state,
+                        "batches": consumer.observed_batches
+                    })).collect::<Vec<_>>()
+                });
+                pgrx::notice!("PG_MDM_GRAPH_DELTA_TRACE {}", trace);
+            }
         }
         let control_changes = if delta_admitted {
             load_control_changes(client, &context)?
@@ -2638,7 +2728,24 @@ fn persist_refresh_inner(
         let resolution_started = Instant::now();
         let limits = load_limits(&context);
         limits.validate()?;
+        let max_candidate_pairs = context
+            .entity
+            .limits
+            .get("max_candidate_pairs")
+            .map(|value| crate::semantics::validate_limit_value("max_candidate_pairs", value))
+            .transpose()?
+            .unwrap_or_else(|| crate::semantics::candidate_limits().max_candidate_pairs);
+        validate_graph_block_limits(client, &context)?;
         let (active_record_count, candidate_pair_count) = load_global_counts(client, &context)?;
+        if let Some(candidate_pairs) = candidate_pair_count
+            && candidate_pairs > max_candidate_pairs
+        {
+            return Err(MdmError::ResolverLimit {
+                resource: "max_candidate_pairs",
+                observed: candidate_pairs,
+                limit: max_candidate_pairs,
+            });
+        }
         if active_record_count > limits.max_active_records {
             return Err(MdmError::ResolverLimit {
                 resource: "max_active_records",
@@ -3626,6 +3733,58 @@ struct AffectedScope {
     cannot_links: Vec<DecisionEdge>,
     pair_decisions: Vec<crate::pair::PairDecision>,
     selected: BTreeSet<Uuid>,
+}
+
+fn validate_graph_block_limits(client: &SpiClient<'_>, context: &Context) -> Result<(), MdmError> {
+    let members = client
+        .select(
+            "SELECT relation_name FROM mdm_internal.graph_members WHERE graph_binding_id = $1::pg_catalog.uuid AND logical_id LIKE 'block-overflow/%' ORDER BY logical_id",
+            None,
+            &[context.graph_binding_id.clone().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    for member in members {
+        let relation = member
+            .get::<String>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?
+            .ok_or_else(|| MdmError::GraphContract("block overflow relation is NULL".into()))?;
+        if !relation.starts_with("mdm_graph.") || relation.contains(';') {
+            return Err(MdmError::GraphContract(
+                "block overflow relation is outside mdm_graph".into(),
+            ));
+        }
+        let overflow = client
+            .select(
+                &format!(
+                    "SELECT block_records, max_block_records FROM {relation} ORDER BY channel_id, block_key LIMIT 1"
+                ),
+                Some(1),
+                &[],
+            )
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if overflow.is_empty() {
+            continue;
+        }
+        let row = overflow.first();
+        let observed = row
+            .get::<i64>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        let limit = row
+            .get::<i64>(2)
+            .map_err(|error| MdmError::Spi(error.to_string()))?;
+        if let (Some(observed), Some(limit)) = (observed, limit) {
+            return Err(MdmError::ResolverLimit {
+                resource: "max_block_records",
+                observed: usize::try_from(observed).map_err(|_| {
+                    MdmError::ResolverInvalid("block record count is negative".into())
+                })?,
+                limit: usize::try_from(limit).map_err(|_| {
+                    MdmError::ResolverInvalid("block record limit is negative".into())
+                })?,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn load_global_counts(

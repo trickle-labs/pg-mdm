@@ -1,4 +1,4 @@
-use pgrx::datum::{Interval, TimestampWithTimeZone};
+use pgrx::datum::{AnyElement, Interval, TimestampWithTimeZone};
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
 use pgrx::{Internal, JsonB, Uuid};
@@ -598,7 +598,7 @@ pub(crate) fn persist_set_policy_binding_state(request: Internal) -> JsonB {
 )]
 pub(crate) fn set_case_controls(
     case_key: i64,
-    assigned_queue: Option<String>,
+    assigned_queue: Option<AnyElement>,
     due_at: Option<TimestampWithTimeZone>,
     escalation_level: i32,
     manual_assignment_protected: bool,
@@ -610,7 +610,11 @@ pub(crate) fn set_case_controls(
             "persist_set_case_controls",
             ControlRequest {
                 case_key,
-                assigned_queue,
+                assigned_queue: assigned_queue.as_ref().map(|name| {
+                    // SAFETY: the SQL signature fixes this non-NULL argument to PostgreSQL name.
+                    let name = unsafe { &*name.datum().cast_mut_ptr::<pg_sys::NameData>() };
+                    pg_sys::name_data_to_str(name).to_owned()
+                }),
                 due_at,
                 escalation_level,
                 manual_assignment_protected,
@@ -661,7 +665,7 @@ pub(crate) fn persist_set_case_controls(request: Internal) -> JsonB {
         Spi::connect_mut(|client| {
             let row = client
                 .select(
-                    "SELECT c.entity_name::text, c.status, c.assigned_queue::text, c.due_at::text, c.escalation_level, c.manual_assignment_protected, c.action_revision, e.execution_role_name, b.role_oid FROM mdm_steward.policy_cases_v1 c JOIN mdm_internal.entities e ON e.entity_name = c.entity_name LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE c.case_key = $1 FOR UPDATE OF c",
+                    "SELECT c.entity_name::text, c.status, c.assigned_queue::text, c.due_at, c.escalation_level, c.manual_assignment_protected, c.action_revision, e.execution_role_name, b.role_oid FROM mdm_steward.policy_cases_v1 c JOIN mdm_internal.entities e ON e.entity_name = c.entity_name LEFT JOIN mdm_internal.execution_role_bindings b ON b.entity_id = e.entity_id WHERE c.case_key = $1 FOR UPDATE OF c",
                     Some(1),
                     &[request.case_key.into()],
                 )
@@ -694,7 +698,7 @@ pub(crate) fn persist_set_case_controls(request: Internal) -> JsonB {
                 .get::<String>(3)
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
             let old_due_at = row
-                .get::<String>(4)
+                .get::<TimestampWithTimeZone>(4)
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
             let old_level = row
                 .get::<i32>(5)
@@ -718,9 +722,8 @@ pub(crate) fn persist_set_case_controls(request: Internal) -> JsonB {
                     "assigned_queue must be a non-empty name".into(),
                 ));
             }
-            let due_text = request.due_at.as_ref().map(|value| value.to_iso_string());
             let changed = old_queue != request.assigned_queue
-                || old_due_at != due_text
+                || old_due_at != request.due_at
                 || old_level != request.escalation_level
                 || old_protected != request.manual_assignment_protected;
             let revision = if changed {

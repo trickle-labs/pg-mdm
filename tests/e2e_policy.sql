@@ -70,7 +70,7 @@ GRANT EXECUTE ON FUNCTION mdm_admin.backfill_policy_case_opened_at(bigint, times
     TO mdm_administrator, mdm_legacy_administrator;
 GRANT USAGE ON SCHEMA mdm_steward TO mdm_legacy_administrator;
 GRANT USAGE ON SCHEMA mdm_steward TO mdm_output_reader;
-GRANT SELECT ON mdm_steward.policy_cases_v1 TO mdm_output_reader;
+GRANT SELECT ON mdm_steward.policy_cases_v1 TO mdm_output_reader, mdm_legacy_administrator;
 
 SELECT count(*) = 2 AS legacy_unknown_open,
        min(case_key) AS legacy_case_key,
@@ -1110,9 +1110,12 @@ FROM mdm_steward.set_case_controls(
 )
 \gset human_noop_
 SELECT :human_noop_action_revision = :human_revision
-   AND (SELECT action_revision = :human_revision
-               AND manual_assignment_protected = :'human_protected'::boolean
+   AND (SELECT pg_catalog.jsonb_build_object(
+            'case_key', case_key, 'assigned_queue', assigned_queue, 'due_at', due_at,
+            'escalation_level', escalation_level, 'action_revision', action_revision,
+            'manual_assignment_protected', manual_assignment_protected)
         FROM mdm_steward.policy_cases_v1 WHERE case_key = :human_case_key)
+       = (SELECT pg_catalog.to_jsonb(r) FROM e2e_policy_human_before r)
    AS human_control_noop_ok
 \gset
 \if :human_control_noop_ok

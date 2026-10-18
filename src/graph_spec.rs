@@ -9,7 +9,7 @@ use crate::error::MdmError;
 use crate::semantics;
 use crate::source_record::quote_identifier;
 
-pub const COMPILER_VERSION: i32 = 10;
+pub const COMPILER_VERSION: i32 = 11;
 pub const ARTIFACT_FORMAT_VERSION: i32 = 1;
 
 fn node_with_refresh_mode(
@@ -370,26 +370,59 @@ fn immutable_text_join(values: &[String]) -> String {
     parts.join(" || ")
 }
 
-fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
-    let mut joins = Vec::new();
+fn candidate_evidence_column(alias: &str, side: &str, field: &str, attribute: &str) -> String {
+    format!(
+        "{alias}.{}",
+        quote_identifier(&format!("{side}_evidence_{field}_{attribute}"))
+    )
+}
+
+fn evidence_rule_expressions(
+    rule: &MatchRule,
+    entity_name: &str,
+    alias: &str,
+) -> (String, String, String, String, String) {
+    evidence_rule_expressions_with_columns(rule, entity_name, |side, field, attribute| {
+        candidate_evidence_column(alias, side, field, attribute)
+    })
+}
+
+fn joined_evidence_rule_expressions(
+    rule: &MatchRule,
+    entity_name: &str,
+    fields: &[String],
+) -> (String, String, String, String, String) {
+    evidence_rule_expressions_with_columns(rule, entity_name, |side, field, attribute| {
+        let index = fields
+            .iter()
+            .position(|candidate| candidate == field)
+            .expect("every rule field has a normalized join");
+        format!("evidence_{side}_{index}.{attribute}")
+    })
+}
+
+fn evidence_rule_expressions_with_columns(
+    rule: &MatchRule,
+    entity_name: &str,
+    column: impl Fn(&str, &str, &str) -> String,
+) -> (String, String, String, String, String) {
     let mut usable = Vec::new();
     let mut exact_equal = Vec::new();
     let mut left_values = Vec::new();
     let mut right_values = Vec::new();
-    for (index, field) in rule.fields.iter().enumerate() {
-        let left = format!("l{index}");
-        let right = format!("r{index}");
-        let field_sql = sql_text(field);
-        let relation = normalized_relation(field);
-        joins.push(format!(
-            "LEFT JOIN {relation} {left} ON {left}.source_record_id = p.left_source_record_id AND {left}.field_name = {field_sql}\nLEFT JOIN {relation} {right} ON {right}.source_record_id = p.right_source_record_id AND {right}.field_name = {field_sql}"
-        ));
+    for field in &rule.fields {
+        let left_state = column("left", field, "state");
+        let left_bytes = column("left", field, "canonical_bytes");
+        let left_normalized = column("left", field, "normalized");
+        let right_state = column("right", field, "state");
+        let right_bytes = column("right", field, "canonical_bytes");
+        let right_normalized = column("right", field, "normalized");
         usable.push(format!(
-            "{left}.state = 'value' AND {right}.state = 'value' AND {left}.canonical_bytes IS NOT NULL AND {right}.canonical_bytes IS NOT NULL"
+            "{left_state} = 'value' AND {right_state} = 'value' AND {left_bytes} IS NOT NULL AND {right_bytes} IS NOT NULL"
         ));
-        exact_equal.push(format!("{left}.canonical_bytes = {right}.canonical_bytes"));
-        left_values.push(format!("{left}.normalized"));
-        right_values.push(format!("{right}.normalized"));
+        exact_equal.push(format!("{left_bytes} = {right_bytes}"));
+        left_values.push(left_normalized);
+        right_values.push(right_normalized);
     }
     let usable = usable.join(" AND ");
     let exact_equal = exact_equal.join(" AND ");
@@ -419,42 +452,96 @@ fn evidence_rule_sql(rule: &MatchRule, entity_name: &str) -> String {
     } else {
         score
     };
+    (usable, class, score, left_text, right_text)
+}
+
+fn evidence_value_column(rule_index: usize, attribute: &str) -> String {
+    quote_identifier(&format!("evidence_rule_{rule_index}_{attribute}"))
+}
+
+fn candidate_evidence_result_columns(rules: &[MatchRule], entity_name: &str) -> Vec<String> {
+    candidate_evidence_result_columns_with(rules, |rule| {
+        evidence_rule_expressions(rule, entity_name, "candidate")
+    })
+}
+
+fn joined_evidence_result_columns(
+    rules: &[MatchRule],
+    entity_name: &str,
+    fields: &[String],
+) -> Vec<String> {
+    candidate_evidence_result_columns_with(rules, |rule| {
+        joined_evidence_rule_expressions(rule, entity_name, fields)
+    })
+}
+
+fn candidate_evidence_result_columns_with(
+    rules: &[MatchRule],
+    mut expressions: impl FnMut(&MatchRule) -> (String, String, String, String, String),
+) -> Vec<String> {
+    let mut columns = Vec::new();
+    for (index, rule) in rules.iter().enumerate() {
+        let (usable, class, score, left_text, right_text) = expressions(rule);
+        columns.push(format!(
+            "{class} AS {}",
+            evidence_value_column(index, "class")
+        ));
+        columns.push(format!(
+            "CASE WHEN {usable} THEN {score} ELSE NULL::smallint END AS {}",
+            evidence_value_column(index, "score")
+        ));
+        columns.push(format!(
+            "CASE WHEN {usable} THEN mdm_graph.evidence_digest({left_text}) ELSE NULL::bytea END AS {}",
+            evidence_value_column(index, "left_value_digest")
+        ));
+        columns.push(format!(
+            "CASE WHEN {usable} THEN mdm_graph.evidence_digest({right_text}) ELSE NULL::bytea END AS {}",
+            evidence_value_column(index, "right_value_digest")
+        ));
+    }
+    columns
+}
+
+fn evidence_rule_sql(rule: &MatchRule, rule_index: usize, pair_relation: &str) -> String {
     format!(
-        "SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, {rule}::text AS rule, {group}::text AS evidence_group, {class} AS class, CASE WHEN {usable} THEN {score} ELSE NULL::smallint END AS score, {comparator}::text AS comparator, {version}::smallint AS comparator_version, CASE WHEN {usable} THEN mdm_graph.evidence_digest({left_text}) ELSE NULL::bytea END AS left_value_digest, CASE WHEN {usable} THEN mdm_graph.evidence_digest({right_text}) ELSE NULL::bytea END AS right_value_digest\nFROM {pairs} p\n{}",
-        joins.join("\n"),
+        "SELECT p.left_source_record_id, p.right_source_record_id, p.left_sort_key, p.right_sort_key, {rule}::text AS rule, {group}::text AS evidence_group, p.{class} AS class, p.{score} AS score, {comparator}::text AS comparator, {version}::smallint AS comparator_version, p.{left_digest} AS left_value_digest, p.{right_digest} AS right_value_digest\nFROM {pairs} AS p",
         rule = sql_text(&rule.name),
         group = sql_text(&rule.evidence_group),
-        class = class,
-        score = score,
+        class = evidence_value_column(rule_index, "class"),
+        score = evidence_value_column(rule_index, "score"),
         comparator =
             sql_text(crate::comparators::comparator_name(&rule.comparison).unwrap_or("unknown_v1")),
         version = crate::comparators::comparator_version(&rule.comparison).unwrap_or(1),
-        pairs = node_ref(&format!("pairs/{entity_name}")),
-        usable = usable,
-        left_text = left_text,
-        right_text = right_text,
+        left_digest = evidence_value_column(rule_index, "left_value_digest"),
+        right_digest = evidence_value_column(rule_index, "right_value_digest"),
+        pairs = pair_relation,
     )
 }
 
-fn pair_evidence_sql_with_relation(
-    entity_name: &str,
-    rules: &[MatchRule],
-    fallback_relation: &str,
-) -> String {
+fn pair_evidence_sql_with_relation(rules: &[MatchRule], pair_relation: &str) -> String {
     if rules.is_empty() {
         return format!(
-            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, NULL::text AS rule, NULL::text AS evidence_group, NULL::text AS class, NULL::smallint AS score, NULL::text AS comparator, NULL::smallint AS comparator_version, NULL::bytea AS left_value_digest, NULL::bytea AS right_value_digest FROM {fallback_relation} AS empty WHERE false"
+            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key, NULL::text AS rule, NULL::text AS evidence_group, NULL::text AS class, NULL::smallint AS score, NULL::text AS comparator, NULL::smallint AS comparator_version, NULL::bytea AS left_value_digest, NULL::bytea AS right_value_digest FROM {pair_relation} AS empty WHERE false",
         );
     }
     rules
         .iter()
-        .map(|rule| evidence_rule_sql(rule, entity_name))
+        .enumerate()
+        .map(|(index, rule)| evidence_rule_sql(rule, index, pair_relation))
         .collect::<Vec<_>>()
         .join("\nUNION ALL\n")
 }
 
+pub fn pair_evidence_sql_from_relation(rules: &[MatchRule], pair_relation: &str) -> String {
+    pair_evidence_sql_with_relation(rules, pair_relation)
+}
+
 pub fn pair_evidence_sql(entity_name: &str, rules: &[MatchRule]) -> String {
-    pair_evidence_sql_with_relation(entity_name, rules, "pg_catalog.pg_class")
+    pair_evidence_sql_with_relation(rules, &node_ref(&format!("pairs/{entity_name}")))
+}
+
+fn candidate_evidence_sql(entity_name: &str, rules: &[MatchRule]) -> String {
+    pair_evidence_sql_with_relation(rules, &node_ref(&format!("pairs/{entity_name}")))
 }
 
 fn block_relation(channel: &CandidateChannel) -> String {
@@ -463,6 +550,14 @@ fn block_relation(channel: &CandidateChannel) -> String {
 
 fn stats_relation(channel: &CandidateChannel) -> String {
     node_ref(&format!("block-stats/{}", channel.channel_id))
+}
+
+fn block_overflow_relation(channel: &CandidateChannel) -> String {
+    node_ref(&format!("block-overflow/{}", channel.channel_id))
+}
+
+fn candidate_result_relation(entity_name: &str) -> String {
+    node_ref(&format!("candidate-set/{entity_name}"))
 }
 
 fn pair_stats_relation(entity_name: &str) -> String {
@@ -562,7 +657,7 @@ pub fn candidate_block_overflow_sql(
     )
 }
 
-fn candidate_pairs_sql_with_relation(
+fn candidate_pair_source_sql_with_relation(
     channels: &[CandidateChannel],
     limits: &crate::candidate::CandidateLimits,
     fallback_relation: &str,
@@ -570,28 +665,164 @@ fn candidate_pairs_sql_with_relation(
     let pairs = channels
         .iter()
         .map(|channel| {
-            let relation = block_relation(channel);
+            let blocks = block_relation(channel);
             let stats = stats_relation(channel);
-            let dedupe = if channel.kind == ChannelKind::Token {
-                "\nGROUP BY l.source_record_id, r.source_record_id, l.source_sort_key, r.source_sort_key"
-            } else {
-                ""
-            };
+            let overflow = block_overflow_relation(channel);
             format!(
-                "SELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {relation} l\nJOIN {stats} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN {relation} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= {limit}{dedupe}",
+                "SELECT '{channel_id}'::text AS candidate_channel, l.block_key::text AS candidate_block_key, l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM {blocks} l\nJOIN {stats} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN {blocks} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nLEFT JOIN {overflow} AS overflow ON overflow.channel_id = l.channel_id AND overflow.block_key = l.block_key\nWHERE s.block_records <= {limit} AND overflow.channel_id IS NULL",
+                channel_id = channel.channel_id.replace('\'', "''"),
                 limit = limits.max_block_records,
             )
         })
         .collect::<Vec<_>>();
     if pairs.is_empty() {
         return format!(
-            "SELECT NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key FROM {fallback_relation} AS empty WHERE false"
+            "SELECT NULL::text AS candidate_channel, NULL::text AS candidate_block_key, NULL::uuid AS left_source_record_id, NULL::uuid AS right_source_record_id, NULL::bytea AS left_sort_key, NULL::bytea AS right_sort_key FROM {fallback_relation} AS empty WHERE false"
         );
     }
+    pairs.join("\nUNION ALL\n")
+}
+
+fn candidate_evidence_fields(rules: &[MatchRule]) -> Vec<String> {
+    rules
+        .iter()
+        .flat_map(|rule| rule.fields.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn candidate_evidence_attributes() -> [&'static str; 3] {
+    ["state", "normalized", "canonical_bytes"]
+}
+
+fn candidate_set_schema() -> Value {
+    json!({
+        "left_source_record_id":"uuid",
+        "right_source_record_id":"uuid",
+        "left_sort_key":"bytea",
+        "right_sort_key":"bytea"
+    })
+}
+
+fn candidate_set_sql(entity_name: &str) -> String {
+    let source = node_ref(&format!("candidate-raw/{entity_name}"));
     format!(
-        "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\n{}\n) AS candidate_pairs\nGROUP BY 1, 2, 3, 4",
-        pairs.join("\nUNION ALL\n")
+        "SELECT candidate.left_source_record_id, candidate.right_source_record_id, pg_catalog.min(candidate.left_sort_key) AS left_sort_key, pg_catalog.min(candidate.right_sort_key) AS right_sort_key\nFROM {source} AS candidate\nGROUP BY candidate.left_source_record_id, candidate.right_source_record_id"
     )
+}
+
+fn candidate_pair_schema(fields: &[String], rules: &[MatchRule]) -> Value {
+    let mut schema = serde_json::Map::new();
+    for (name, kind) in [
+        ("left_source_record_id", "uuid"),
+        ("right_source_record_id", "uuid"),
+        ("left_sort_key", "bytea"),
+        ("right_sort_key", "bytea"),
+    ] {
+        schema.insert(name.into(), json!(kind));
+    }
+    for field in fields {
+        for side in ["left", "right"] {
+            for attribute in candidate_evidence_attributes() {
+                let kind = if attribute == "canonical_bytes" {
+                    "bytea"
+                } else {
+                    "text"
+                };
+                schema.insert(format!("{side}_evidence_{field}_{attribute}"), json!(kind));
+            }
+        }
+    }
+    for index in 0..rules.len() {
+        for (attribute, kind) in [
+            ("class", "text"),
+            ("score", "smallint"),
+            ("left_value_digest", "bytea"),
+            ("right_value_digest", "bytea"),
+        ] {
+            schema.insert(
+                evidence_value_column(index, attribute).replace('"', ""),
+                json!(kind),
+            );
+        }
+    }
+    Value::Object(schema)
+}
+
+fn evidence_schema() -> Value {
+    json!({
+        "left_source_record_id":"uuid",
+        "right_source_record_id":"uuid",
+        "left_sort_key":"bytea",
+        "right_sort_key":"bytea",
+        "rule":"text",
+        "evidence_group":"text",
+        "class":"text",
+        "score":"smallint",
+        "comparator":"text",
+        "comparator_version":"smallint",
+        "left_value_digest":"bytea",
+        "right_value_digest":"bytea"
+    })
+}
+
+fn candidate_enrichment_joins(fields: &[String]) -> String {
+    let mut joins = Vec::new();
+    for (index, field) in fields.iter().enumerate() {
+        let relation = normalized_relation(field);
+        let left = format!("evidence_left_{index}");
+        let right = format!("evidence_right_{index}");
+        joins.push(format!(
+            "LEFT JOIN {relation} AS {left} ON {left}.source_record_id = candidate.left_source_record_id AND {left}.field_name = {field}\nLEFT JOIN {relation} AS {right} ON {right}.source_record_id = candidate.right_source_record_id AND {right}.field_name = {field}",
+            field = sql_text(field)
+        ));
+    }
+    if joins.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}", joins.join("\n"))
+    }
+}
+
+fn deduplicated_candidate_pairs_sql(
+    candidate_relation: &str,
+    evidence_fields: &[String],
+    entity_name: &str,
+    rules: &[MatchRule],
+) -> String {
+    let mut columns = [
+        "candidate.left_source_record_id".to_owned(),
+        "candidate.right_source_record_id".to_owned(),
+        "candidate.left_sort_key".to_owned(),
+        "candidate.right_sort_key".to_owned(),
+    ]
+    .to_vec();
+    for field in evidence_fields {
+        for side in ["left", "right"] {
+            for attribute in candidate_evidence_attributes() {
+                columns.push(format!(
+                    "candidate.{}",
+                    quote_identifier(&format!("{side}_evidence_{field}_{attribute}"))
+                ));
+            }
+        }
+    }
+    columns.extend(candidate_evidence_result_columns(rules, entity_name));
+    format!(
+        "SELECT {}\nFROM {candidate_relation} AS candidate\nWHERE NOT EXISTS (SELECT 1 FROM {candidate_relation} AS prior WHERE prior.left_source_record_id = candidate.left_source_record_id AND prior.right_source_record_id = candidate.right_source_record_id AND (prior.candidate_channel < candidate.candidate_channel OR (prior.candidate_channel = candidate.candidate_channel AND prior.candidate_block_key < candidate.candidate_block_key)))",
+        columns.join(", "),
+    )
+}
+
+fn candidate_pairs_sql_with_relation(
+    channels: &[CandidateChannel],
+    limits: &crate::candidate::CandidateLimits,
+    fallback_relation: &str,
+) -> String {
+    let pairs = candidate_pair_source_sql_with_relation(channels, limits, fallback_relation);
+    let relation = format!("({pairs})");
+    deduplicated_candidate_pairs_sql(&relation, &[], "", &[])
 }
 
 pub fn candidate_pairs_sql(
@@ -601,20 +832,47 @@ pub fn candidate_pairs_sql(
     candidate_pairs_sql_with_relation(channels, limits, "pg_catalog.pg_class")
 }
 
-fn candidate_pair_stats_sql_with_relation(
-    channels: &[CandidateChannel],
-    limits: &crate::candidate::CandidateLimits,
-    fallback_relation: &str,
-) -> String {
-    let pairs = candidate_pairs_sql_with_relation(channels, limits, fallback_relation);
-    format!("SELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM ({pairs}) AS pairs")
+fn candidate_pair_stats_from_relation(entity_name: &str) -> String {
+    format!(
+        "SELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM {}",
+        candidate_result_relation(entity_name)
+    )
 }
 
 pub fn candidate_pair_stats_sql(
     channels: &[CandidateChannel],
     limits: &crate::candidate::CandidateLimits,
 ) -> String {
-    candidate_pair_stats_sql_with_relation(channels, limits, "pg_catalog.pg_class")
+    let pairs = candidate_pairs_sql_with_relation(channels, limits, "pg_catalog.pg_class");
+    format!("SELECT pg_catalog.count(*)::bigint AS candidate_pairs FROM ({pairs}) AS pairs")
+}
+
+fn candidate_pair_output_sql(entity_name: &str, fields: &[String], rules: &[MatchRule]) -> String {
+    let candidate = node_ref(&format!("candidate-set/{entity_name}"));
+    let overflow = node_ref(&format!("pair-overflow/{entity_name}"));
+    let mut columns = [
+        "candidate.left_source_record_id".to_owned(),
+        "candidate.right_source_record_id".to_owned(),
+        "candidate.left_sort_key".to_owned(),
+        "candidate.right_sort_key".to_owned(),
+    ]
+    .to_vec();
+    for (index, field) in fields.iter().enumerate() {
+        for side in ["left", "right"] {
+            for attribute in candidate_evidence_attributes() {
+                columns.push(format!(
+                    "evidence_{side}_{index}.{attribute} AS {}",
+                    quote_identifier(&format!("{side}_evidence_{field}_{attribute}")),
+                ));
+            }
+        }
+    }
+    columns.extend(joined_evidence_result_columns(rules, entity_name, fields));
+    format!(
+        "SELECT {}\nFROM {candidate} AS candidate{}\nLEFT JOIN {overflow} AS overflow ON true\nWHERE overflow.candidate_pairs IS NULL",
+        columns.join(", "),
+        candidate_enrichment_joins(fields),
+    )
 }
 
 pub fn candidate_pair_overflow_sql(
@@ -683,9 +941,9 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
                 .collect::<Vec<_>>()
                 .join(" ");
             format!(
-                "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name {priority} ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes\nFROM {} n\nLEFT JOIN {} AS evidence_dependency ON false\nWHERE n.field_name = {}",
+                "SELECT n.source_record_id, n.source_name, n.field_name, CASE n.source_name {priority} ELSE 2147483647 END::integer AS source_priority, n.row_changed_at, false AS authoritative, n.source_sort_key, n.raw_value, n.state, n.normalized, n.canonical_bytes\nFROM {} n\n{}\nWHERE n.field_name = {}",
                 node_ref(&format!("normalized/{}", golden.field)),
-                node_ref(&format!("evidence/{}", entity.name)),
+                relation_joins(dependency_ids),
                 sql_text(&golden.field),
             )
         })
@@ -693,16 +951,11 @@ fn golden_sql(entity: &Entity, fallback_relation: &str, dependency_ids: &[String
     if rows.is_empty() {
         let dependency_joins = relation_joins(dependency_ids);
         format!(
-            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE false /* {} */",
-            node_ref(&format!("evidence/{}", entity.name)),
+            "SELECT NULL::uuid AS source_record_id, NULL::text AS source_name, NULL::text AS field_name, NULL::integer AS source_priority, NULL::timestamptz AS row_changed_at, NULL::boolean AS authoritative, NULL::bytea AS source_sort_key, NULL::text AS raw_value, NULL::text AS state, NULL::text AS normalized, NULL::bytea AS canonical_bytes FROM {fallback_relation} AS empty\n{dependency_joins}\nWHERE false",
             dependency_joins = dependency_joins,
         )
     } else {
-        format!(
-            "{}\n/* {} */",
-            rows.join("\nUNION ALL\n"),
-            node_ref(&format!("evidence/{}", entity.name))
-        )
+        rows.join("\nUNION ALL\n")
     }
 }
 
@@ -744,59 +997,49 @@ pub fn compile(entity: &Entity) -> Value {
             "DIFFERENTIAL",
         ));
     }
-    let mut blocks: Vec<String> = plan
+    let mut candidate_dependencies: Vec<String> = plan
         .channels
         .iter()
-        .map(|channel| format!("blocks/{}", channel.channel_id))
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-stats/{}", channel.channel_id)),
-        )
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
-        )
-        .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
-        .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
+        .flat_map(|channel| {
+            [
+                format!("blocks/{}", channel.channel_id),
+                format!("block-stats/{}", channel.channel_id),
+                format!("block-overflow/{}", channel.channel_id),
+            ]
+        })
         .collect();
     if plan.channels.is_empty()
         && let Some(fallback) = &fallback_logical_id
     {
-        blocks.push(fallback.clone());
+        candidate_dependencies.push(fallback.clone());
     }
+    let candidate_raw_id = format!("candidate-raw/{}", entity.name);
     nodes.push(node_with_refresh_mode(
-        format!("pairs/{}", entity.name),
-        blocks,
-        candidate_pairs_sql_with_relation(&plan.channels, &limits, &fallback_relation),
-        json!({"left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea"}),
+        candidate_raw_id.clone(),
+        candidate_dependencies,
+        candidate_pair_source_sql_with_relation(&plan.channels, &limits, &fallback_relation),
+        json!({"candidate_channel":"text","candidate_block_key":"text","left_source_record_id":"uuid","right_source_record_id":"uuid","left_sort_key":"bytea","right_sort_key":"bytea"}),
         pair_refresh_mode,
     ));
-    let mut pair_stats_dependencies = plan
-        .channels
-        .iter()
-        .map(|channel| format!("blocks/{}", channel.channel_id))
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-stats/{}", channel.channel_id)),
-        )
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
-        )
-        .collect::<Vec<_>>();
-    if plan.channels.is_empty()
-        && let Some(fallback) = &fallback_logical_id
-    {
-        pair_stats_dependencies.push(fallback.clone());
-    }
+    let evidence_fields = candidate_evidence_fields(&entity.matches);
+    let candidate_set_id = format!("candidate-set/{}", entity.name);
+    nodes.push(node_with_refresh_mode(
+        candidate_set_id.clone(),
+        vec![candidate_raw_id],
+        candidate_set_sql(&entity.name),
+        candidate_set_schema(),
+        pair_refresh_mode,
+    ));
+    let mut enrichment_dependencies = vec![candidate_set_id.clone()];
+    enrichment_dependencies.extend(
+        evidence_fields
+            .iter()
+            .map(|field| format!("normalized/{field}")),
+    );
     nodes.push(node_with_refresh_mode(
         format!("pair-stats/{}", entity.name),
-        pair_stats_dependencies,
-        candidate_pair_stats_sql_with_relation(&plan.channels, &limits, &fallback_relation),
+        vec![candidate_set_id.clone()],
+        candidate_pair_stats_from_relation(&entity.name),
         json!({"candidate_pairs":"bigint"}),
         pair_refresh_mode,
     ));
@@ -807,67 +1050,45 @@ pub fn compile(entity: &Entity) -> Value {
         json!({"candidate_pairs":"bigint","max_candidate_pairs":"bigint"}),
         pair_refresh_mode,
     ));
-    let evidence_dependencies = plan
-        .channels
-        .iter()
-        .map(|channel| format!("blocks/{}", channel.channel_id))
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-stats/{}", channel.channel_id)),
-        )
-        .chain(
-            plan.channels
-                .iter()
-                .map(|channel| format!("block-overflow/{}", channel.channel_id)),
-        )
-        .chain(
-            entity
-                .fields
-                .iter()
-                .map(|field| format!("normalized/{}", field.name)),
-        )
-        .chain(std::iter::once(format!("pairs/{}", entity.name)))
-        .chain(std::iter::once(format!("pair-stats/{}", entity.name)))
-        .chain(std::iter::once(format!("pair-overflow/{}", entity.name)))
-        .chain(
-            entity
-                .matches
-                .is_empty()
-                .then_some(fallback_logical_id.clone())
-                .flatten(),
-        )
-        .collect::<Vec<_>>();
-    let evidence_sql = format!(
-        "SELECT evidence.left_source_record_id, evidence.right_source_record_id, evidence.left_sort_key, evidence.right_sort_key, evidence.rule, evidence.evidence_group, evidence.class, evidence.score, evidence.comparator, evidence.comparator_version, evidence.left_value_digest, evidence.right_value_digest\nFROM ({}) AS evidence\n{}",
-        pair_evidence_sql_with_relation(&entity.name, &entity.matches, &fallback_relation),
-        relation_joins(&evidence_dependencies)
-    );
+    nodes.push(node_with_refresh_mode(
+        format!("pairs/{}", entity.name),
+        enrichment_dependencies
+            .iter()
+            .cloned()
+            .chain([format!("pair-overflow/{}", entity.name)])
+            .collect(),
+        candidate_pair_output_sql(&entity.name, &evidence_fields, &entity.matches),
+        candidate_pair_schema(&evidence_fields, &entity.matches),
+        pair_refresh_mode,
+    ));
     nodes.push(node_with_refresh_mode(
         format!("evidence/{}", entity.name),
-        evidence_dependencies,
-        evidence_sql,
-        json!({
-            "left_source_record_id":"uuid",
-            "right_source_record_id":"uuid",
-            "left_sort_key":"bytea",
-            "right_sort_key":"bytea",
-            "rule":"text",
-            "evidence_group":"text",
-            "class":"text",
-            "score":"smallint",
-            "comparator":"text",
-            "comparator_version":"smallint",
-            "left_value_digest":"bytea",
-            "right_value_digest":"bytea"
-        }),
-        "DIFFERENTIAL",
+        vec![format!("pairs/{}", entity.name)],
+        candidate_evidence_sql(&entity.name, &entity.matches),
+        evidence_schema(),
+        pair_refresh_mode,
     ));
     let golden_dependencies = entity
         .golden_values
         .iter()
         .map(|golden| format!("normalized/{}", golden.field))
-        .chain(std::iter::once(format!("evidence/{}", entity.name)))
+        .chain(
+            entity
+                .fields
+                .iter()
+                .filter(|field| {
+                    !evidence_fields.contains(&field.name)
+                        && !entity
+                            .golden_values
+                            .iter()
+                            .any(|golden| golden.field == field.name)
+                })
+                .map(|field| format!("normalized/{}", field.name)),
+        )
+        .chain([
+            format!("pairs/{}", entity.name),
+            format!("evidence/{}", entity.name),
+        ])
         .collect::<Vec<_>>();
     nodes.push(node_with_refresh_mode(
         format!("golden/{}", entity.name),
@@ -935,10 +1156,36 @@ mod tests {
         .expect("test entity parses");
         let graph = compile(&entity);
         assert_eq!(graph["executable"], true);
-        assert_eq!(graph["compiler_version"], 10);
+        assert_eq!(graph["compiler_version"], 11);
         assert!(graph["nodes"].as_array().unwrap().iter().all(|node| {
             node["initialize"] == false && node["orchestration_mode"] == "EXTERNAL"
         }));
+        artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
+    }
+
+    #[test]
+    fn unused_normalized_fields_remain_connected_to_golden_root() {
+        let entity = parse_entity(json!({
+            "name":"customer", "sources":[],
+            "fields":[
+                {"name":"label","type":"text","cleaner":"none","cleaner_options":{},"display":"masked"},
+                {"name":"amount","type":"numeric","cleaner":"none","cleaner_options":{},"display":"masked"}
+            ],
+            "matches":[],"golden_values":[],
+            "preset":null,"limits":{},"execution_role":null
+        }))
+        .expect("test entity parses");
+        let graph = compile(&entity);
+        assert_eq!(graph["roots"], json!(["golden/customer"]));
+        assert_eq!(
+            graph["nodes"].as_array().unwrap().last().unwrap()["dependencies"],
+            json!([
+                "normalized/label",
+                "normalized/amount",
+                "pairs/customer",
+                "evidence/customer"
+            ])
+        );
         artifact_nodes(&serde_json::to_vec(&graph).unwrap()).expect("artifact validates");
     }
 
@@ -988,14 +1235,19 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing node {logical_id}"))
         };
 
-        for logical_id in [
+        for (logical_id, mode) in [
             "records/crm",
             "normalized/name",
             "normalized/email",
-            "evidence/customer",
             "golden/customer",
-        ] {
-            assert_eq!(node(logical_id)["refresh_mode"], "DIFFERENTIAL");
+        ]
+        .into_iter()
+        .map(|id| (id, "DIFFERENTIAL"))
+        .chain([
+            ("candidate-set/customer", "DIFFERENTIAL"),
+            ("evidence/customer", "DIFFERENTIAL"),
+        ]) {
+            assert_eq!(node(logical_id)["refresh_mode"], mode);
         }
         for logical_id in [
             format!("blocks/{channel_id}"),
@@ -1013,7 +1265,7 @@ mod tests {
         }
         assert_eq!(
             node("golden/customer")["dependencies"],
-            json!(["normalized/name", "evidence/customer"])
+            json!(["normalized/name", "pairs/customer", "evidence/customer"])
         );
         assert!(
             node("golden/customer")["dependencies"]
@@ -1023,27 +1275,33 @@ mod tests {
                 .all(|dependency| {
                     dependency
                         .as_str()
-                        .is_some_and(|id| !id.starts_with("block-") && !id.starts_with("pair-"))
+                        .is_some_and(|id| !id.starts_with("block-"))
                 })
         );
         let evidence_sql = node("evidence/customer")["defining_sql"].as_str().unwrap();
         assert!(!evidence_sql.contains("count("));
+        assert_eq!(
+            node("evidence/customer")["dependencies"],
+            json!(["pairs/customer"])
+        );
+        assert!(evidence_sql.contains(&node_ref("pairs/customer")));
+        assert!(!evidence_sql.contains("normalized/"));
+        assert!(!evidence_sql.contains("GROUP BY"));
         for logical_id in [
             format!("blocks/{channel_id}"),
             format!("block-stats/{channel_id}"),
             format!("block-overflow/{channel_id}"),
-            "pairs/customer".to_owned(),
             "pair-stats/customer".to_owned(),
-            "pair-overflow/customer".to_owned(),
         ] {
             assert!(
-                evidence_sql.contains(&node_ref(&logical_id)),
+                !evidence_sql.contains(&node_ref(&logical_id)),
                 "{logical_id}"
             );
         }
         let golden_sql = node("golden/customer")["defining_sql"].as_str().unwrap();
         assert!(!golden_sql.contains("count("));
         assert!(golden_sql.contains(&node_ref("evidence/customer")));
+        assert!(golden_sql.contains(&node_ref("pairs/customer")));
 
         let relations = nodes
             .iter()
@@ -1076,16 +1334,88 @@ mod tests {
                 "records/crm",
                 "normalized/email",
                 "pairs/customer",
+                "candidate-set/customer",
                 "evidence/customer"
             ]
             .into_iter()
             .all(|logical_id| reachable.contains(logical_id))
         );
         assert!(reachable.contains(&format!("blocks/{channel_id}")));
+        assert!(reachable.contains(&format!("block-stats/{channel_id}")));
+        assert!(reachable.contains(&format!("block-overflow/{channel_id}")));
+        assert!(reachable.contains("evidence/customer"));
+        assert!(reachable.contains("candidate-raw/customer"));
+
+        let candidate_raw = node("candidate-raw/customer");
+        let candidate_set = node("candidate-set/customer");
+        let pair_stats = node("pair-stats/customer");
+        let pairs = node("pairs/customer");
+        assert_eq!(
+            candidate_set["dependencies"],
+            json!(["candidate-raw/customer"])
+        );
+        assert!(candidate_set["defining_sql"].as_str().unwrap().contains(
+            "GROUP BY candidate.left_source_record_id, candidate.right_source_record_id"
+        ));
+        assert_eq!(
+            pair_stats["dependencies"],
+            json!(["candidate-set/customer"])
+        );
+        assert_eq!(
+            pairs["dependencies"],
+            json!([
+                "candidate-set/customer",
+                "normalized/email",
+                "pair-overflow/customer"
+            ])
+        );
+        assert!(
+            pair_stats["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("@{candidate-set/customer}")
+        );
+        assert!(
+            !pair_stats["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("JOIN")
+        );
+        assert!(
+            candidate_raw["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("@{blocks/same_email}")
+        );
+        assert!(
+            !candidate_raw["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("UNION")
+        );
+        assert!(
+            !candidate_raw["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("GROUP BY")
+        );
+        assert_eq!(candidate_set["defining_sql"], candidate_set_sql("customer"));
+        assert!(
+            pairs["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("FROM @{candidate-set/customer} AS candidate")
+        );
+        assert!(
+            pairs["defining_sql"]
+                .as_str()
+                .unwrap()
+                .contains("LEFT JOIN @{normalized/email} AS evidence_left_0")
+        );
     }
 
     #[test]
-    fn candidate_pairs_sql_deduplicates_union_all_inside_a_projection() {
+    fn candidate_pairs_sql_returns_unique_pairs() {
         let channel = |channel_id: &str, field: &str| CandidateChannel {
             channel_id: channel_id.into(),
             kind: ChannelKind::Exact,
@@ -1101,10 +1431,12 @@ mod tests {
                 max_candidate_pairs: 100_000,
             },
         );
-        assert_eq!(
-            sql,
-            "SELECT left_source_record_id, right_source_record_id, left_sort_key, right_sort_key\nFROM (\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/email} l\nJOIN @{block-stats/email} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/email} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\nUNION ALL\nSELECT l.source_record_id AS left_source_record_id, r.source_record_id AS right_source_record_id, l.source_sort_key AS left_sort_key, r.source_sort_key AS right_sort_key\nFROM @{blocks/name} l\nJOIN @{block-stats/name} s ON s.channel_id = l.channel_id AND s.block_key = l.block_key\nJOIN @{blocks/name} r ON r.channel_id = l.channel_id AND r.block_key = l.block_key AND l.source_sort_key < r.source_sort_key\nWHERE s.block_records <= 10000\n) AS candidate_pairs\nGROUP BY 1, 2, 3, 4"
-        );
+        assert!(sql.contains("WHERE NOT EXISTS"));
+        assert!(sql.contains("prior.candidate_channel < candidate.candidate_channel"));
+        assert!(sql.contains("prior.candidate_block_key < candidate.candidate_block_key"));
+        assert!(sql.contains("'email'::text AS candidate_channel"));
+        assert!(sql.contains("'name'::text AS candidate_channel"));
+        assert!(sql.contains("\nUNION ALL\n"));
     }
 
     #[test]
@@ -1182,6 +1514,7 @@ mod tests {
             .iter()
             .find(|n| n["logical_id"] == "evidence/customer")
             .unwrap();
+        assert_eq!(evidence_node["refresh_mode"], "DIFFERENTIAL");
         let evidence_sql = evidence_node["defining_sql"].as_str().unwrap();
         assert!(!evidence_sql.contains("concat_ws"));
         assert!(!evidence_sql.contains("array_to_string"));

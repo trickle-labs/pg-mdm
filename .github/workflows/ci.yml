@@ -35,11 +35,12 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Includes a cold producer build and 70 full-rebuild qualification samples.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - shell: bash
-        run: scripts/run_e2e_tests.sh | tee "$RUNNER_TEMP/e2e.log"
+        run: scripts/run_e2e_tests.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

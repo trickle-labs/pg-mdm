@@ -3,6 +3,7 @@
 import datetime as dt
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -34,8 +35,19 @@ def sha256_file(path):
 
 if run(["git", "rev-parse", "HEAD"]) != source_revision:
     raise SystemExit("E2E evidence source revision changed during the run")
-if run(["git", "status", "--porcelain"]):
-    raise SystemExit("commit all source changes before retaining Docker E2E evidence")
+working_tree_status = run(["git", "status", "--porcelain", "--untracked-files=all"])
+if any(line.startswith("??") for line in working_tree_status.splitlines()):
+    raise SystemExit("untracked source files cannot be included in the E2E candidate identity")
+candidate_patch = subprocess.run(
+    ["git", "diff", "HEAD", "--binary"], cwd=ROOT,
+    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+).stdout
+candidate_patch_sha256 = sha256_bytes(candidate_patch)
+candidate_key = os.environ.get("PG_MDM_CANDIDATE_KEY", "unknown")
+if candidate_key == "unknown" and working_tree_status:
+    raise SystemExit("dirty E2E candidates require an explicit patch hash")
+if candidate_key != "unknown" and candidate_key != candidate_patch_sha256:
+    raise SystemExit("E2E candidate key does not match the current source patch")
 
 metrics = json.loads(Path(database_json).read_text(encoding="utf-8").strip())
 qualification = json.loads(Path(qualification_json).read_text(encoding="utf-8").strip())
@@ -51,13 +63,23 @@ if missing or not metrics["last_customer_refresh"].get("stage_timings_ms"):
     raise SystemExit(f"E2E metrics are incomplete: {missing or 'stage timings'}")
 
 if set(qualification) != {
-    "schema_version", "pg_trickle_version", "equivalence_checks", "populations", "scope"
+    "schema_version", "pg_trickle_version", "equivalence_checks", "populations", "scope",
+    "additional_workloads", "samples",
 }:
     raise SystemExit("incremental qualification fields are incomplete")
 if qualification["schema_version"] != 1 or qualification["pg_trickle_version"] != "0.108.3":
     raise SystemExit("incremental qualification dependency contract changed")
 if qualification["equivalence_checks"] != 70:
     raise SystemExit("incremental qualification did not complete all rebuild comparisons")
+if [(sample["population"], sample["sample"], sample["measured"], sample["delta_rows"])
+        for sample in qualification["samples"]] != [
+            (population, sample, sample > 5, 2)
+            for population in (128, 2048) for sample in range(1, 36)]:
+    raise SystemExit("incremental qualification raw sample coverage changed")
+if [(item["workload"], item["population"], item["changed_records"])
+        for item in qualification["additional_workloads"]] != [
+            ("dense", 8192, 32), ("larger", 8192, 1), ("no_change", 2048, 0)]:
+    raise SystemExit("additional graph workload coverage changed")
 if [item.get("population") for item in qualification["populations"]] != [128, 2048]:
     raise SystemExit("incremental qualification populations changed")
 for item in qualification["populations"]:
@@ -76,6 +98,9 @@ image_info = json.loads(run(["docker", "image", "inspect", image]))[0]
 labels = container_info["Config"].get("Labels") or {}
 if labels.get("pg_mdm.source_revision") != source_revision:
     raise SystemExit("running image label does not match the tested source revision")
+image_labels = image_info["Config"].get("Labels") or {}
+if image_labels.get("pg_mdm.candidate_key") != candidate_key:
+    raise SystemExit("running image label does not match the tested source patch")
 
 
 def in_container(command):
@@ -94,8 +119,19 @@ cpu_info = {
 }
 storage_info = in_container('df -B1 "$PGDATA"')
 package_manifest = in_container("cat /evidence/pg_mdm-package-manifest.sha256") + "\n"
-evidence_dir = ROOT / "evidence" / "v0.14"
+producer = dict(line.removeprefix("ARG ").split("=", 1)
+                for line in (ROOT / "tests/Dockerfile.e2e").read_text().splitlines()
+                if line.startswith("ARG PG_TRICKLE_"))
+if set(producer) != {"PG_TRICKLE_REVISION", "PG_TRICKLE_URL", "PG_TRICKLE_SHA256"} \
+        or len(bytes.fromhex(producer["PG_TRICKLE_REVISION"])) != 20 \
+        or len(bytes.fromhex(producer["PG_TRICKLE_SHA256"])) != 32:
+    raise SystemExit("pg_trickle immutable source pin is incomplete")
+producer_binary_sha256 = in_container(
+    "sha256sum /usr/lib/postgresql/18/lib/pg_trickle.so").split()[0]
+evidence_dir = Path(os.environ.get("PG_MDM_E2E_EVIDENCE_DIR", ROOT / "evidence" / "v0.14"))
 evidence_dir.mkdir(parents=True, exist_ok=True)
+candidate_patch_path = evidence_dir / "candidate.patch"
+candidate_patch_path.write_bytes(candidate_patch)
 manifest_path = evidence_dir / "pg-mdm-package-manifest.sha256"
 manifest_path.write_text(package_manifest, encoding="utf-8")
 retained_log = evidence_dir / "docker-e2e.log"
@@ -107,9 +143,13 @@ report = {
     "evidence_version": 1,
     "recorded_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
     "source_commit": source_revision,
+    "candidate_key": candidate_key,
+    "candidate_patch": str(candidate_patch_path),
+    "candidate_patch_sha256": candidate_patch_sha256,
+    "working_tree_status": working_tree_status.splitlines(),
     "command": "scripts/run_e2e_tests.sh",
     "result": "passed",
-    "retained_log": str(retained_log.relative_to(ROOT)),
+    "retained_log": str(retained_log),
     "retained_log_scope": "Main PostgreSQL script output plus policy qualification output and a pass marker written after the complete E2E runner, including concurrency, physical and logical recovery, restore, clone, and retry assertions, returned successfully.",
     "metrics": metrics,
     "incremental_qualification": qualification,
@@ -126,7 +166,10 @@ report = {
         "archived_pg_mdm_0_14_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.14.0.sql"),
         "pg_mdm_package_manifest_sha256": sha256_bytes(package_manifest.encode()),
         "pg_trickle_version": "0.108.3",
-        "pg_trickle_artifact_sha256": "e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f",
+        "pg_trickle_source_commit": producer["PG_TRICKLE_REVISION"],
+        "pg_trickle_artifact_url": producer["PG_TRICKLE_URL"],
+        "pg_trickle_artifact_sha256": producer["PG_TRICKLE_SHA256"],
+        "pg_trickle_binary_sha256": producer_binary_sha256,
         "postgres_image": "postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf",
         "rust_toolchain": "1.98.0",
     },

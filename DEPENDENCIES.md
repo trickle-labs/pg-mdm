@@ -13,11 +13,11 @@ This file records the current locked build inputs. `Cargo.lock` pins the Rust de
 | Build/test `pg_config` | 18.6 (`18.6-1.pgdg12+2`) |
 | PostgreSQL image | `postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf` |
 | `pg_trickle` version | 0.108.3 |
-| `pg_trickle` commit | `ce709f06327b4801f79fc48934bc96107b450907` |
-| `pg_trickle` tag | `v0.108.3` |
-| `pg_trickle` artifact | `pg_trickle-0.108.3-pg18-linux-amd64.tar.gz` |
-| Artifact URL | `https://github.com/trickle-labs/pg-trickle/releases/download/v0.108.3/pg_trickle-0.108.3-pg18-linux-amd64.tar.gz` |
-| Artifact SHA-256 | `e36202e84687953a0ad58e78a27f8a52c13983cc5512abcd1abc6020425e256f` |
+| `pg_trickle` commit | `d8bb8eb5d45c5c9982e173e88914037433a1ee05` |
+| `pg_trickle` base | `v0.108.3` plus [exact graph delta repairs](https://github.com/trickle-labs/pg-trickle/pull/1171) |
+| `pg_trickle` artifact | Complete Git source archive, compiled with the locked toolchain above |
+| Artifact URL | `https://github.com/trickle-labs/pg-trickle.git` at the commit above |
+| Artifact SHA-256 | `b8d4c59ca3770c305659255e09adde303b4d220228392c415ae363aa7be0a2da` |
 | Capture mode | trigger |
 | E2E database `LC_COLLATE` / `LC_CTYPE` | `en_US.utf8` / `en_US.utf8` |
 | Normalization fixture SHA-256 | `c01d1b0fe2b938dd09d3afa48e4e43bf648b47d0715595aa0b208ffca68826aa` |
@@ -30,7 +30,11 @@ The adapter accepts the exact Graph V1.2 feature vectors with either `stable_row
 
 The 0.108.3 identity migration can require active output-delta consumers to resnapshot before the extension upgrade. For pg_mdm consumers, request the resnapshot before upgrading; pg_mdm's next refresh rebuilds its state from the new snapshot and acknowledges fresh tokens. The upstream migration retains its fail-closed block until consumers are ready.
 
-The pg-trickle v0.108.3 release passed package/runtime and upgrade qualification. Its 72-hour soak and seven-day longevity runs remain deferred upstream; these are deployment limits, not pg-mdm admission evidence.
+Compiler v11 requires the pinned source repairs: keyless scans must reconstruct pre-change join snapshots, and output capture must recognize explicit DML that writes no rows. The unpatched 0.108.3 release archive does not provide this conformance. The E2E evidence records both the source archive checksum and the installed binary checksum.
+
+The source checksum covers `git archive --format=tar` with `* -export-ignore` in `.git/info/attributes`. This retains `Cargo.lock`, benches, and the build-script generator that GitHub's default source archive excludes. The build verifies that packaging leaves `Cargo.lock` unchanged.
+
+The pg-trickle v0.108.3 release passed package/runtime and upgrade qualification. Its 72-hour soak and seven-day longevity runs remain deferred upstream. Each build of the patched producer requires runtime qualification with its actual binary checksum.
 
 ## Archived v0.1 Linux package checksums
 
