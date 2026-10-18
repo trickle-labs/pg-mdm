@@ -88,6 +88,33 @@ if [case["label"] for case in digest_cases] != [
 ]:
     raise SystemExit("scoped-state history scenarios are incomplete")
 digest_checks = check_cases(digest_cases)
+states = {case["label"]: case["state"] for case in digest_cases}
+initial = states["bootstrap"]
+first_memberships = sorted((m["source_record_id"], m["first_membership_revision"])
+                           for m in initial["memberships"])
+for case in digest_cases:
+    actual = sorted((m["source_record_id"], m["first_membership_revision"])
+                    for m in case["state"]["memberships"])
+    if actual != first_memberships:
+        raise SystemExit(f"first membership history changed: {case['label']}")
+conflicts = sorted([r["occurrence"], r["status"], r["opened_revision"], r["resolved_revision"],
+                    r["last_change_revision"], r["concurrency_version"]]
+                   for r in states["retired_reactivation"]["reviews"]
+                   if r["reason_code"] == "GOLDEN_OVERRIDE_CONFLICT")
+expected_conflicts = [[occurrence, "resolved", states[opened]["publication_revision"],
+                       states[closed]["publication_revision"], states[closed]["publication_revision"], 2]
+                      for occurrence, opened, closed in [(1, "merge_conflict", "split_resolves"),
+                                                         (2, "conflict_recurs", "inactive_anchor")]]
+if conflicts != expected_conflicts:
+    raise SystemExit("review occurrence/revision/version history changed")
+old_id = next(m["mdm_id"] for m in initial["memberships"]
+              if initial["source_ids"][m["source_id"]["source_record_key"]] == 5)
+old_identity = next(r for r in initial["identity_registry"] if r["mdm_id"] == old_id)
+expected_tombstone = dict(old_identity, status="retired",
+                          retired_revision=states["retirement"]["publication_revision"])
+actual_tombstone = next(r for r in states["retired_reactivation"]["identity_registry"] if r["mdm_id"] == old_id)
+if actual_tombstone != expected_tombstone:
+    raise SystemExit("reactivation changed the retained identity tombstone")
 isolated_state_work = [trace for trace in prior_state_work
     if trace["entity_name"] == "incremental_qualification" and trace["strategy"] == "affected"
     and trace["scope_records"] == 1
@@ -97,7 +124,8 @@ for trace in isolated_state_work:
                 "reviews": 0, "golden": 1, "facts": 0, "overrides": 0}
     if trace["decoded"] != expected:
         raise SystemExit(f"isolated refresh decoded unexpected prior rows: {trace}")
-if [trace["entity_wide_baseline"]["memberships"] for trace in isolated_state_work] != [128] * 36 + [2048] * 36:
+# The 2048-record diagnostic session has tracing disabled; its 35 samples are traced.
+if [trace["entity_wide_baseline"]["memberships"] for trace in isolated_state_work] != [128] * 36 + [2048] * 35:
     raise SystemExit("scoped-state work observations are incomplete")
 
 
@@ -112,7 +140,10 @@ candidate_patch = subprocess.run(
 ).stdout
 candidate_patch_sha256 = sha256_bytes(candidate_patch)
 candidate_key = os.environ.get("PG_MDM_CANDIDATE_KEY", "unknown")
-if candidate_key == "unknown" and working_tree_status:
+collector_only_patch = bool(working_tree_status) and run(
+    ["git", "diff", "HEAD", "--name-only"]
+) == "scripts/record_e2e_evidence.py"
+if candidate_key == "unknown" and working_tree_status and not collector_only_patch:
     raise SystemExit("dirty E2E candidates require an explicit patch hash")
 if candidate_key != "unknown" and candidate_key != candidate_patch_sha256:
     raise SystemExit("E2E candidate key does not match the current source patch")
@@ -219,6 +250,8 @@ report = {
     "candidate_key": candidate_key,
     "candidate_patch": str(candidate_patch_path),
     "candidate_patch_sha256": candidate_patch_sha256,
+    "collector_only_patch": collector_only_patch,
+    "collector_sha256": sha256_file(Path(__file__)),
     "working_tree_status": working_tree_status.splitlines(),
     "command": "scripts/run_e2e_tests.sh",
     "result": "passed",

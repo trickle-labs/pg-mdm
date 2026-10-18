@@ -167,6 +167,10 @@ The [source synchronization evidence](evidence/issue11/README.md) retains key-re
 plans, lifecycle and concurrency checks, and before/after measurements with their
 exact adapter and producer checksums.
 
+The [scoped-state evidence](evidence/issue12/README.md) retains prior-state query
+plans, exact history/digest checks and separate loading, assembly and copying
+measurements. The measured complete refresh did not show an end-to-end speedup.
+
 The Docker E2E run also executes `tests/incremental_qualification.sql`. It
 measures 30 affected-refresh samples after five warmups at 128 and 2,048
 records, and compares the complete public publication, durable identities,
