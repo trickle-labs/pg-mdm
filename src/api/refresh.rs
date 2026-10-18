@@ -28,16 +28,26 @@ use crate::source_record::quote_identifier;
 const PUBLICATION_BATCH_SIZE: usize = 128;
 
 struct RefreshRequest {
+    started: Instant,
     entity_name: String,
     full_policy: String,
     rebuild: bool,
-    source_snapshots: Vec<SourceSnapshot>,
+    sources: SourceInput,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct SourceSnapshot {
     source_name: String,
     keys: Vec<Vec<u8>>,
+    deleted_keys: Vec<Vec<u8>>,
+    complete: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SourceInput {
+    snapshots: Vec<SourceSnapshot>,
+    timings_ms: Value,
+    capture: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +55,7 @@ struct SourceScanSpec {
     source_name: String,
     sql: String,
     max_active_records: usize,
+    capture_eligible: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +67,8 @@ struct RefreshAccess {
 
 struct RefreshAccessRequest {
     entity_name: String,
+    capture: bool,
+    full_policy: String,
 }
 
 struct PreviewRequest {
@@ -88,6 +101,7 @@ struct GraphRefresh {
     boundary: Value,
     boundary_digest: Vec<u8>,
     node_results: Value,
+    helper_sync_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +121,7 @@ struct DeltaConsumer {
     saw_full_invalidation: bool,
     observed_batches: Vec<Value>,
     affected_records: BTreeSet<Uuid>,
+    source_changes: Vec<(Vec<u8>, bool)>,
     lag: i64,
 }
 
@@ -126,6 +141,7 @@ struct DeltaRow {
     action: String,
     row_identity: Vec<u8>,
     source_record_ids: Vec<Uuid>,
+    source_record_key: Option<Vec<u8>>,
 }
 
 fn validate_delta_batch(
@@ -167,7 +183,10 @@ fn validate_delta_payload(payload: &[DeltaRow], batch: &DeltaBatch) -> Result<()
     let mut inserted = 0_i64;
     let mut deleted = 0_i64;
     for row in payload {
-        if row.row_identity.is_empty() || row.source_record_ids.is_empty() {
+        if row.row_identity.is_empty()
+            || (row.source_record_ids.is_empty() && row.source_record_key.is_none())
+            || row.source_record_key.as_ref().is_some_and(Vec::is_empty)
+        {
             return Err(MdmError::DeltaProtocol(
                 "payload row identity or source record IDs are empty".into(),
             ));
@@ -509,6 +528,9 @@ fn sync_source_records(
             .iter()
             .find(|snapshot| snapshot.source_name == source.name)
             .ok_or_else(|| MdmError::GraphBinding("source snapshot is missing".into()))?;
+        if !snapshot.complete && snapshot.keys.is_empty() && snapshot.deleted_keys.is_empty() {
+            continue;
+        }
         let rows = client
             .select(
                 "SELECT source_identity_id::text FROM mdm_internal.source_identities WHERE entity_id = $1::pg_catalog.uuid AND source_name = $2::pg_catalog.name",
@@ -524,7 +546,7 @@ fn sync_source_records(
         let keys = JsonB(json!(
             snapshot.keys.iter().map(|key| hex(key)).collect::<Vec<_>>()
         ));
-        let sql = "WITH current_records AS MATERIALIZED (SELECT pg_catalog.decode(key, 'hex') AS source_record_key FROM pg_catalog.jsonb_array_elements_text($3::pg_catalog.jsonb) AS keys(key)), deactivated AS (UPDATE mdm_internal.source_records r SET active = false WHERE r.entity_id = $1::pg_catalog.uuid AND r.source_identity_id = $2::pg_catalog.uuid AND r.active AND NOT EXISTS (SELECT FROM current_records c WHERE c.source_record_key = r.source_record_key) RETURNING 1), registered AS (INSERT INTO mdm_internal.source_records AS target (entity_id, source_identity_id, source_record_key, active) SELECT $1::pg_catalog.uuid, $2::pg_catalog.uuid, source_record_key, true FROM current_records ON CONFLICT (entity_id, source_identity_id, source_record_key) DO UPDATE SET active = true, last_seen_at = pg_catalog.statement_timestamp() WHERE NOT target.active RETURNING 1) SELECT EXISTS (SELECT FROM deactivated) OR EXISTS (SELECT FROM registered)";
+        let sql = "WITH current_records AS MATERIALIZED (SELECT pg_catalog.decode(key, 'hex') AS source_record_key FROM pg_catalog.jsonb_array_elements_text($3::pg_catalog.jsonb) AS keys(key)), deactivated AS (UPDATE mdm_internal.source_records r SET active = false WHERE r.entity_id = $1::pg_catalog.uuid AND r.source_identity_id = $2::pg_catalog.uuid AND r.active AND (($4 AND NOT EXISTS (SELECT FROM current_records c WHERE c.source_record_key = r.source_record_key)) OR (NOT $4 AND r.source_record_key IN (SELECT pg_catalog.decode(key, 'hex') FROM pg_catalog.jsonb_array_elements_text($5::pg_catalog.jsonb) AS keys(key)))) RETURNING 1), registered AS (INSERT INTO mdm_internal.source_records AS target (entity_id, source_identity_id, source_record_key, active) SELECT $1::pg_catalog.uuid, $2::pg_catalog.uuid, source_record_key, true FROM current_records ON CONFLICT (entity_id, source_identity_id, source_record_key) DO UPDATE SET active = true, last_seen_at = pg_catalog.statement_timestamp() WHERE NOT target.active RETURNING 1) SELECT EXISTS (SELECT FROM deactivated) OR EXISTS (SELECT FROM registered)";
         let _ = client
             .select(
                 sql,
@@ -533,6 +555,15 @@ fn sync_source_records(
                     context.entity_id.clone().into(),
                     source_identity_id.into(),
                     keys.into(),
+                    snapshot.complete.into(),
+                    JsonB(json!(
+                        snapshot
+                            .deleted_keys
+                            .iter()
+                            .map(|key| hex(key))
+                            .collect::<Vec<_>>()
+                    ))
+                    .into(),
                 ],
             )
             .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
@@ -540,13 +571,20 @@ fn sync_source_records(
     Ok(())
 }
 
-fn grant_refresh_access(entity_name: &str) -> Result<Vec<SourceSnapshot>, MdmError> {
+fn grant_refresh_access(
+    entity_name: &str,
+    full_policy: &str,
+    rebuild: bool,
+) -> Result<SourceInput, MdmError> {
+    let started = Instant::now();
     let helper_owner = catalog::validate_helper_owner()?;
     let access = serde_json::from_value::<RefreshAccess>(
         catalog::call_helper(
             "refresh_access",
             RefreshAccessRequest {
                 entity_name: entity_name.to_owned(),
+                capture: false,
+                full_policy: full_policy.to_owned(),
             },
         )?
         .0,
@@ -578,12 +616,45 @@ fn grant_refresh_access(entity_name: &str) -> Result<Vec<SourceSnapshot>, MdmErr
         }
         Ok(())
     })?;
+    // Check the invoker's source/column access even when no keys need reading.
     Spi::connect(|client| {
+        for scan in &access.source_scans {
+            client
+                .select(&format!("{} LIMIT 0", scan.sql), None, &[])
+                .map_err(|error| MdmError::SourceInvalid(error.to_string()))?;
+        }
+        Ok::<_, MdmError>(())
+    })?;
+    let access_ms = started.elapsed().as_millis() as u64;
+    let mut input: SourceInput = serde_json::from_value(
+        catalog::call_helper(
+            "refresh_access",
+            RefreshAccessRequest {
+                entity_name: entity_name.to_owned(),
+                capture: true,
+                full_policy: full_policy.to_owned(),
+            },
+        )?
+        .0,
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let scan_started = Instant::now();
+    // Take a fresh SPI snapshot after waiting for the producer's source locks.
+    input.snapshots = Spi::connect_mut(|client| {
         let mut active_records = 0usize;
         access
             .source_scans
             .into_iter()
             .map(|scan| {
+                if !rebuild
+                    && scan.capture_eligible
+                    && let Some(snapshot) = input
+                        .snapshots
+                        .iter()
+                        .find(|snapshot| snapshot.source_name == scan.source_name)
+                {
+                    return Ok(snapshot.clone());
+                }
                 let remaining = scan.max_active_records.saturating_sub(active_records);
                 let query = format!("{} LIMIT {}", scan.sql, remaining.saturating_add(1));
                 let rows = client
@@ -610,10 +681,37 @@ fn grant_refresh_access(entity_name: &str) -> Result<Vec<SourceSnapshot>, MdmErr
                 Ok(SourceSnapshot {
                     source_name: scan.source_name,
                     keys,
+                    deleted_keys: Vec::new(),
+                    complete: true,
                 })
             })
-            .collect()
-    })
+            .collect::<Result<Vec<_>, MdmError>>()
+    })?;
+    input.timings_ms["source_access"] = json!(access_ms);
+    input.timings_ms["source_scan"] = json!(scan_started.elapsed().as_millis() as u64);
+    input.timings_ms["source_setup_elapsed"] = json!(started.elapsed().as_millis() as u64);
+    if Spi::get_one::<bool>(
+        "SELECT pg_catalog.current_setting('mdm.trace_graph_deltas', true) = 'on'",
+    )
+    .map_err(|error| MdmError::Spi(error.to_string()))?
+    .unwrap_or(false)
+    {
+        pgrx::notice!(
+            "PG_MDM_SOURCE_SYNC_TRACE {}",
+            json!({
+                "entity_name": entity_name,
+                "capture": input.capture,
+                "stage_timings_ms": input.timings_ms,
+                "sources": input.snapshots.iter().map(|snapshot| json!({
+                    "source_name": snapshot.source_name,
+                    "complete_scan": snapshot.complete,
+                    "keys": snapshot.keys.iter().map(|key| hex(key)).collect::<Vec<_>>(),
+                    "deleted_keys": snapshot.deleted_keys.iter().map(|key| hex(key)).collect::<Vec<_>>()
+                })).collect::<Vec<_>>()
+            })
+        );
+    }
+    Ok(input)
 }
 
 #[pg_extern(
@@ -629,8 +727,20 @@ pub(crate) fn refresh_access(request: Internal) -> JsonB {
             .ok_or_else(|| MdmError::Unauthorized("refresh access request is required".into()))?;
         let helper_owner = catalog::validate_helper_owner()?;
         let (_, selected) = catalog::validate_caller(&helper_owner)?;
-        Spi::connect(|client| {
-            let context = load_context(client, &request.entity_name, &selected, false)?;
+        Spi::connect_mut(|client| {
+            let context = load_context(client, &request.entity_name, &selected, true)?;
+            if request.capture {
+                return Ok(JsonB(
+                    serde_json::to_value(capture_source_input(
+                        client,
+                        &context,
+                        &request.full_policy,
+                        &selected,
+                    )?)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?,
+                ));
+            }
+            validate_source_bindings(client, &context, &selected)?;
             let rows = client
                 .select(
                     "SELECT m.relation_name FROM mdm_internal.graph_members m JOIN mdm_internal.graph_bindings b ON b.graph_binding_id = m.graph_binding_id JOIN mdm_internal.entities e ON e.entity_id = b.entity_id WHERE e.entity_name = $1::pg_catalog.name AND b.definition_version = e.desired_version AND b.execution_role_oid = $2 AND b.graph_generation = (SELECT max(b2.graph_generation) FROM mdm_internal.graph_bindings b2 WHERE b2.entity_id = e.entity_id AND b2.definition_version = e.desired_version AND b2.execution_role_oid = $2) ORDER BY m.topological_ordinal",
@@ -654,16 +764,18 @@ pub(crate) fn refresh_access(request: Internal) -> JsonB {
                 .map(|source| {
                     let rows = client
                         .select(
-                            "SELECT relation_name FROM mdm_internal.source_identities WHERE entity_id = $1::pg_catalog.uuid AND source_name = $2::pg_catalog.name",
+                            "SELECT s.relation_name, c.relkind = 'r' AND c.relpersistence = 'p' AND NOT c.relrowsecurity AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid OR i.inhrelid = c.oid) FROM mdm_internal.source_identities s JOIN mdm_internal.source_bindings b USING (source_identity_id) JOIN pg_catalog.pg_class c ON c.oid = b.relation_oid WHERE s.entity_id = $1::pg_catalog.uuid AND s.source_name = $2::pg_catalog.name",
                             Some(1),
                             &[context.entity_id.clone().into(), source.name.clone().into()],
                         )
                         .map_err(|error| MdmError::Spi(error.to_string()))?;
-                    let relation_name = rows
-                        .first()
+                    let row = rows.first();
+                    let relation_name = row
                         .get::<String>(1)
                         .map_err(|error| MdmError::Spi(error.to_string()))?
                         .ok_or_else(|| MdmError::GraphBinding("source relation is missing".into()))?;
+                    let capture_eligible = row.get::<bool>(2)
+                        .map_err(|error| MdmError::Spi(error.to_string()))?.unwrap_or(false);
                     let mut scan_source = source.clone();
                     scan_source.relation = relation_name;
                     let query = crate::graph_spec::source_record_sql(
@@ -675,7 +787,8 @@ pub(crate) fn refresh_access(request: Internal) -> JsonB {
                         "sql": format!(
                             "SELECT source_record_key FROM ({query}) AS source_rows"
                         ),
-                        "max_active_records": max_active_records
+                        "max_active_records": max_active_records,
+                        "capture_eligible": capture_eligible
                     }))
                 })
                 .collect::<Result<Vec<_>, MdmError>>()?;
@@ -689,19 +802,10 @@ pub(crate) fn refresh_access(request: Internal) -> JsonB {
     result.unwrap_or_else(|error| crate::raise(error))
 }
 
-fn refresh_graph(
-    client: &mut SpiClient<'_>,
-    context: &Context,
-    full_policy: &str,
-) -> Result<GraphRefresh, MdmError> {
-    if !matches!(full_policy, "ALLOW" | "ERROR") {
-        return Err(MdmError::RefreshBoundary(
-            "full_policy must be ALLOW or ERROR".into(),
-        ));
-    }
+fn sync_graph_definition(client: &mut SpiClient<'_>, context: &Context) -> Result<(), MdmError> {
     client
         .update(
-            "DELETE FROM mdm_graph.source_identity_map target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.source_identities source WHERE source.entity_id = target.entity_id AND source.source_name::text = target.source_name); DELETE FROM mdm_graph.source_records target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.source_records source WHERE source.entity_id = target.entity_id AND source.source_record_id = target.source_record_id); DELETE FROM mdm_graph.definition_limits target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.entities entity JOIN mdm_internal.definitions definition ON definition.entity_id = entity.entity_id AND definition.definition_version = entity.desired_version WHERE entity.entity_id = target.entity_id)",
+            "DELETE FROM mdm_graph.source_identity_map target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.source_identities source WHERE source.entity_id = target.entity_id AND source.source_name::text = target.source_name); DELETE FROM mdm_graph.definition_limits target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.entities entity JOIN mdm_internal.definitions definition ON definition.entity_id = entity.entity_id AND definition.definition_version = entity.desired_version WHERE entity.entity_id = target.entity_id)",
             None,
             &[context.entity_id.clone().into()],
         )
@@ -715,18 +819,149 @@ fn refresh_graph(
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
     client
         .update(
-            "INSERT INTO mdm_graph.source_records AS target (entity_id, source_identity_id, source_record_key, source_record_id, active) SELECT entity_id, source_identity_id, source_record_key, source_record_id, active FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid ON CONFLICT (source_record_id) DO UPDATE SET entity_id = EXCLUDED.entity_id, source_identity_id = EXCLUDED.source_identity_id, source_record_key = EXCLUDED.source_record_key, source_record_id = EXCLUDED.source_record_id, active = EXCLUDED.active WHERE target.entity_id IS DISTINCT FROM EXCLUDED.entity_id OR target.source_identity_id IS DISTINCT FROM EXCLUDED.source_identity_id OR target.source_record_key IS DISTINCT FROM EXCLUDED.source_record_key OR target.source_record_id IS DISTINCT FROM EXCLUDED.source_record_id OR target.active IS DISTINCT FROM EXCLUDED.active",
+            "INSERT INTO mdm_graph.definition_limits AS target (entity_id, entity_name, expanded_definition) SELECT e.entity_id, e.entity_name::text, d.expanded_definition FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version WHERE e.entity_id = $1::pg_catalog.uuid ON CONFLICT (entity_id) DO UPDATE SET entity_name = EXCLUDED.entity_name, expanded_definition = EXCLUDED.expanded_definition WHERE target.entity_name IS DISTINCT FROM EXCLUDED.entity_name OR target.expanded_definition IS DISTINCT FROM EXCLUDED.expanded_definition",
+            None,
+            &[context.entity_id.clone().into()],
+        )
+        .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
+    Ok(())
+}
+
+fn capture_source_input(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    full_policy: &str,
+    selected: &catalog::Role,
+) -> Result<SourceInput, MdmError> {
+    let started = Instant::now();
+    validate_preview_contract(client, context, selected)?;
+    let helper_started = Instant::now();
+    sync_graph_definition(client, context)?;
+    let helper_sync_ms = helper_started.elapsed().as_millis() as u64;
+    // The producer's transaction-scoped source locks fence both registration and the later graph refresh.
+    let rows = client.select(
+        "WITH roots AS MATERIALIZED (SELECT pg_catalog.array_agg(relation_oid::pg_catalog.regclass ORDER BY topological_ordinal) AS relations FROM mdm_internal.graph_members WHERE graph_binding_id = $1::pg_catalog.uuid AND logical_id LIKE 'records/%') SELECT r.contract_version, r.source_boundary, r.node_results FROM roots CROSS JOIN LATERAL pgtrickle.graph_contract(roots.relations) c CROSS JOIN LATERAL pgtrickle.refresh_graph_strict(roots.relations, c.graph_digest, $2::text) r",
+        Some(1), &[context.graph_binding_id.clone().into(), full_policy.into()],
+    ).map_err(|error| MdmError::RefreshBoundary(error.to_string()))?;
+    let row = rows.first();
+    let version = row
+        .get::<i16>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let boundary = row
+        .get::<JsonB>(2)
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    let node_results = row
+        .get::<JsonB>(3)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| {
+            MdmError::RefreshBoundary("source capture node results are missing".into())
+        })?;
+    let source_nodes = node_results
+        .0
+        .as_object()
+        .ok_or_else(|| MdmError::RefreshBoundary("source capture node results are invalid".into()))?
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    if source_nodes.len() != context.entity.sources.len()
+        || version != Some(1)
+        || boundary
+            .as_ref()
+            .and_then(|value| value.0.get("completeness"))
+            .and_then(Value::as_str)
+            != Some("PROVEN")
+    {
+        return Err(MdmError::RefreshBoundary(
+            "source capture did not prove a complete boundary".into(),
+        ));
+    }
+    let mut delta = if crate::integration::output_delta_enabled()? {
+        ensure_delta_consumers(client, context, true)?
+    } else {
+        Vec::new()
+    };
+    read_delta_batches(client, &mut delta)?;
+    let snapshots = delta
+        .iter()
+        .filter(|consumer| {
+            context.publication_revision > 0
+                && consumer.state == "ACTIVE"
+                && consumer.resnapshot_token.is_none()
+                && !consumer.saw_full_invalidation
+                && consumer.lag == 0
+        })
+        .map(|consumer| {
+            let changes = consumer
+                .source_changes
+                .iter()
+                .cloned()
+                .collect::<BTreeMap<_, _>>();
+            SourceSnapshot {
+                source_name: consumer
+                    .logical_id
+                    .strip_prefix("records/")
+                    .expect("source consumer has records prefix")
+                    .to_owned(),
+                keys: changes
+                    .iter()
+                    .filter(|(_, active)| **active)
+                    .map(|(key, _)| key.clone())
+                    .collect(),
+                deleted_keys: changes
+                    .into_iter()
+                    .filter(|(_, active)| !active)
+                    .map(|(key, _)| key)
+                    .collect(),
+                complete: false,
+            }
+        })
+        .collect();
+    Ok(SourceInput {
+        snapshots,
+        timings_ms: json!({"source_capture": started.elapsed().as_millis() as u64, "graph_definition_sync": helper_sync_ms}),
+        capture: json!({
+            "source_boundary": boundary.map(|value| value.0),
+            "source_nodes": source_nodes,
+            "consumers": delta.iter().map(|consumer| json!({
+                "logical_id": consumer.logical_id,
+                "state": consumer.state,
+                "resnapshot": consumer.resnapshot_token.is_some(),
+                "acknowledged_token": consumer.acknowledged_token,
+                "log_head": consumer.log_head,
+                "through_token": consumer.through_token,
+                "lag": consumer.lag,
+                "batches": consumer.observed_batches
+            })).collect::<Vec<_>>()
+        }),
+    })
+}
+
+fn refresh_graph(
+    client: &mut SpiClient<'_>,
+    context: &Context,
+    full_policy: &str,
+) -> Result<GraphRefresh, MdmError> {
+    let helper_started = Instant::now();
+    if !matches!(full_policy, "ALLOW" | "ERROR") {
+        return Err(MdmError::RefreshBoundary(
+            "full_policy must be ALLOW or ERROR".into(),
+        ));
+    }
+    client
+        .update(
+            "DELETE FROM mdm_graph.source_records target WHERE target.entity_id = $1::pg_catalog.uuid AND NOT EXISTS (SELECT FROM mdm_internal.source_records source WHERE source.entity_id = target.entity_id AND source.source_record_id = target.source_record_id)",
             None,
             &[context.entity_id.clone().into()],
         )
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
     client
         .update(
-            "INSERT INTO mdm_graph.definition_limits AS target (entity_id, entity_name, expanded_definition) SELECT e.entity_id, e.entity_name::text, d.expanded_definition FROM mdm_internal.entities e JOIN mdm_internal.definitions d ON d.entity_id = e.entity_id AND d.definition_version = e.desired_version WHERE e.entity_id = $1::pg_catalog.uuid ON CONFLICT (entity_id) DO UPDATE SET entity_name = EXCLUDED.entity_name, expanded_definition = EXCLUDED.expanded_definition WHERE target.entity_name IS DISTINCT FROM EXCLUDED.entity_name OR target.expanded_definition IS DISTINCT FROM EXCLUDED.expanded_definition",
+            "INSERT INTO mdm_graph.source_records AS target (entity_id, source_identity_id, source_record_key, source_record_id, active) SELECT entity_id, source_identity_id, source_record_key, source_record_id, active FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid ON CONFLICT (source_record_id) DO UPDATE SET entity_id = EXCLUDED.entity_id, source_identity_id = EXCLUDED.source_identity_id, source_record_key = EXCLUDED.source_record_key, source_record_id = EXCLUDED.source_record_id, active = EXCLUDED.active WHERE target.entity_id IS DISTINCT FROM EXCLUDED.entity_id OR target.source_identity_id IS DISTINCT FROM EXCLUDED.source_identity_id OR target.source_record_key IS DISTINCT FROM EXCLUDED.source_record_key OR target.source_record_id IS DISTINCT FROM EXCLUDED.source_record_id OR target.active IS DISTINCT FROM EXCLUDED.active",
             None,
             &[context.entity_id.clone().into()],
         )
         .map_err(|error| MdmError::RefreshFailed(error.to_string()))?;
+    let helper_sync_ms = helper_started.elapsed().as_millis() as u64;
     let rows = client
         .select(
             "SELECT contract_version, graph_digest, contract FROM pgtrickle.graph_contract(ARRAY[$1::regclass])",
@@ -818,6 +1053,7 @@ fn refresh_graph(
         boundary: boundary.0,
         boundary_digest,
         node_results: node_results.0,
+        helper_sync_ms,
     })
 }
 
@@ -952,24 +1188,32 @@ fn read_delta_status(
 fn ensure_delta_consumers(
     client: &mut SpiClient<'_>,
     context: &Context,
+    source_records: bool,
 ) -> Result<Vec<DeltaConsumer>, MdmError> {
     let members = client
         .select(
-            "SELECT m.logical_id, m.relation_oid, m.contract_digest, c.consumer_id, c.delta_relation_name, c.row_identity_version FROM mdm_internal.graph_members m LEFT JOIN mdm_internal.graph_delta_consumers c ON c.graph_binding_id = m.graph_binding_id AND c.logical_id = m.logical_id WHERE m.graph_binding_id = $1::pg_catalog.uuid AND m.logical_id IN ($2, $3) ORDER BY m.logical_id",
+            "SELECT m.logical_id, m.relation_oid, m.contract_digest, c.consumer_id, c.delta_relation_name, c.row_identity_version FROM mdm_internal.graph_members m LEFT JOIN mdm_internal.graph_delta_consumers c ON c.graph_binding_id = m.graph_binding_id AND c.logical_id = m.logical_id WHERE m.graph_binding_id = $1::pg_catalog.uuid AND (($4 AND m.logical_id LIKE 'records/%') OR (NOT $4 AND m.logical_id IN ($2, $3))) ORDER BY m.logical_id",
             None,
             &[
                 context.graph_binding_id.clone().into(),
                 format!("evidence/{}", context.entity.name).into(),
                 format!("golden/{}", context.entity.name).into(),
+                source_records.into(),
             ],
         )
         .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?;
-    if members.len() != 2 {
+    if members.len()
+        != if source_records {
+            context.entity.sources.len()
+        } else {
+            2
+        }
+    {
         return Err(MdmError::DeltaProtocol(
-            "evidence and golden graph members are required".into(),
+            "required delta graph members are missing".into(),
         ));
     }
-    let mut consumers = Vec::with_capacity(2);
+    let mut consumers = Vec::with_capacity(members.len());
     for row in members {
         let logical_id = row
             .get::<String>(1)
@@ -1059,6 +1303,7 @@ fn ensure_delta_consumers(
             saw_full_invalidation: false,
             observed_batches: Vec::new(),
             affected_records: BTreeSet::new(),
+            source_changes: Vec::new(),
             lag: status.lag,
         };
         if matches!(
@@ -1130,6 +1375,7 @@ fn read_delta_batches(
                 "left_source_record_id, right_source_record_id"
             }
             logical_id if logical_id.starts_with("golden/") => "source_record_id",
+            logical_id if logical_id.starts_with("records/") => "source_record_key",
             logical_id => {
                 return Err(MdmError::DeltaProtocol(format!(
                     "unsupported terminal logical ID {logical_id}"
@@ -1207,7 +1453,21 @@ fn read_delta_batches(
                     .ok_or_else(|| {
                         MdmError::DeltaProtocol("payload row identity is NULL".into())
                     })?;
-                let source_record_ids = if payload_columns.contains("left_source_record_id") {
+                let source_record_key = if payload_columns == "source_record_key" {
+                    Some(
+                        payload_row
+                            .get::<Vec<u8>>(3)
+                            .map_err(|error| MdmError::DeltaProtocol(error.to_string()))?
+                            .ok_or_else(|| {
+                                MdmError::DeltaProtocol("source record key is NULL".into())
+                            })?,
+                    )
+                } else {
+                    None
+                };
+                let source_record_ids = if source_record_key.is_some() {
+                    Vec::new()
+                } else if payload_columns.contains("left_source_record_id") {
                     vec![
                         payload_row
                             .get::<Uuid>(3)
@@ -1240,6 +1500,7 @@ fn read_delta_batches(
                     action,
                     row_identity: identity,
                     source_record_ids,
+                    source_record_key,
                 });
             }
             validate_delta_payload(&decoded, &batch)?;
@@ -1247,6 +1508,11 @@ fn read_delta_batches(
                 consumer
                     .affected_records
                     .extend(row.source_record_ids.iter().copied());
+                if let Some(key) = &row.source_record_key {
+                    consumer
+                        .source_changes
+                        .push((key.clone(), row.action == "INSERT"));
+                }
             }
             consumer.batch_count += 1;
             consumer.row_count += usize::try_from(batch.row_count)
@@ -1259,6 +1525,21 @@ fn read_delta_batches(
                 .checked_add(1)
                 .ok_or_else(|| MdmError::DeltaProtocol("batch token is exhausted".into()))?;
         }
+        let status = read_delta_status(client, consumer.consumer_id)?;
+        if status.contract_digest != consumer.contract_digest
+            || status.row_identity_version != consumer.row_identity_version
+            || status.delta_relation != consumer.delta_relation
+        {
+            return Err(MdmError::DeltaProtocol(
+                "delta status changed while reading batches".into(),
+            ));
+        }
+        consumer.state = status.state;
+        consumer.log_head = status.log_head;
+        consumer.lag = status.log_head
+            - consumer
+                .through_token
+                .unwrap_or(consumer.acknowledged_token);
     }
     Ok(())
 }
@@ -2625,13 +2906,48 @@ fn persist_refresh_inner(
             session,
         )?;
         let mut delta = if delta_admitted {
-            ensure_delta_consumers(client, &context)?
+            ensure_delta_consumers(client, &context, false)?
         } else {
             Vec::new()
         };
-        sync_source_records(client, &context, &request.source_snapshots)?;
+        let source_sync_started = Instant::now();
+        sync_source_records(client, &context, &request.sources.snapshots)?;
+        let active_records = client.select(
+            "SELECT count(*)::bigint FROM mdm_internal.source_records WHERE entity_id = $1::pg_catalog.uuid AND active",
+            Some(1), &[context.entity_id.clone().into()],
+        ).map_err(|error| MdmError::Spi(error.to_string()))?.first().get::<i64>(1)
+            .map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::Spi("active source count is NULL".into()))? as usize;
+        let max_active_records = load_limits(&context).max_active_records;
+        if active_records > max_active_records {
+            return Err(MdmError::ResolverLimit {
+                resource: "max_active_records",
+                observed: active_records,
+                limit: max_active_records,
+            });
+        }
+        let source_sync_ms = source_sync_started.elapsed().as_millis() as u64;
         let graph_refresh_started = Instant::now();
         let graph = refresh_graph(client, &context, &request.full_policy)?;
+        for source_node in request.sources.capture["source_nodes"]
+            .as_array()
+            .ok_or_else(|| MdmError::RefreshBoundary("source capture nodes are missing".into()))?
+        {
+            let node = source_node
+                .as_str()
+                .and_then(|id| graph.node_results.get(id));
+            if ["rows_inserted", "rows_updated", "rows_deleted"]
+                .iter()
+                .any(|field| {
+                    node.and_then(|node| node.get(*field))
+                        .and_then(Value::as_u64)
+                        != Some(0)
+                })
+            {
+                return Err(MdmError::RefreshBoundary(
+                    "source graph changed after the registration fence".into(),
+                ));
+            }
+        }
         let graph_refresh_ms = graph_refresh_started.elapsed().as_millis() as u64;
         if delta_admitted {
             read_delta_batches(client, &mut delta)?;
@@ -2792,6 +3108,9 @@ fn persist_refresh_inner(
             )?;
             if delta_admitted {
                 finish_delta(client, &mut delta)?;
+                let mut source_delta = ensure_delta_consumers(client, &context, true)?;
+                read_delta_batches(client, &mut source_delta)?;
+                finish_delta(client, &mut source_delta)?;
             }
             let (effective_node_modes, unexpected_full_fallbacks) =
                 node_mode_summary(&graph.node_results);
@@ -2809,6 +3128,13 @@ fn persist_refresh_inner(
                 open_reviews,
                 stage_timings_ms: json!({
                     "graph_refresh": graph_refresh_ms,
+                    "source_access": request.sources.timings_ms["source_access"],
+                    "source_capture": request.sources.timings_ms["source_capture"],
+                    "source_scan": request.sources.timings_ms["source_scan"],
+                    "source_setup_elapsed": request.sources.timings_ms["source_setup_elapsed"],
+                    "source_sync": source_sync_ms,
+                    "graph_helper_sync": graph.helper_sync_ms + request.sources.timings_ms["graph_definition_sync"].as_u64().unwrap_or(0),
+                    "end_to_end": request.started.elapsed().as_millis() as u64,
                     "mdm_resolution": mdm_resolution_ms,
                     "publication": publication_started.elapsed().as_millis() as u64,
                     "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
@@ -3135,6 +3461,9 @@ fn persist_refresh_inner(
         )?;
         if delta_admitted {
             finish_delta(client, &mut delta)?;
+            let mut source_delta = ensure_delta_consumers(client, &context, true)?;
+            read_delta_batches(client, &mut source_delta)?;
+            finish_delta(client, &mut source_delta)?;
         }
         let publication_ms = publication_started.elapsed().as_millis() as u64;
         let delta_batch_count = delta.iter().map(|consumer| consumer.batch_count).sum();
@@ -3170,6 +3499,13 @@ fn persist_refresh_inner(
                 .count(),
             stage_timings_ms: json!({
                 "graph_refresh": graph_refresh_ms,
+                "source_access": request.sources.timings_ms["source_access"],
+                "source_capture": request.sources.timings_ms["source_capture"],
+                "source_scan": request.sources.timings_ms["source_scan"],
+                "source_setup_elapsed": request.sources.timings_ms["source_setup_elapsed"],
+                "source_sync": source_sync_ms,
+                "graph_helper_sync": graph.helper_sync_ms + request.sources.timings_ms["graph_definition_sync"].as_u64().unwrap_or(0),
+                "end_to_end": request.started.elapsed().as_millis() as u64,
                 "mdm_resolution": mdm_resolution_ms,
                 "publication": publication_ms,
                 "elapsed_before_operation_completion": operation_started.elapsed().as_millis() as u64
@@ -3194,15 +3530,17 @@ fn persist_refresh_inner(
 
 #[pg_extern(name = "refresh", requires = [persist_refresh], sql = "CREATE FUNCTION mdm.refresh(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'refresh_wrapper';")]
 pub(crate) fn refresh(entity_name: String, full_policy: default!(String, "'ALLOW'")) -> JsonB {
-    let source_snapshots =
-        grant_refresh_access(&entity_name).unwrap_or_else(|error| crate::raise(error));
+    let started = Instant::now();
+    let sources = grant_refresh_access(&entity_name, &full_policy, false)
+        .unwrap_or_else(|error| crate::raise(error));
     catalog::call_helper(
         "persist_refresh",
         RefreshRequest {
+            started,
             entity_name,
             full_policy,
             rebuild: false,
-            source_snapshots,
+            sources,
         },
     )
     .unwrap_or_else(|error| crate::raise(error))
@@ -3210,15 +3548,17 @@ pub(crate) fn refresh(entity_name: String, full_policy: default!(String, "'ALLOW
 
 #[pg_extern(name = "rebuild", requires = [persist_refresh], sql = "CREATE FUNCTION mdm_admin.rebuild(entity_name text, full_policy text DEFAULT 'ALLOW') RETURNS jsonb LANGUAGE c AS 'MODULE_PATHNAME', 'rebuild_wrapper';")]
 pub(crate) fn rebuild(entity_name: String, full_policy: default!(String, "'ALLOW'")) -> JsonB {
-    let source_snapshots =
-        grant_refresh_access(&entity_name).unwrap_or_else(|error| crate::raise(error));
+    let started = Instant::now();
+    let sources = grant_refresh_access(&entity_name, &full_policy, true)
+        .unwrap_or_else(|error| crate::raise(error));
     catalog::call_helper(
         "persist_refresh",
         RefreshRequest {
+            started,
             entity_name,
             full_policy,
             rebuild: true,
-            source_snapshots,
+            sources,
         },
     )
     .unwrap_or_else(|error| crate::raise(error))
@@ -3434,6 +3774,14 @@ fn validate_preview_contract(
         ));
     }
 
+    validate_source_bindings(client, context, selected)
+}
+
+fn validate_source_bindings(
+    client: &SpiClient<'_>,
+    context: &Context,
+    selected: &catalog::Role,
+) -> Result<(), MdmError> {
     let sources = client
         .select(
             "SELECT s.source_name::text, s.relation_name, b.relation_oid, b.binding_fingerprint, c.oid, pg_catalog.jsonb_build_object('relation_oid', c.oid::bigint, 'relation_name', pg_catalog.format('%I.%I', n.nspname, c.relname), 'relkind', c.relkind::text, 'relpersistence', c.relpersistence::text, 'row_security', c.relrowsecurity, 'force_row_security', c.relforcerowsecurity, 'policies', COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('name', p.polname::text, 'permissive', p.polpermissive, 'roles', p.polroles::text, 'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid), 'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid)) ORDER BY p.polname) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid), '[]'::pg_catalog.jsonb)), pg_catalog.has_schema_privilege($2, c.relnamespace, 'USAGE') AND pg_catalog.has_table_privilege($2, c.oid, 'SELECT') AND pg_catalog.has_table_privilege($2, c.oid, 'MAINTAIN') FROM mdm_internal.source_identities s JOIN mdm_internal.source_bindings b USING (source_identity_id) LEFT JOIN pg_catalog.pg_class c ON c.oid = pg_catalog.to_regclass(s.relation_name)::pg_catalog.oid LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE s.entity_id = $1::pg_catalog.uuid ORDER BY s.source_name",
@@ -4601,11 +4949,13 @@ mod tests {
                         action: "DELETE".into(),
                         row_identity: vec![9],
                         source_record_ids: vec![Uuid::from_bytes([1; 16])],
+                        source_record_key: None,
                     },
                     DeltaRow {
                         action: "INSERT".into(),
                         row_identity: vec![8],
                         source_record_ids: vec![Uuid::from_bytes([2; 16])],
+                        source_record_key: None,
                     },
                 ],
                 &batch,
@@ -4637,6 +4987,7 @@ mod tests {
                     action: "UPDATE".into(),
                     row_identity: vec![9],
                     source_record_ids: vec![Uuid::from_bytes([1; 16])],
+                    source_record_key: None,
                 }],
                 &batch,
             ),
@@ -4670,6 +5021,48 @@ mod tests {
             validate_delta_batch(&batch, 7, &[1], 2),
             Err(MdmError::DeltaProtocol(
                 "invalid batch metadata for token 7".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn source_delta_payload_requires_complete_key_identity_and_action_counts() {
+        let batch = DeltaBatch {
+            token: 8,
+            row_count: 2,
+            rows_inserted: 1,
+            rows_deleted: 1,
+            mode: "EXACT".into(),
+            contract_digest: vec![1],
+            row_identity_version: 2,
+        };
+        let mut rows = vec![
+            DeltaRow {
+                action: "DELETE".into(),
+                row_identity: vec![1],
+                source_record_ids: Vec::new(),
+                source_record_key: Some(vec![10]),
+            },
+            DeltaRow {
+                action: "INSERT".into(),
+                row_identity: vec![2],
+                source_record_ids: Vec::new(),
+                source_record_key: Some(vec![20]),
+            },
+        ];
+        assert_eq!(validate_delta_payload(&rows, &batch), Ok(()));
+        rows[0].source_record_key = Some(Vec::new());
+        assert_eq!(
+            validate_delta_payload(&rows, &batch),
+            Err(MdmError::DeltaProtocol(
+                "payload row identity or source record IDs are empty".into()
+            ))
+        );
+        rows[0].source_record_key = None;
+        assert_eq!(
+            validate_delta_payload(&rows, &batch),
+            Err(MdmError::DeltaProtocol(
+                "payload row identity or source record IDs are empty".into()
             ))
         );
     }

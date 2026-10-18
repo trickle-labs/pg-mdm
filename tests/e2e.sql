@@ -1732,6 +1732,7 @@ AS $$
         pg_catalog.jsonb_agg(
             pg_catalog.jsonb_build_object(
                 'identity', node_identity,
+                'logical_id', (SELECT logical_id FROM mdm_internal.graph_members WHERE relation_oid = node_identity::regclass),
                 'requested_mode', contract.contract->>'refresh_mode',
                 'effective_mode', result.value->>'action',
                 'fallback_reason', CASE
@@ -1913,7 +1914,8 @@ BEGIN
               OR item->>'effective_mode' NOT IN ('DIFFERENTIAL', 'FULL')
               OR NOT (item ? 'fallback_reason')
               OR (item->>'requested_mode' = 'FULL' AND item->>'effective_mode' <> 'FULL')
-              OR (item->>'requested_mode' = 'DIFFERENTIAL' AND item->>'effective_mode' <> 'FULL')
+              OR (item->>'requested_mode' = 'DIFFERENTIAL' AND item->>'effective_mode' IS DISTINCT FROM
+                  CASE WHEN item->>'logical_id' LIKE 'records/%' THEN 'DIFFERENTIAL' ELSE 'FULL' END)
        ) THEN
         RAISE EXCEPTION 'initial graph qualification failed: %', qualification;
     END IF;
@@ -2578,6 +2580,7 @@ CROSS JOIN LATERAL pgtrickle.register_output_delta_consumer(
     m.relation_name::regclass, 'e2e_split/' || c.logical_id,
     contract.contract_digest, 'RESNAPSHOT_REQUIRED') registered
 WHERE e.entity_name = 'customer'
+  AND c.logical_id IN ('evidence/customer', 'golden/customer')
   AND g.graph_generation = (SELECT max(graph_generation)
                            FROM mdm_internal.graph_bindings WHERE entity_id = e.entity_id);
 BEGIN;

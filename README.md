@@ -139,6 +139,20 @@ Keep `full_policy = 'ALLOW'` during the rollout. Use `ERROR` only in qualificati
 
 Alert when a steady-state refresh reports a full resolver fallback or an unexpected FULL graph node. Recovery refreshes, rebuilds, graph transitions, invalidations, and resnapshots are expected full cases.
 
+Source registration consumes complete output-delta ranges from the `records/*`
+nodes before the downstream graph refresh. The source refresh holds the producer's
+transaction-scoped source locks through registration and publication. Qualified
+ordinary permanent tables without row-level security or inheritance use changed
+encoded keys, including both sides of key changes and soft-delete transitions.
+Empty ranges read no source keys. Bootstrap, rebuild, missing/incomplete capture,
+resnapshots, and other source shapes use complete scans at that same fence.
+Caller source privileges are checked on every refresh, including no-change calls;
+the active-record limit still applies to the whole entity across all sources.
+Source cursors acknowledge only when publication succeeds. This capture claim is
+separate from terminal-output EXACT qualification and affected resolution.
+Synchronizing graph helper tables and checking entity-wide counts still require
+global work.
+
 The Docker E2E run also executes `tests/incremental_qualification.sql`. It
 measures 30 affected-refresh samples after five warmups at 128 and 2,048
 records, and compares the complete public publication, durable identities,
