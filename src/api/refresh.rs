@@ -2727,10 +2727,17 @@ fn persist_outputs(
     let output_name = client.select("SELECT output_name::text FROM mdm_internal.output_names WHERE entity_id = $1::pg_catalog.uuid AND output_kind = 'entity'", Some(1), &[context.entity_id.clone().into()]).map_err(|error| MdmError::Spi(error.to_string()))?.first().get::<String>(1).map_err(|error| MdmError::Spi(error.to_string()))?.ok_or_else(|| MdmError::OutputInvalid("entity output name is missing".into()))?;
     let members_name = format!("{output_name}_members");
     let review_name = format!("{output_name}_review");
-    let open_reviews = reviews
-        .iter()
-        .filter(|review| review.status == ReviewStatus::Open)
-        .count();
+    let has_review = client
+        .select(
+            "SELECT EXISTS (SELECT FROM mdm_internal.reviews WHERE entity_id = $1::uuid AND status = 'open')",
+            Some(1),
+            &[context.entity_id.clone().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .first()
+        .get::<bool>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("published review flag is NULL".into()))?;
     let mut member_counts = BTreeMap::new();
     for membership in identity.memberships.iter().filter(|row| row.active) {
         *member_counts.entry(membership.mdm_id).or_insert(0usize) += 1;
@@ -2777,7 +2784,7 @@ fn persist_outputs(
                         .copied()
                         .unwrap_or_default()
                         .to_string(),
-                    (open_reviews > 0).to_string(),
+                    has_review.to_string(),
                     revision.to_string(),
                 ]);
                 format!("({})", row_values.join(", "))
@@ -2806,6 +2813,19 @@ fn persist_outputs(
         .map(|row| row.mdm_id)
         .collect::<BTreeSet<_>>();
     delete_stale_output_rows(client, &output_name, "mdm_id", &entity_ids, mdm_scope)?;
+    if mdm_scope.is_some() {
+        // The published flag applies to every identity, including untouched components.
+        client
+            .update(
+                &format!(
+                    "UPDATE mdm_out.{} SET has_review = $1, last_change_revision = $2 WHERE has_review IS DISTINCT FROM $1",
+                    quote_identifier(&output_name)
+                ),
+                None,
+                &[has_review.into(), revision.into()],
+            )
+            .map_err(|error| MdmError::OutputInvalid(error.to_string()))?;
+    }
     for batch in identity.memberships.chunks(PUBLICATION_BATCH_SIZE) {
         let mut args = Vec::with_capacity(batch.len() * 8);
         for membership in batch {
