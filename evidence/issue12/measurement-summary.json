@@ -1,0 +1,97 @@
+{
+  "source_commit": "8f362be3080cc643a41670badfef29fcbea9c119",
+  "collector_only_patch": true,
+  "collector_sha256": "6850d586f0b1996a9fc3c520eadc8ad3faa899fa91bbfb2b918a5fafdb398592",
+  "candidate_patch_sha256": "0901a3043ec2758d7eaa0b2f11b147d0dbba6e53513e2a9b1cf196e2ffb9c9ba",
+  "producer_binary": "edb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9",
+  "environment": {
+    "cpu": {
+      "model": "VirtualApple @ 2.50GHz",
+      "visible_processors": 10
+    },
+    "docker_engine_architecture": "arm64",
+    "docker_image_architecture": "amd64",
+    "docker_image_id": "sha256:5b7e6c7b0020cf5dedd8bc4a6be2edccc8794deb81f30928e1077d8c4631d512",
+    "memory": {
+      "cgroup_limit_bytes": "max",
+      "cgroup_peak_bytes": 1836978176,
+      "visible_available_bytes": 6185783296,
+      "visible_total_bytes": 8319504384
+    },
+    "postgres_build": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+    "storage": "Filesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/vda1      977896124416 136959836160 791186444288  15% /var/lib/postgresql"
+  },
+  "digest_cases": 11,
+  "populations": [
+    {
+      "population": 128,
+      "before_elapsed": {
+        "max": 23310.351,
+        "p50": 21095.348,
+        "p95": 22965.377
+      },
+      "after_elapsed": {
+        "max": 24093.678,
+        "p50": 21287.727,
+        "p95": 23210.786
+      },
+      "stages": {
+        "evaluation_state_loading": {
+          "p50": 2.5710835,
+          "p95": 3.32573575
+        },
+        "merged_state_construction": {
+          "p50": 8.876375,
+          "p95": 9.60463345
+        },
+        "digest_generation": {
+          "p50": 0.5002709999999999,
+          "p95": 0.5604561
+        },
+        "snapshot_copying": {
+          "p50": 3.326625,
+          "p95": 4.3819266
+        },
+        "full_evaluation_state_loading": {
+          "p50": 2.7595840000000003,
+          "p95": 3.80148955
+        }
+      }
+    },
+    {
+      "population": 2048,
+      "before_elapsed": {
+        "max": 25253.433,
+        "p50": 22552.226,
+        "p95": 24704.3
+      },
+      "after_elapsed": {
+        "max": 29579.556,
+        "p50": 23959.599,
+        "p95": 26613.601
+      },
+      "stages": {
+        "evaluation_state_loading": {
+          "p50": 5.9134585,
+          "p95": 7.0484708000000005
+        },
+        "merged_state_construction": {
+          "p50": 117.1000835,
+          "p95": 125.9055003
+        },
+        "digest_generation": {
+          "p50": 9.557186999999999,
+          "p95": 10.94862935
+        },
+        "snapshot_copying": {
+          "p50": 36.5116875,
+          "p95": 40.14253345
+        },
+        "full_evaluation_state_loading": {
+          "p50": 25.164896000000002,
+          "p95": 29.265502150000003
+        }
+      }
+    }
+  ]
+}

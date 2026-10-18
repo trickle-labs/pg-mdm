@@ -370,34 +370,57 @@ proptest! {
         old_golden = semantic_golden(&initial.golden);
         old_facts = semantic_resolution_facts(&initial.resolution);
         let endpoints = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)];
-        let mut previous = 0_u8;
+        let mut previous = 0x40_u8;
 
-        for mask in history.into_iter().map(|value| value & 0x3f) {
+        for mask in history {
             if mask == previous {
                 continue;
             }
             revision += 1;
+            let current_records = records.iter()
+                .filter(|row| row.source_record_id != id(4) || mask & 0x40 != 0)
+                .cloned().collect::<Vec<_>>();
+            let active = current_records.iter().map(|row| row.source_record_id).collect::<BTreeSet<_>>();
+            let current_golden_rows = golden_rows.iter().filter(|row| active.contains(&row.source_record_id))
+                .cloned().map(|mut row| {
+                    if row.source_record_id == id(1) && mask & 0x80 != 0 {
+                        row.raw_value = Some(json!("Changed"));
+                        row.normalized = Some("Changed".into());
+                        row.canonical_bytes = Some(b"Changed".to_vec());
+                    }
+                    row
+                }).collect::<Vec<_>>();
             let pairs = endpoints
                 .iter()
                 .enumerate()
                 .filter(|(index, _)| mask & (1 << index) != 0)
+                .filter(|(_, (left, right))| active.contains(&id(*left)) && active.contains(&id(*right)))
                 .map(|(index, &(left, right))| edge(left, right, &format!("group-{index}"), index as u8))
                 .collect::<Vec<_>>();
-            let seeds = endpoints
+            let mut seeds = endpoints
                 .iter()
                 .enumerate()
-                .filter(|(index, _)| (mask ^ previous) & (1 << index) != 0)
+                .filter(|entry| {
+                    let (index, &(left, right)) = *entry;
+                    let current_edge = mask & (1 << index) != 0
+                        && active.contains(&id(left)) && active.contains(&id(right));
+                    let previous_edge = previous & (1 << index) != 0
+                        && (right != 4 || previous & 0x40 != 0);
+                    current_edge != previous_edge
+                })
                 .flat_map(|(_, &(left, right))| [id(left), id(right)])
                 .collect::<BTreeSet<_>>();
+            if (mask ^ previous) & 0x40 != 0 { seeds.insert(id(4)); }
+            if (mask ^ previous) & 0x80 != 0 { seeds.insert(id(1)); }
             let full = evaluate(
                 &entity,
-                &records,
+                &current_records,
                 pairs.clone(),
                 &old_identity,
                 &old_reviews,
                 &old_golden,
                 &old_facts,
-                &golden_rows,
+                &current_golden_rows,
                 revision,
             );
             let selected = pg_mdm::affected::build(
@@ -413,7 +436,7 @@ proptest! {
             let scoped_reviews = scope_reviews(&old_reviews, &selected, &old_mdm_ids);
             let scoped_golden = scope_golden(&old_golden, &old_mdm_ids);
             let scoped_facts = scope_facts(&old_facts, &selected);
-            let scoped_records = records
+            let scoped_records = current_records
                 .iter()
                 .filter(|row| selected.contains(&row.source_record_id))
                 .cloned()
@@ -425,7 +448,7 @@ proptest! {
                         && selected.contains(&pair.pair.right_source_record_id)
                 })
                 .collect();
-            let scoped_golden_rows = golden_rows
+            let scoped_golden_rows = current_golden_rows
                 .iter()
                 .filter(|row| selected.contains(&row.source_record_id))
                 .cloned()

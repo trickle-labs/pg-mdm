@@ -153,9 +153,23 @@ separate from terminal-output EXACT qualification and affected resolution.
 Synchronizing graph helper tables and checking entity-wide counts still require
 global work.
 
+Affected evaluation loads prior identities, historical memberships, reviews,
+golden provenance, pair facts, and overrides through its closed scope. A remote
+override anchor per field retains inactive-anchor review semantics; override
+edits can require an entity-wide scope. Complete semantic publication assembly,
+canonical digest generation, and retained snapshot copying still do global work.
+`stage_timings_ms` reports `evaluation_state_loading`, `merged_state_construction`,
+`digest_generation`, and `snapshot_copying` separately. The existing diagnostic
+trace records decoded prior rows and closure membership-ID reads against entity
+totals when `mdm.trace_graph_deltas` is enabled.
+
 The [source synchronization evidence](evidence/issue11/README.md) retains key-read
 plans, lifecycle and concurrency checks, and before/after measurements with their
 exact adapter and producer checksums.
+
+The [scoped-state evidence](evidence/issue12/README.md) retains prior-state query
+plans, exact history/digest checks and separate loading, assembly and copying
+measurements. The measured complete refresh did not show an end-to-end speedup.
 
 The Docker E2E run also executes `tests/incremental_qualification.sql`. It
 measures 30 affected-refresh samples after five warmups at 128 and 2,048

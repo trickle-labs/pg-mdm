@@ -1,0 +1,8 @@
+{
+  "baseline_source": "ad6534b0924aae1ec6d5ec51b4907ce1bd9f3dd9",
+  "baseline_image_id": "sha256:611eceb2169d245d222d3c984a4fd974a69d518ccb64ffee7519cd8be6583be2",
+  "baseline_runtime_matches_base": "bdca799",
+  "baseline_binary_sha256": "fe37b98b79c77d64cebabb97e3fc537a513ca71a2014bb995dca18ca41dd9b38  /usr/lib/postgresql/18/lib/pg_mdm.so\nedb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9  /usr/lib/postgresql/18/lib/pg_trickle.so\n",
+  "baseline_runtime": "x86_64\n10\nmax\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"\n",
+  "sdk_image_id": "sha256:cdea2b11ecff7946c916647f8071bc9b63c5768297d7273688170c42aa5b74df"
+}

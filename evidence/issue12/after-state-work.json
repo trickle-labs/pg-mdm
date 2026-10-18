@@ -1,0 +1,67 @@
+{
+  "128": {
+    "registry": [
+      0.0,
+      1.0
+    ],
+    "memberships": [
+      0.0,
+      1.0
+    ],
+    "aliases": [
+      0.0
+    ],
+    "splits": [
+      0.0
+    ],
+    "reviews": [
+      0.0
+    ],
+    "golden": [
+      0.0,
+      1.0
+    ],
+    "facts": [
+      0.0
+    ],
+    "overrides": [
+      0.0
+    ],
+    "closure_membership_ids": [
+      1.0
+    ]
+  },
+  "2048": {
+    "registry": [
+      0.0,
+      1.0
+    ],
+    "memberships": [
+      0.0,
+      1.0
+    ],
+    "aliases": [
+      0.0
+    ],
+    "splits": [
+      0.0
+    ],
+    "reviews": [
+      0.0
+    ],
+    "golden": [
+      0.0,
+      1.0
+    ],
+    "facts": [
+      0.0
+    ],
+    "overrides": [
+      0.0
+    ],
+    "closure_membership_ids": [
+      0.0,
+      1.0
+    ]
+  }
+}
