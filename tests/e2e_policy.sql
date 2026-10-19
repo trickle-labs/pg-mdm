@@ -917,7 +917,7 @@ SELECT :'escalate_due_outcome' = 'APPLIED_CONTROL'
 RESET ROLE;
 \connect foundation mdm_legacy_login
 SET ROLE :"policy_execution_role";
-SELECT case_key, assigned_queue::text AS queue,
+SELECT case_key, COALESCE(assigned_queue::text, '') AS queue,
        due_at::text AS due_at, escalation_level AS level,
        manual_assignment_protected AS protected, action_revision AS revision
 FROM mdm_steward.policy_cases_v1 WHERE case_key = :deadline_case_key
@@ -972,7 +972,8 @@ SELECT :'dedup_outcome' = 'ACTION_DENIED'
                        AND reason_code = 'ESCALATION_LEVEL_ALREADY_APPLIED') = 1
         FROM mdm_steward.policy_receipts_v1
         WHERE case_key = :lower_case_key AND action = 'ESCALATE'
-          AND control->>'escalation_level' = :lower_level::text)
+          AND request_key IN (pg_catalog.decode(pg_catalog.repeat('3', 64), 'hex'),
+                              pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex')))
    AND (SELECT count(*) = 1
                AND bool_and(outcome = 'ACTION_DENIED'
                    AND reason_code = 'ESCALATION_LEVEL_ALREADY_APPLIED'
