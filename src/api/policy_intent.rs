@@ -1433,7 +1433,6 @@ pub(crate) fn persist_policy_intent(request: Internal) -> JsonB {
     result.unwrap_or_else(|error| crate::raise(error))
 }
 
-
 // Called only while submit_intent holds the MDM case row FOR UPDATE.
 // Applied receipts are inserted atomically in that same transaction.
 fn gate(
