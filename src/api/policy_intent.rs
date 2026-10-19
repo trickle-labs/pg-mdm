@@ -1292,13 +1292,13 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
                         current_control,
                     )?);
                 }
-                if level > max_escalation_level {
-                    return output_receipt(finish!(
-                        "LIMIT_EXCEEDED",
-                        "ESCALATION_LIMIT",
-                        action_revision,
-                        current_control,
-                    )?);
+                // Keep a fresh request's terminal denial at the existing
+                // action revision; it never changes MDM case controls.
+                // The case lock serializes this history check against
+                // other automated submissions to the same occurrence.
+                // Identical request keys replay before reaching this gate.
+                if let Some((o, r)) = gate(client, request.case_key, level, max_escalation_level)? {
+                    return output_receipt(finish!(o, r, action_revision, current_control,)?);
                 }
                 (current_queue.clone(), current_due.clone(), level)
             }
@@ -1431,4 +1431,31 @@ pub(crate) fn persist_policy_intent(request: Internal) -> JsonB {
         Ok(JsonB(submit_intent(request)?))
     })();
     result.unwrap_or_else(|error| crate::raise(error))
+}
+
+// Called only while submit_intent holds the MDM case row FOR UPDATE.
+// Applied receipts are inserted atomically in that same transaction.
+fn gate(
+    client: &mut SpiClient<'_>,
+    case_key: i64,
+    level: i32,
+    maximum: i32,
+) -> Result<Option<(&'static str, &'static str)>, MdmError> {
+    if level > maximum {
+        return Ok(Some(("LIMIT_EXCEEDED", "ESCALATION_LIMIT")));
+    }
+    // Case-key scope is the occurrence; do not restrict this check to one
+    // binding or request key. A manual reduction cannot erase a prior effect.
+    let applied = client
+        .select(
+            "SELECT EXISTS (SELECT 1 FROM mdm_steward.policy_receipts_v1 WHERE case_key = $1 AND action = 'ESCALATE' AND outcome = 'APPLIED_CONTROL' AND control->>'escalation_level' = $2::text)",
+            Some(1),
+            &[case_key.into(), level.to_string().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .first()
+        .get::<bool>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("escalation history result is NULL".into()))?;
+    Ok(applied.then_some(("ACTION_DENIED", "ESCALATION_LEVEL_ALREADY_APPLIED")))
 }
