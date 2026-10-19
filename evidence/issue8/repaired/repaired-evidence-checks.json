@@ -1,0 +1,173 @@
+{
+  "candidate": "2523414d2c1e57cc8c0b73a8017de6f5941d21e7",
+  "evidence_verification": "PASS",
+  "acceptance_report": "README.md",
+  "archive_matches_qualified_package": true,
+  "archive_difference": "source-position comments only",
+  "fresh_host_tests_passed": 142,
+  "qualification_comparisons": 70,
+  "canonical_digest_checks": [
+    {
+      "label": "bootstrap",
+      "result_digest": "1639e3f79005e97909aed145b209beb3d767ff6ae3075783bb26b6b7fda982f9"
+    },
+    {
+      "label": "conflict_recurs",
+      "result_digest": "9355b8fa057377c0550e15bebd66acf9651cc1143a35292ca503ba92c475b5e3"
+    },
+    {
+      "label": "control_only",
+      "result_digest": "0d30089fea70b33354868c0cf756eb225f046f743af64e9ec06f4047dbd97d9a"
+    },
+    {
+      "label": "inactive_anchor",
+      "result_digest": "64d92406a0693331f8184b54674b70430f36e8d08cec2ee63e071a7bd9df830e"
+    },
+    {
+      "label": "inactive_control_only",
+      "result_digest": "062adf1c5c52aaf193d5c91471c4a0f7fb2472e5d9a7fd611fb21074d898cd66"
+    },
+    {
+      "label": "merge_conflict",
+      "result_digest": "beb137e183c72fb908218944a43f1748260557cad937a18f0b0ee4060811798c"
+    },
+    {
+      "label": "reactivation",
+      "result_digest": "911fd7119426d13fc907c3dce9fdbc7f5d8ff7453a5e36eb41455a28d7db174e"
+    },
+    {
+      "label": "remote_override_dependency",
+      "result_digest": "8af22cb64a29013f4caf85acec52eb863c82c4ea392ab8103c9a2055aaaa1ae2"
+    },
+    {
+      "label": "retired_reactivation",
+      "result_digest": "77426b9db2a319137989aab5822e160a60d3a64e75b80824ac39f901dd6290df"
+    },
+    {
+      "label": "retirement",
+      "result_digest": "6eec22fa816f34aa648f00483860b824fe61ad4445ccc6943b041298b53b422a"
+    },
+    {
+      "label": "split_resolves",
+      "result_digest": "f56680df52bee1e2faded264e25d4c60a4f3dd1d5bb549999d344572c006be0d"
+    }
+  ],
+  "replacement_publication_work": {
+    "baseline": {
+      "128": {
+        "registry": {
+          "calls": 128,
+          "rows": 128.0
+        },
+        "memberships": {
+          "calls": 128,
+          "rows": 128.0
+        },
+        "golden": {
+          "calls": 128,
+          "rows": 128.0
+        },
+        "entities": {
+          "calls": 128,
+          "rows": 128.0
+        },
+        "members": {
+          "calls": 128,
+          "rows": 128.0
+        }
+      },
+      "2048": {
+        "registry": {
+          "calls": 2048,
+          "rows": 2048.0
+        },
+        "memberships": {
+          "calls": 2048,
+          "rows": 2048.0
+        },
+        "golden": {
+          "calls": 2048,
+          "rows": 2048.0
+        },
+        "entities": {
+          "calls": 2048,
+          "rows": 2048.0
+        },
+        "members": {
+          "calls": 2048,
+          "rows": 2048.0
+        }
+      }
+    },
+    "candidate": {
+      "128": {
+        "registry": {
+          "calls": 1,
+          "rows": 128.0
+        },
+        "memberships": {
+          "calls": 1,
+          "rows": 128.0
+        },
+        "golden": {
+          "calls": 1,
+          "rows": 128.0
+        },
+        "entities": {
+          "calls": 1,
+          "rows": 128.0
+        },
+        "members": {
+          "calls": 1,
+          "rows": 128.0
+        }
+      },
+      "2048": {
+        "registry": {
+          "calls": 16,
+          "rows": 2048.0
+        },
+        "memberships": {
+          "calls": 16,
+          "rows": 2048.0
+        },
+        "golden": {
+          "calls": 16,
+          "rows": 2048.0
+        },
+        "entities": {
+          "calls": 16,
+          "rows": 2048.0
+        },
+        "members": {
+          "calls": 16,
+          "rows": 2048.0
+        }
+      }
+    }
+  },
+  "runtime_identities": {
+    "baseline": {
+      "image_id": "sha256:6f49b0e4ec08750c750f8c246bc71c14f3d28718c7f3a7db36269b3c7e38c48c",
+      "architecture": "amd64",
+      "source_revision": "9a07830d062b31c108880071c27124e2f09c446a",
+      "memory_limit_bytes": 0,
+      "nano_cpus": 0,
+      "binaries": [
+        "a75fd36be39c02133dfb5b62df358478fe6636fcaba44402a5d6ba33c4c2d8f3  /usr/lib/postgresql/18/lib/pg_mdm.so",
+        "edb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9  /usr/lib/postgresql/18/lib/pg_trickle.so"
+      ]
+    },
+    "candidate": {
+      "image_id": "sha256:c51732217463849bc7743ef981a9f64c2df2292f45e3253395ee028162cac053",
+      "architecture": "amd64",
+      "source_revision": "2523414d2c1e57cc8c0b73a8017de6f5941d21e7",
+      "memory_limit_bytes": 0,
+      "nano_cpus": 0,
+      "binaries": [
+        "ebdbd8a8c290e2a3bc934a4ba2f5c637cbba0baa1127d049f56603075598f59c  /usr/lib/postgresql/18/lib/pg_mdm.so",
+        "edb7345ed03dca50066737d421b4643b26f870435a964fb20379c23a77983ff9  /usr/lib/postgresql/18/lib/pg_trickle.so"
+      ]
+    }
+  }
+}

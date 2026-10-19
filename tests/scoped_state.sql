@@ -51,6 +51,11 @@ BEGIN
         RAISE EXCEPTION 'scoped-state % did not use the expected complete closure: %', label, result;
     END IF;
     before_state := public.scoped_state_snapshot();
+    IF EXISTS (SELECT FROM jsonb_array_elements(before_state->'entities') e
+        WHERE (e->>'has_review')::boolean IS DISTINCT FROM EXISTS (
+            SELECT FROM jsonb_array_elements(before_state->'reviews') r WHERE r->>'status' = 'open')) THEN
+        RAISE EXCEPTION 'scoped-state % public review flags differ from the complete review set: %', label, before_state->'entities';
+    END IF;
     SELECT jsonb_agg(component ORDER BY component::text) INTO actual_components FROM (
         SELECT jsonb_agg(s.value::bigint ORDER BY s.value::bigint) AS component
         FROM jsonb_array_elements(before_state->'members') m
@@ -177,6 +182,34 @@ END
 $$;
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
+DELETE FROM public.scoped_state_source WHERE id = 1;
+SELECT mdm.refresh('scoped_state')->>'resolver_strategy' AS preparation_strategy;
+BEGIN;
+SAVEPOINT original_boundary;
+INSERT INTO public.scoped_state_source VALUES (1, 'Record 1', '1@scope.test', '2026-10-18 00:00:00+00');
+SELECT mdm.refresh('scoped_state')->>'resolver_strategy' AS strategy \gset affected_
+SELECT jsonb_build_object('entities', (SELECT jsonb_agg(e - 'last_change_revision' ORDER BY e->>'mdm_id')
+    FROM jsonb_array_elements(s->'entities') e), 'members', s->'members', 'reviews', s->'output_reviews') AS publication
+FROM (SELECT public.scoped_state_snapshot() s) state \gset affected_
+SELECT jsonb_agg(jsonb_build_array(e->'name', e->'member_count', e->'has_review') ORDER BY e->>'name') AS rows
+FROM jsonb_array_elements(public.scoped_state_snapshot()->'entities') e \gset affected_
+ROLLBACK TO SAVEPOINT original_boundary;
+INSERT INTO public.scoped_state_source VALUES (1, 'Record 1', '1@scope.test', '2026-10-18 00:00:00+00');
+SELECT mdm_admin.rebuild('scoped_state')->>'resolver_strategy' AS strategy \gset full_
+SELECT jsonb_build_object('entities', (SELECT jsonb_agg(e - 'last_change_revision' ORDER BY e->>'mdm_id')
+    FROM jsonb_array_elements(s->'entities') e), 'members', s->'members', 'reviews', s->'output_reviews') AS publication
+FROM (SELECT public.scoped_state_snapshot() s) state \gset full_
+SELECT :'affected_strategy' = 'affected' AND :'full_strategy' = 'full'
+    AND :'affected_publication'::jsonb = :'full_publication'::jsonb
+    AND :'affected_rows'::jsonb = '[["Record 3",2,true],["Record 5",1,true],["Second",2,true]]'::jsonb AS equivalent \gset
+ROLLBACK;
+\if :equivalent
+\echo 'PASS: same-boundary affected and full entity/member/review publications match'
+\else
+\echo :affected_publication
+\echo :full_publication
+DO $$ BEGIN RAISE EXCEPTION 'same-boundary affected and full public publications differ'; END $$;
+\endif
 SELECT mdm_admin.drop_entity('scoped_state', 'scoped_state');
 \connect foundation postgres
 DROP FUNCTION public.check_scoped_state(text, integer, jsonb), public.scoped_state_snapshot();
@@ -185,3 +218,65 @@ REVOKE EXECUTE ON FUNCTION mdm_steward.override_golden(text, uuid, text, jsonb, 
     mdm_steward.clear_golden_override(text, uuid, text, bigint, text) FROM mdm_administrator;
 ALTER ROLE mdm_test_login RESET pg_trickle.refresh_strategy;
 SELECT 'PASS: scoped prior-state history, aliases, splits, controls, remote/inactive overrides and review recurrence';
+
+CREATE TABLE public.review_flag_source (
+    id bigint PRIMARY KEY, display_name text, email_address text, updated_at timestamptz NOT NULL
+);
+INSERT INTO public.review_flag_source VALUES
+    (1, 'Alpha', 'shared@flags.test', statement_timestamp()),
+    (2, 'Alpha', 'shared@flags.test', statement_timestamp()),
+    (3, 'Remote', 'remote@flags.test', statement_timestamp());
+GRANT SELECT, UPDATE, MAINTAIN ON public.review_flag_source TO mdm_administrator;
+CREATE FUNCTION public.assert_review_flag_output(result jsonb, strategy text, affected integer,
+    expected_rows jsonb, expected_reviews jsonb) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE actual_rows jsonb; actual_reviews jsonb;
+BEGIN
+    SELECT jsonb_agg(jsonb_build_array(name, member_count, has_review, last_change_revision) ORDER BY name)
+    INTO actual_rows FROM mdm_out.review_flags;
+    SELECT COALESCE(jsonb_agg(jsonb_build_array(reason_code, status, occurrence, opened_revision,
+        resolved_revision, last_change_revision, concurrency_version) ORDER BY occurrence), '[]'::jsonb)
+    INTO actual_reviews FROM mdm_out.review_flags_review;
+    IF result->>'resolver_strategy' IS DISTINCT FROM strategy
+       OR result->>'affected_records' IS DISTINCT FROM affected::text
+       OR result->>'delta_lag' IS DISTINCT FROM '0'
+       OR actual_rows IS DISTINCT FROM expected_rows OR actual_reviews IS DISTINCT FROM expected_reviews THEN
+        RAISE EXCEPTION 'public review-flag transition differs: result %, rows % expected %, reviews % expected %',
+            result, actual_rows, expected_rows, actual_reviews, expected_reviews;
+    END IF;
+END
+$$;
+REVOKE ALL ON FUNCTION public.assert_review_flag_output(jsonb, text, integer, jsonb, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.assert_review_flag_output(jsonb, text, integer, jsonb, jsonb) TO mdm_administrator;
+ALTER ROLE mdm_test_login SET pg_trickle.refresh_strategy = 'differential';
+\connect foundation mdm_test_login
+SET ROLE mdm_administrator;
+SELECT * FROM mdm.create(mdm.entity(
+    name => 'review_flags', sources => ARRAY[mdm.source(name => 'crm',
+        relation => 'public.review_flag_source'::regclass, source_id => ARRAY['id'], mode => 'tracked',
+        fields => '{"name":"display_name","email":"email_address"}'::jsonb, row_changed_at => 'updated_at')],
+    fields => ARRAY[mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
+        mdm.field(name => 'email', type => 'text', cleaner => 'email')],
+    matches => ARRAY[mdm.match(name => 'email', fields => ARRAY['email'], comparison => 'exact', strength => 'identity',
+        evidence_group => 'email', candidate => '{"kind":"exact","field":"email"}'::jsonb)],
+    golden_values => ARRAY[mdm.golden_value(field => 'name', policy => 'most_common')]
+));
+SELECT public.assert_review_flag_output(mdm.refresh('review_flags'), 'full', 3,
+    '[["Alpha",2,false,1],["Remote",1,false,1]]', '[]');
+UPDATE public.review_flag_source SET display_name = 'Beta' WHERE id = 2;
+SELECT public.assert_review_flag_output(mdm.refresh('review_flags'), 'affected', 2,
+    '[["Alpha",2,true,2],["Remote",1,true,2]]', '[["GOLDEN_TIE","open",1,2,null,2,1]]');
+UPDATE public.review_flag_source SET display_name = 'Remote changed' WHERE id = 3;
+SELECT public.assert_review_flag_output(mdm.refresh('review_flags'), 'affected', 1,
+    '[["Alpha",2,true,2],["Remote changed",1,true,3]]', '[["GOLDEN_TIE","open",1,2,null,2,1]]');
+UPDATE public.review_flag_source SET display_name = 'Alpha' WHERE id = 2;
+SELECT public.assert_review_flag_output(mdm.refresh('review_flags'), 'affected', 2,
+    '[["Alpha",2,false,4],["Remote changed",1,false,4]]', '[["GOLDEN_TIE","resolved",1,2,4,4,2]]');
+SELECT public.assert_review_flag_output(mdm.refresh('review_flags'), 'skipped', 0,
+    '[["Alpha",2,false,4],["Remote changed",1,false,4]]', '[["GOLDEN_TIE","resolved",1,2,4,4,2]]');
+SELECT mdm_admin.drop_entity('review_flags', 'review_flags');
+\connect foundation postgres
+DROP FUNCTION public.assert_review_flag_output(jsonb, text, integer, jsonb, jsonb);
+DROP TABLE public.review_flag_source;
+ALTER ROLE mdm_test_login RESET pg_trickle.refresh_strategy;
+SELECT 'PASS: complete review flags, unrelated components, first/last reviews and exact change revisions';

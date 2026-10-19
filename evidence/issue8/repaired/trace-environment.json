@@ -1,0 +1,20 @@
+{
+  "docker_engine_architecture": "aarch64",
+  "docker_image_architecture": "amd64",
+  "visible_processors": 10,
+  "vm_memory_bytes": 8319504384,
+  "container_cpu_memory_caps": "none; bounded by Docker VM",
+  "paired_trace_jit": "off",
+  "paired_trace_auto_explain": {
+    "nested_statements": true,
+    "analyze": true,
+    "node_timing": false
+  },
+  "comparison": "work-volume only; clocks are not a causal latency comparison",
+  "background_activity": "SDK builds and other host activity overlap portions of the full qualification",
+  "physical_recovery_collection_note": {
+    "recorded_at_utc": "2026-10-18T21:45:16.012828+00:00",
+    "operation": "CHECKPOINT requested in the isolated primary while pg_basebackup waited for its paced checkpoint",
+    "scope": "physical recovery only, after the complete qualification samples; no logical source/publication state changed"
+  }
+}

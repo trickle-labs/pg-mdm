@@ -1,0 +1,156 @@
+{
+  "source_commit": "2523414d2c1e57cc8c0b73a8017de6f5941d21e7",
+  "populations": [
+    {
+      "population": 128,
+      "warmups": 5,
+      "measured_samples": 30,
+      "milliseconds": {
+        "elapsed": {
+          "p50": 25497.0435,
+          "p95": 28447.6426
+        },
+        "end_to_end": {
+          "p50": 25493.5,
+          "p95": 28439.8
+        },
+        "publication": {
+          "p50": 29.0,
+          "p95": 37.099999999999994
+        },
+        "source_scan": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "source_sync": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "graph_refresh": {
+          "p50": 25304.5,
+          "p95": 28211.55
+        },
+        "source_access": {
+          "p50": 6.0,
+          "p95": 15.749999999999986
+        },
+        "mdm_resolution": {
+          "p50": 13.0,
+          "p95": 14.0
+        },
+        "source_capture": {
+          "p50": 114.5,
+          "p95": 149.0499999999999
+        },
+        "snapshot_copying": {
+          "p50": 4.402125,
+          "p95": 6.795843899999994
+        },
+        "digest_generation": {
+          "p50": 0.5419375,
+          "p95": 0.6638983999999999
+        },
+        "graph_helper_sync": {
+          "p50": 0.0,
+          "p95": 1.0
+        },
+        "source_setup_elapsed": {
+          "p50": 125.5,
+          "p95": 170.7999999999999
+        },
+        "evaluation_state_loading": {
+          "p50": 2.8124165000000003,
+          "p95": 3.3002856
+        },
+        "merged_state_construction": {
+          "p50": 9.737208500000001,
+          "p95": 10.5291853
+        },
+        "full_evaluation_state_loading": {
+          "p50": 3.1098334999999997,
+          "p95": 3.7668979499999997
+        },
+        "elapsed_before_operation_completion": {
+          "p50": 25367.0,
+          "p95": 28268.25
+        }
+      }
+    },
+    {
+      "population": 2048,
+      "warmups": 5,
+      "measured_samples": 30,
+      "milliseconds": {
+        "elapsed": {
+          "p50": 22151.307999999997,
+          "p95": 24245.315099999996
+        },
+        "end_to_end": {
+          "p50": 22136.5,
+          "p95": 24225.0
+        },
+        "publication": {
+          "p50": 73.0,
+          "p95": 86.84999999999998
+        },
+        "source_scan": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "source_sync": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "graph_refresh": {
+          "p50": 21801.0,
+          "p95": 23852.1
+        },
+        "source_access": {
+          "p50": 6.0,
+          "p95": 8.0
+        },
+        "mdm_resolution": {
+          "p50": 121.0,
+          "p95": 130.0
+        },
+        "source_capture": {
+          "p50": 102.5,
+          "p95": 116.74999999999999
+        },
+        "snapshot_copying": {
+          "p50": 41.470854,
+          "p95": 48.79775379999998
+        },
+        "digest_generation": {
+          "p50": 8.6340625,
+          "p95": 9.95581425
+        },
+        "graph_helper_sync": {
+          "p50": 4.0,
+          "p95": 5.0
+        },
+        "source_setup_elapsed": {
+          "p50": 113.0,
+          "p95": 128.64999999999998
+        },
+        "evaluation_state_loading": {
+          "p50": 5.2092495,
+          "p95": 6.44230245
+        },
+        "merged_state_construction": {
+          "p50": 114.3684585,
+          "p95": 122.1123891
+        },
+        "full_evaluation_state_loading": {
+          "p50": 23.847583,
+          "p95": 25.934444049999996
+        },
+        "elapsed_before_operation_completion": {
+          "p50": 22020.5,
+          "p95": 24096.0
+        }
+      }
+    }
+  ],
+  "limits": "independent percentiles are not additive; host/SDK activity and emulation prevent causal latency comparisons"
+}

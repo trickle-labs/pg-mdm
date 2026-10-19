@@ -171,6 +171,11 @@ The [scoped-state evidence](evidence/issue12/README.md) retains prior-state quer
 plans, exact history/digest checks and separate loading, assembly and copying
 measurements. The measured complete refresh did not show an end-to-end speedup.
 
+The [assembled optimization acceptance](evidence/issue8/README.md) retains the
+review-flag repair, same-boundary public-output checks and replacement paired
+publication traces. Published `has_review` reflects open reviews across the
+configured entity, including reviews outside an affected component.
+
 The Docker E2E run also executes `tests/incremental_qualification.sql`. It
 measures 30 affected-refresh samples after five warmups at 128 and 2,048
 records, and compares the complete public publication, durable identities,

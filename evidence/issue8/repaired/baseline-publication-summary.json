@@ -1,0 +1,46 @@
+{
+  "128": {
+    "registry": {
+      "calls": 128,
+      "rows": 128.0
+    },
+    "memberships": {
+      "calls": 128,
+      "rows": 128.0
+    },
+    "golden": {
+      "calls": 128,
+      "rows": 128.0
+    },
+    "entities": {
+      "calls": 128,
+      "rows": 128.0
+    },
+    "members": {
+      "calls": 128,
+      "rows": 128.0
+    }
+  },
+  "2048": {
+    "registry": {
+      "calls": 2048,
+      "rows": 2048.0
+    },
+    "memberships": {
+      "calls": 2048,
+      "rows": 2048.0
+    },
+    "golden": {
+      "calls": 2048,
+      "rows": 2048.0
+    },
+    "entities": {
+      "calls": 2048,
+      "rows": 2048.0
+    },
+    "members": {
+      "calls": 2048,
+      "rows": 2048.0
+    }
+  }
+}

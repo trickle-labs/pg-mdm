@@ -1,0 +1,14 @@
+[
+  {
+    "check": "bootstrap",
+    "exit_code": 0
+  },
+  {
+    "check": "existing scoped-state assertions",
+    "exit_code": 0
+  },
+  {
+    "check": "independent branch assertion",
+    "exit_code": 3
+  }
+]
