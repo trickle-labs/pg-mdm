@@ -1292,32 +1292,10 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
                         current_control,
                     )?);
                 }
-                if level > max_escalation_level {
+                if let Some((o, r)) = gate(client, request.case_key, level, max_escalation_level)? {
                     return output_receipt(finish!(
-                        "LIMIT_EXCEEDED",
-                        "ESCALATION_LIMIT",
-                        action_revision,
-                        current_control,
-                    )?);
-                }
-                // The case row is locked above. Inspect committed applied receipts under
-                // that lock so a human level reduction or a new request key cannot
-                // repeat an automated level within the same MDM occurrence.
-                let applied_before = client
-                    .select(
-                        "SELECT EXISTS (SELECT 1 FROM mdm_steward.policy_receipts_v1 WHERE case_key = $1 AND action = 'ESCALATE' AND outcome = 'APPLIED_CONTROL' AND control->>'escalation_level' = $2::text)",
-                        Some(1),
-                        &[request.case_key.into(), level.to_string().into()],
-                    )
-                    .map_err(|error| MdmError::Spi(error.to_string()))?
-                    .first()
-                    .get::<bool>(1)
-                    .map_err(|error| MdmError::Spi(error.to_string()))?
-                    .unwrap_or(false);
-                if applied_before {
-                    return output_receipt(finish!(
-                        "ACTION_DENIED",
-                        "ESCALATION_LEVEL_ALREADY_APPLIED",
+                        o,
+                        r,
                         action_revision,
                         current_control,
                     )?);
@@ -1453,4 +1431,35 @@ pub(crate) fn persist_policy_intent(request: Internal) -> JsonB {
         Ok(JsonB(submit_intent(request)?))
     })();
     result.unwrap_or_else(|error| crate::raise(error))
+}
+
+
+// Called only while submit_intent holds the MDM case row FOR UPDATE.
+// Applied receipts are inserted atomically in that same transaction.
+fn gate(
+    client: &mut SpiClient<'_>,
+    case_key: i64,
+    level: i32,
+    maximum: i32,
+) -> Result<Option<(&'static str, &'static str)>, MdmError> {
+    if level > maximum {
+        return Ok(Some(("LIMIT_EXCEEDED", "ESCALATION_LIMIT")));
+    }
+    // Case-key scope is the occurrence; do not restrict this check to one
+    // binding or request key. A manual reduction cannot erase a prior effect.
+    let applied = client
+        .select(
+            "SELECT EXISTS (SELECT 1 FROM mdm_steward.policy_receipts_v1 WHERE case_key = $1 AND action = 'ESCALATE' AND outcome = 'APPLIED_CONTROL' AND control->>'escalation_level' = $2::text)",
+            Some(1),
+            &[case_key.into(), level.to_string().into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .first()
+        .get::<bool>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("escalation history result is NULL".into()))?;
+    Ok(applied.then_some((
+        "ACTION_DENIED",
+        "ESCALATION_LEVEL_ALREADY_APPLIED",
+    )))
 }
