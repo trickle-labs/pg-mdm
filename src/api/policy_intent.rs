@@ -1292,13 +1292,13 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
                         current_control,
                     )?);
                 }
+                // Keep a fresh request's terminal denial at the existing
+                // action revision; it never changes MDM case controls.
+                // The case lock serializes this history check against
+                // other automated submissions to the same occurrence.
+                // Identical request keys replay before reaching this gate.
                 if let Some((o, r)) = gate(client, request.case_key, level, max_escalation_level)? {
-                    return output_receipt(finish!(
-                        o,
-                        r,
-                        action_revision,
-                        current_control,
-                    )?);
+                    return output_receipt(finish!(o, r, action_revision, current_control,)?);
                 }
                 (current_queue.clone(), current_due.clone(), level)
             }
@@ -1458,8 +1458,5 @@ fn gate(
         .get::<bool>(1)
         .map_err(|error| MdmError::Spi(error.to_string()))?
         .ok_or_else(|| MdmError::Spi("escalation history result is NULL".into()))?;
-    Ok(applied.then_some((
-        "ACTION_DENIED",
-        "ESCALATION_LEVEL_ALREADY_APPLIED",
-    )))
+    Ok(applied.then_some(("ACTION_DENIED", "ESCALATION_LEVEL_ALREADY_APPLIED")))
 }
