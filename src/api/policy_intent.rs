@@ -1300,6 +1300,28 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
                         current_control,
                     )?);
                 }
+                // The case row is locked above. Inspect committed applied receipts under
+                // that lock so a human level reduction or a new request key cannot
+                // repeat an automated level within the same MDM occurrence.
+                let applied_before = client
+                    .select(
+                        "SELECT EXISTS (SELECT 1 FROM mdm_steward.policy_receipts_v1 WHERE case_key = $1 AND action = 'ESCALATE' AND outcome = 'APPLIED_CONTROL' AND control->>'escalation_level' = $2::text)",
+                        Some(1),
+                        &[request.case_key.into(), level.to_string().into()],
+                    )
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .first()
+                    .get::<bool>(1)
+                    .map_err(|error| MdmError::Spi(error.to_string()))?
+                    .unwrap_or(false);
+                if applied_before {
+                    return output_receipt(finish!(
+                        "ACTION_DENIED",
+                        "ESCALATION_LEVEL_ALREADY_APPLIED",
+                        action_revision,
+                        current_control,
+                    )?);
+                }
                 (current_queue.clone(), current_due.clone(), level)
             }
         };
