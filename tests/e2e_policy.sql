@@ -1490,11 +1490,350 @@ SELECT :'over_limit_outcome' = 'LIMIT_EXCEEDED'
 \else
 \quit 1
 \endif
+-- v0.49 owner-confirmed negative receipt fixture: valid, due but non-next level.
+-- Preserve the *entire* authoritative policy-case row, not just its controls.
+SELECT c.case_key, c.review_version, c.definition_version, c.publication_revision,
+       c.stewardship_epoch,
+       pg_catalog.encode(c.evidence_basis_digest, 'hex') AS evidence_digest,
+       c.action_revision, c.escalation_level AS current_level,
+       CASE WHEN c.escalation_level = 0 THEN 2 ELSE c.escalation_level END AS target_level,
+       pg_catalog.to_jsonb(c)::text AS case_state,
+       (c.status = 'open' AND NOT c.pending_stewardship
+        AND c.due_at <= pg_catalog.statement_timestamp()
+        AND 'ESCALATE' = ANY(c.permitted_actions)) AS eligible
+FROM mdm_steward.policy_cases_v1 c
+WHERE c.case_key = :lower_case_key
+\gset v49_
+\if :v49_eligible
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, case_key, action_revision, control
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('d1', 32), 'hex'),
+    :v49_case_key, 'ESCALATE',
+    pg_catalog.jsonb_build_object('level', :v49_target_level),
+    :v49_review_version, :v49_definition_version, :v49_publication_revision,
+    :v49_stewardship_epoch, pg_catalog.decode(:'v49_evidence_digest', 'hex'),
+    :v49_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-v049-non-next', 'work-v049-non-next'
+)
+\gset v49_non_next_
+SELECT :'v49_non_next_outcome' = 'STALE_CASE'
+   AND :'v49_non_next_reason_code' = 'ESCALATION_NOT_NEXT'
+   AND :v49_non_next_case_key = :v49_case_key
+   AND :v49_non_next_action_revision = :v49_action_revision
+   AND (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
+        FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+   AND (SELECT pg_catalog.count(*) = 1 AND pg_catalog.bool_and(
+            r.receipt_id = :'v49_non_next_receipt_id'::uuid
+            AND r.outcome = 'STALE_CASE'
+            AND r.reason_code = 'ESCALATION_NOT_NEXT'
+            AND r.case_key = :v49_case_key
+            AND r.action = 'ESCALATE'
+            AND r.action_revision = :v49_action_revision
+            AND r.binding_version = :second_binding_version
+            AND r.actor::text = 'mdm_policy_worker'
+            AND r.session_role_name = 'mdm_legacy_login'
+            AND r.selected_role_name = 'mdm_policy_worker'
+            AND pg_catalog.octet_length(r.request_digest) = 32
+            AND r.created_at IS NOT NULL
+            AND r.resulting_publication_revision IS NULL
+            AND r.request_body = pg_catalog.jsonb_build_object(
+                'action', 'ESCALATE',
+                'arguments', pg_catalog.jsonb_build_object('level', :v49_target_level),
+                'binding_id', :'second_binding_id',
+                'case_key', :v49_case_key,
+                'evaluation_ref', 'eval-v049-non-next',
+                'expected_action_revision', :v49_action_revision,
+                'expected_definition_version', :v49_definition_version,
+                'expected_evidence_basis_digest', :'v49_evidence_digest',
+                'expected_policy_digest', pg_catalog.repeat('b', 64),
+                'expected_publication_revision', :v49_publication_revision,
+                'expected_review_version', :v49_review_version,
+                'expected_stewardship_epoch', :v49_stewardship_epoch,
+                'policy_revision', 'policy-1',
+                'work_ref', 'work-v049-non-next'
+            )
+            AND r.control = (SELECT pg_catalog.jsonb_build_object(
+                'assigned_queue', c.assigned_queue::text,
+                'due_at', c.due_at::text,
+                'escalation_level', c.escalation_level,
+                'manual_assignment_protected', c.manual_assignment_protected)
+                FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+            AND r.control = :'v49_non_next_control'::jsonb
+        )
+        FROM mdm_steward.policy_receipts_v1 r
+        WHERE r.binding_id = :'second_binding_id'::uuid
+          AND r.request_key = pg_catalog.decode(pg_catalog.repeat('d1', 32), 'hex'))
+   AS v49_non_next_receipt_exact_ok
+\gset
+\if :v49_non_next_receipt_exact_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, case_key, action_revision, control
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('d1', 32), 'hex'),
+    :v49_case_key, 'ESCALATE',
+    pg_catalog.jsonb_build_object('level', :v49_target_level),
+    :v49_review_version, :v49_definition_version, :v49_publication_revision,
+    :v49_stewardship_epoch, pg_catalog.decode(:'v49_evidence_digest', 'hex'),
+    :v49_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-v049-non-next', 'work-v049-non-next'
+)
+\gset v49_non_next_retry_
+SELECT :'v49_non_next_retry_receipt_id'::uuid = :'v49_non_next_receipt_id'::uuid
+   AND :'v49_non_next_retry_outcome' = 'STALE_CASE'
+   AND :'v49_non_next_retry_reason_code' = 'ESCALATION_NOT_NEXT'
+   AND :v49_non_next_retry_case_key = :v49_case_key
+   AND :v49_non_next_retry_action_revision = :v49_action_revision
+   AND :'v49_non_next_retry_control'::jsonb = :'v49_non_next_control'::jsonb
+   AND (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
+        FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+   AS v49_non_next_replay_exact_ok
+\gset
+\if :v49_non_next_replay_exact_ok
+\else
+\quit 1
+\endif
+
+-- Malformed ESCALATE levels are rejected *before* receipt insertion or
+-- binding lookup. Keep the other request inputs valid and use the real binding.
+SELECT pg_catalog.set_config('mdm_v049.binding', :'second_binding_id', false),
+       pg_catalog.set_config('mdm_v049.case', :v49_case_key::text, false);
+DO $
+DECLARE
+    case_before record;
+    snapshot jsonb;
+    variant record;
+    rejected boolean;
+BEGIN
+    SELECT * INTO STRICT case_before FROM mdm_steward.policy_cases_v1
+    WHERE case_key = pg_catalog.current_setting('mdm_v049.case')::bigint;
+    snapshot := pg_catalog.to_jsonb(case_before);
+    FOR variant IN
+        SELECT * FROM (VALUES
+            ('zero', 'd4', '{"level":0}'::jsonb, 'level must be a positive integer'),
+            ('negative', 'd5', '{"level":-1}'::jsonb, 'level must be a positive integer'),
+            ('string', 'd6', '{"level":"1"}'::jsonb, 'level must be a positive integer'),
+            ('overflow', 'd7', '{"level":2147483648}'::jsonb, 'level must be a positive integer'),
+            ('extra', 'd8', '{"level":1,"extra":true}'::jsonb,
+             'ESCALATE arguments must contain only level'),
+            ('missing', 'd9', '{}'::jsonb,
+             'ESCALATE arguments must contain only level')
+        ) AS inputs(label, request_byte, arguments, error_text)
+    LOOP
+        rejected := false;
+        BEGIN
+            PERFORM * FROM mdm_steward.submit_policy_intent(
+                pg_catalog.current_setting('mdm_v049.binding')::uuid,
+                pg_catalog.decode(pg_catalog.repeat(variant.request_byte, 32), 'hex'),
+                case_before.case_key, 'ESCALATE', variant.arguments,
+                case_before.review_version, case_before.definition_version,
+                case_before.publication_revision, case_before.stewardship_epoch,
+                case_before.evidence_basis_digest, case_before.action_revision,
+                pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+                'policy-1', 'eval-v049-malformed', 'work-v049-malformed'
+            );
+        EXCEPTION WHEN OTHERS THEN
+            IF pg_catalog.strpos(SQLERRM, 'MDM_POLICY_INTENT') = 0
+               OR pg_catalog.strpos(SQLERRM, variant.error_text) = 0 THEN
+                RAISE;
+            END IF;
+            rejected := true;
+        END;
+        IF NOT rejected THEN
+            RAISE EXCEPTION 'invalid ESCALATE variant % was accepted', variant.label;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM mdm_steward.policy_receipts_v1
+            WHERE binding_id = pg_catalog.current_setting('mdm_v049.binding')::uuid
+              AND request_key = pg_catalog.decode(
+                  pg_catalog.repeat(variant.request_byte, 32), 'hex')
+        ) THEN
+            RAISE EXCEPTION 'invalid ESCALATE variant % inserted a receipt', variant.label;
+        END IF;
+        IF (SELECT pg_catalog.to_jsonb(c) FROM mdm_steward.policy_cases_v1 c
+            WHERE c.case_key = case_before.case_key) IS DISTINCT FROM snapshot THEN
+            RAISE EXCEPTION 'invalid ESCALATE variant % changed the case', variant.label;
+        END IF;
+    END LOOP;
+END
+$;
+SELECT (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
+        FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+    AS v49_malformed_preserves_exact_case
+\gset
+\if :v49_malformed_preserves_exact_case
+\else
+\quit 1
+\endif
 RESET ROLE;
 \connect foundation mdm_legacy_login
 SET ROLE :"policy_execution_role";
 SELECT mdm_admin.set_policy_binding_state(:'second_binding_id'::uuid, :active_runtime_version, 'paused', 'paused') AS paused_runtime_version
 \gset
+-- v0.49 owner-confirmed disabled/replaced binding receipts. This role
+-- remains authorized to submit, but both bindings fail closed before changing
+-- the policy case. Paused and replaced are distinct terminal outcomes.
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+SELECT receipt_id, outcome, reason_code, case_key, action_revision, control
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('d2', 32), 'hex'),
+    :v49_case_key, 'ESCALATE',
+    pg_catalog.jsonb_build_object('level', :v49_target_level),
+    :v49_review_version, :v49_definition_version, :v49_publication_revision,
+    :v49_stewardship_epoch, pg_catalog.decode(:'v49_evidence_digest', 'hex'),
+    :v49_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-v049-paused', 'work-v049-paused'
+)
+\gset v49_paused_
+SELECT :'v49_paused_outcome' = 'BINDING_PAUSED'
+   AND :'v49_paused_reason_code' = 'BINDING_PAUSED'
+   AND :v49_paused_case_key = :v49_case_key
+   AND :v49_paused_action_revision = :v49_action_revision
+   AND (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
+        FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+   AND (SELECT pg_catalog.count(*) = 1 AND pg_catalog.bool_and(
+            r.receipt_id = :'v49_paused_receipt_id'::uuid
+            AND r.outcome = 'BINDING_PAUSED'
+            AND r.reason_code = 'BINDING_PAUSED'
+            AND r.case_key = :v49_case_key
+            AND r.action = 'ESCALATE'
+            AND r.action_revision = :v49_action_revision
+            AND r.binding_version = :second_binding_version
+            AND r.actor::text = 'mdm_policy_worker'
+            AND r.session_role_name = 'mdm_legacy_login'
+            AND r.selected_role_name = 'mdm_policy_worker'
+            AND pg_catalog.octet_length(r.request_digest) = 32
+            AND r.created_at IS NOT NULL
+            AND r.resulting_publication_revision IS NULL
+            AND r.request_body = pg_catalog.jsonb_build_object(
+                'action', 'ESCALATE',
+                'arguments', pg_catalog.jsonb_build_object('level', :v49_target_level),
+                'binding_id', :'second_binding_id',
+                'case_key', :v49_case_key,
+                'evaluation_ref', 'eval-v049-paused',
+                'expected_action_revision', :v49_action_revision,
+                'expected_definition_version', :v49_definition_version,
+                'expected_evidence_basis_digest', :'v49_evidence_digest',
+                'expected_policy_digest', pg_catalog.repeat('b', 64),
+                'expected_publication_revision', :v49_publication_revision,
+                'expected_review_version', :v49_review_version,
+                'expected_stewardship_epoch', :v49_stewardship_epoch,
+                'policy_revision', 'policy-1',
+                'work_ref', 'work-v049-paused'
+            )
+            AND r.control = (SELECT pg_catalog.jsonb_build_object(
+                'assigned_queue', c.assigned_queue::text,
+                'due_at', c.due_at::text,
+                'escalation_level', c.escalation_level,
+                'manual_assignment_protected', c.manual_assignment_protected)
+                FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+            AND r.control = :'v49_paused_control'::jsonb
+        )
+        FROM mdm_steward.policy_receipts_v1 r
+        WHERE r.binding_id = :'second_binding_id'::uuid
+          AND r.request_key = pg_catalog.decode(pg_catalog.repeat('d2', 32), 'hex'))
+   AS v49_paused_receipt_exact_ok
+\gset
+\if :v49_paused_receipt_exact_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, case_key, action_revision, control
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('d2', 32), 'hex'),
+    :v49_case_key, 'ESCALATE',
+    pg_catalog.jsonb_build_object('level', :v49_target_level),
+    :v49_review_version, :v49_definition_version, :v49_publication_revision,
+    :v49_stewardship_epoch, pg_catalog.decode(:'v49_evidence_digest', 'hex'),
+    :v49_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-v049-paused', 'work-v049-paused'
+)
+\gset v49_paused_retry_
+SELECT :'v49_paused_retry_receipt_id'::uuid = :'v49_paused_receipt_id'::uuid
+   AND :'v49_paused_retry_outcome' = 'BINDING_PAUSED'
+   AND :'v49_paused_retry_reason_code' = 'BINDING_PAUSED'
+   AND :v49_paused_retry_case_key = :v49_case_key
+   AND :v49_paused_retry_action_revision = :v49_action_revision
+   AND :'v49_paused_retry_control'::jsonb = :'v49_paused_control'::jsonb
+   AND (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
+        FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+   AS v49_paused_replay_exact_ok
+\gset
+\if :v49_paused_replay_exact_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, case_key, action_revision, control
+FROM mdm_steward.submit_policy_intent(
+    :'first_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('d3', 32), 'hex'),
+    :v49_case_key, 'ESCALATE',
+    pg_catalog.jsonb_build_object('level', :v49_target_level),
+    :v49_review_version, :v49_definition_version, :v49_publication_revision,
+    :v49_stewardship_epoch, pg_catalog.decode(:'v49_evidence_digest', 'hex'),
+    :v49_action_revision, pg_catalog.decode(pg_catalog.repeat('a', 64), 'hex'),
+    'policy-1', 'eval-v049-replaced', 'work-v049-replaced'
+)
+\gset v49_replaced_
+SELECT :'v49_replaced_outcome' = 'BINDING_REPLACED'
+   AND :'v49_replaced_reason_code' = 'BINDING_REPLACED'
+   AND :v49_replaced_case_key = :v49_case_key
+   AND :v49_replaced_action_revision = :v49_action_revision
+   AND (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
+        FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+   AND (SELECT pg_catalog.count(*) = 1 AND pg_catalog.bool_and(
+            r.receipt_id = :'v49_replaced_receipt_id'::uuid
+            AND r.outcome = 'BINDING_REPLACED'
+            AND r.reason_code = 'BINDING_REPLACED'
+            AND r.case_key = :v49_case_key
+            AND r.action = 'ESCALATE'
+            AND r.action_revision = :v49_action_revision
+            AND r.binding_version = :first_binding_version
+            AND r.actor::text = 'mdm_policy_worker'
+            AND r.session_role_name = 'mdm_legacy_login'
+            AND r.selected_role_name = 'mdm_policy_worker'
+            AND pg_catalog.octet_length(r.request_digest) = 32
+            AND r.created_at IS NOT NULL
+            AND r.resulting_publication_revision IS NULL
+            AND r.request_body = pg_catalog.jsonb_build_object(
+                'action', 'ESCALATE',
+                'arguments', pg_catalog.jsonb_build_object('level', :v49_target_level),
+                'binding_id', :'first_binding_id',
+                'case_key', :v49_case_key,
+                'evaluation_ref', 'eval-v049-replaced',
+                'expected_action_revision', :v49_action_revision,
+                'expected_definition_version', :v49_definition_version,
+                'expected_evidence_basis_digest', :'v49_evidence_digest',
+                'expected_policy_digest', pg_catalog.repeat('a', 64),
+                'expected_publication_revision', :v49_publication_revision,
+                'expected_review_version', :v49_review_version,
+                'expected_stewardship_epoch', :v49_stewardship_epoch,
+                'policy_revision', 'policy-1',
+                'work_ref', 'work-v049-replaced'
+            )
+            AND r.control = (SELECT pg_catalog.jsonb_build_object(
+                'assigned_queue', c.assigned_queue::text,
+                'due_at', c.due_at::text,
+                'escalation_level', c.escalation_level,
+                'manual_assignment_protected', c.manual_assignment_protected)
+                FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
+            AND r.control = :'v49_replaced_control'::jsonb
+        )
+        FROM mdm_steward.policy_receipts_v1 r
+        WHERE r.binding_id = :'first_binding_id'::uuid
+          AND r.request_key = pg_catalog.decode(pg_catalog.repeat('d3', 32), 'hex'))
+   AS v49_replaced_receipt_exact_ok
+\gset
+\if :v49_replaced_receipt_exact_ok
+\else
+\quit 1
+\endif
+\echo PASS: v0.49 MDM exact non-next, malformed-level, paused and replaced ESCALATE receipt fixtures
 RESET ROLE;
 \connect foundation postgres
 DO $$
