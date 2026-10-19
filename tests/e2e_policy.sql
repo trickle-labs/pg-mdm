@@ -1602,7 +1602,7 @@ SELECT :'v49_non_next_retry_receipt_id'::uuid = :'v49_non_next_receipt_id'::uuid
 -- binding lookup. Keep the other request inputs valid and use the real binding.
 SELECT pg_catalog.set_config('mdm_v049.binding', :'second_binding_id', false),
        pg_catalog.set_config('mdm_v049.case', :v49_case_key::text, false);
-DO $
+DO $v49_malformed$
 DECLARE
     case_before record;
     snapshot jsonb;
@@ -1660,7 +1660,7 @@ BEGIN
         END IF;
     END LOOP;
 END
-$;
+$v49_malformed$;
 SELECT (SELECT pg_catalog.to_jsonb(c) = :'v49_case_state'::jsonb
         FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = :v49_case_key)
     AS v49_malformed_preserves_exact_case
