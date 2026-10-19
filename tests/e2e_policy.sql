@@ -912,6 +912,123 @@ SELECT :'escalate_due_outcome' = 'APPLIED_CONTROL'
 \else
 \quit 1
 \endif
+-- A committed ESCALATE receipt remains authoritative after a human lowers
+-- the visible level. New request keys cannot re-apply the same occurrence/level.
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT case_key, assigned_queue::text AS queue,
+       due_at::text AS due_at, escalation_level AS level,
+       manual_assignment_protected AS protected, action_revision AS revision
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :deadline_case_key
+\gset lower_
+SELECT action_revision AS lowered_revision
+FROM mdm_steward.set_case_controls(
+    :lower_case_key, NULLIF(:'lower_queue', '')::name,
+    :'lower_due_at'::timestamptz, :lower_level - 1,
+    :'lower_protected'::boolean, :lower_revision,
+    'e2e manual reduction after automated escalation'
+)
+\gset
+SELECT :lowered_revision = :lower_revision + 1
+   AND (SELECT escalation_level = :lower_level - 1
+               AND due_at = :'lower_due_at'::timestamptz
+               AND action_revision = :lowered_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :lower_case_key)
+   AS manual_reduction_ok
+\gset
+\if :manual_reduction_ok
+\else
+\quit 1
+\endif
+RESET ROLE;
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+SELECT review_version, definition_version, publication_revision,
+       stewardship_epoch, pg_catalog.encode(evidence_basis_digest, 'hex') AS evidence_digest,
+       action_revision
+FROM mdm_steward.policy_cases_v1 WHERE case_key = :lower_case_key
+\gset reduced_
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex'),
+    :lower_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', :lower_level),
+    :reduced_review_version, :reduced_definition_version, :reduced_publication_revision,
+    :reduced_stewardship_epoch, pg_catalog.decode(:'reduced_evidence_digest', 'hex'),
+    :reduced_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-dedup-cross-key', 'work-dedup-cross-key'
+)
+\gset dedup_
+SELECT :'dedup_outcome' = 'ACTION_DENIED'
+   AND :'dedup_reason_code' = 'ESCALATION_LEVEL_ALREADY_APPLIED'
+   AND :dedup_action_revision = :reduced_action_revision
+   AND (SELECT escalation_level = :lower_level - 1
+               AND due_at = :'lower_due_at'::timestamptz
+               AND action_revision = :reduced_action_revision
+        FROM mdm_steward.policy_cases_v1 WHERE case_key = :lower_case_key)
+   AND (SELECT count(*) = 2
+               AND count(*) FILTER (WHERE outcome = 'APPLIED_CONTROL') = 1
+               AND count(*) FILTER (WHERE outcome = 'ACTION_DENIED'
+                       AND reason_code = 'ESCALATION_LEVEL_ALREADY_APPLIED') = 1
+        FROM mdm_steward.policy_receipts_v1
+        WHERE case_key = :lower_case_key AND action = 'ESCALATE'
+          AND control->>'escalation_level' = :lower_level::text)
+   AND (SELECT count(*) = 1
+               AND bool_and(outcome = 'ACTION_DENIED'
+                   AND reason_code = 'ESCALATION_LEVEL_ALREADY_APPLIED'
+                   AND action_revision = :reduced_action_revision
+                   AND (control->>'escalation_level')::integer = :lower_level - 1
+                   AND resulting_publication_revision IS NULL)
+        FROM mdm_steward.policy_receipts_v1
+        WHERE binding_id = :'second_binding_id'::uuid
+          AND request_key = pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex'))
+   AS cross_key_escalation_dedup_ok
+\gset
+\if :cross_key_escalation_dedup_ok
+\else
+\quit 1
+\endif
+SELECT receipt_id, outcome, reason_code, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex'),
+    :lower_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', :lower_level),
+    :reduced_review_version, :reduced_definition_version, :reduced_publication_revision,
+    :reduced_stewardship_epoch, pg_catalog.decode(:'reduced_evidence_digest', 'hex'),
+    :reduced_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-dedup-cross-key', 'work-dedup-cross-key'
+)
+\gset dedup_retry_
+SELECT :'dedup_retry_receipt_id'::uuid = :'dedup_receipt_id'::uuid
+   AND :'dedup_retry_outcome' = 'ACTION_DENIED'
+   AND :'dedup_retry_reason_code' = 'ESCALATION_LEVEL_ALREADY_APPLIED'
+   AND :dedup_retry_action_revision = :reduced_action_revision
+   AS cross_key_rejection_replay_ok
+\gset
+\if :cross_key_rejection_replay_ok
+\else
+\quit 1
+\endif
+-- The original key must still replay its APPLIED_CONTROL receipt.
+SELECT receipt_id, outcome, action_revision
+FROM mdm_steward.submit_policy_intent(
+    :'second_binding_id'::uuid, pg_catalog.decode(pg_catalog.repeat('3', 64), 'hex'),
+    :deadline_case_key, 'ESCALATE', pg_catalog.jsonb_build_object('level', :deadline_escalation_level + 1),
+    :deadline_review_version, :deadline_definition_version, :deadline_publication_revision,
+    :deadline_stewardship_epoch, pg_catalog.decode(:'deadline_evidence_digest', 'hex'),
+    :due_valid_action_revision, pg_catalog.decode(pg_catalog.repeat('b', 64), 'hex'),
+    'policy-1', 'eval-escalate-due', 'work-escalate-due'
+)
+\gset original_replay_
+SELECT :'original_replay_receipt_id'::uuid = :'escalate_due_receipt_id'::uuid
+   AND :'original_replay_outcome' = 'APPLIED_CONTROL'
+   AND :original_replay_action_revision = :escalate_due_action_revision
+   AS original_escalation_replay_ok
+\gset
+\if :original_escalation_replay_ok
+\else
+\quit 1
+\endif
+
 SELECT assigned_queue::text AS queue, action_revision
 FROM mdm_steward.policy_cases_v1 WHERE case_key = :current_case_key
 \gset malformed_before_
