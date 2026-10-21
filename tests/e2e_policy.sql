@@ -1674,6 +1674,76 @@ RESET ROLE;
 SET ROLE :"policy_execution_role";
 SELECT mdm_admin.set_policy_binding_state(:'second_binding_id'::uuid, :active_runtime_version, 'paused', 'paused') AS paused_runtime_version
 \gset
+-- Stale optimistic CAS returned zero SPI rows. Two otherwise-authorized
+-- operator calls must fail with MDM's policy-binding error, not attempt
+-- to read an unpositioned SPI row or change runtime/audit/case state.
+\connect foundation postgres
+CREATE TABLE public.e2e_policy_runtime_fence_before AS
+SELECT jsonb_build_object(
+    'runtime', (SELECT to_jsonb(r) FROM mdm_internal.policy_binding_runtime r
+                WHERE binding_id=:'second_binding_id'::uuid),
+    'operations', (SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY operation_id),'[]'::jsonb)
+                   FROM mdm_internal.operations o),
+    'cases', (SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY case_key),'[]'::jsonb)
+              FROM mdm_steward.policy_cases_v1 c),
+    'receipts', (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY created_at,receipt_id),'[]'::jsonb)
+                 FROM mdm_steward.policy_receipts_v1 r)
+) AS vector;
+REVOKE ALL ON public.e2e_policy_runtime_fence_before FROM PUBLIC;
+
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
+SELECT set_config('mdm_v049.stale_binding_id', :'second_binding_id', false);
+SELECT set_config('mdm_v049.stale_runtime', :'active_runtime_version', false);
+DO $stale_runtime$
+DECLARE
+    attempted_state text;
+    error_message text;
+BEGIN
+    FOREACH attempted_state IN ARRAY ARRAY['active', 'paused']
+    LOOP
+        BEGIN
+            PERFORM mdm_admin.set_policy_binding_state(
+                current_setting('mdm_v049.stale_binding_id')::uuid,
+                current_setting('mdm_v049.stale_runtime')::bigint,
+                attempted_state, 'v0.49 stale runtime version must fail');
+            RAISE EXCEPTION 'STALE_BINDING_VERSION_NOT_REJECTED: %', attempted_state;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS error_message = MESSAGE_TEXT;
+            IF position('MDM_POLICY_BINDING:' IN error_message) = 0
+               OR position('runtime version is stale or binding is replaced' IN error_message) = 0 THEN
+                RAISE EXCEPTION 'STALE_BINDING_VERSION_WRONG_ERROR: %: %',
+                    attempted_state, error_message;
+            END IF;
+        END;
+    END LOOP;
+END
+$stale_runtime$;
+RESET ROLE;
+\connect foundation postgres
+SELECT (SELECT vector FROM public.e2e_policy_runtime_fence_before)
+       = jsonb_build_object(
+           'runtime', (SELECT to_jsonb(r) FROM mdm_internal.policy_binding_runtime r
+                       WHERE binding_id=:'second_binding_id'::uuid),
+           'operations', (SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY operation_id),'[]'::jsonb)
+                          FROM mdm_internal.operations o),
+           'cases', (SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY case_key),'[]'::jsonb)
+                     FROM mdm_steward.policy_cases_v1 c),
+           'receipts', (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY created_at,receipt_id),'[]'::jsonb)
+                        FROM mdm_steward.policy_receipts_v1 r))
+       AND (SELECT state='paused' AND runtime_version=:paused_runtime_version
+            FROM mdm_internal.policy_binding_runtime
+            WHERE binding_id=:'second_binding_id'::uuid)
+ AS v49_stale_operator_version_exact_ok
+\gset
+\if :v49_stale_operator_version_exact_ok
+\else
+\quit 1
+\endif
+DROP TABLE public.e2e_policy_runtime_fence_before;
+\echo PASS: stale operator active/paused compare-and-set rejects with exact unchanged state
+\connect foundation mdm_legacy_login
+SET ROLE :"policy_execution_role";
 -- v0.49 owner-confirmed disabled/replaced binding receipts. This role
 -- remains authorized to submit, but both bindings fail closed before changing
 -- the policy case. Paused and replaced are distinct terminal outcomes.

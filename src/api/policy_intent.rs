@@ -568,15 +568,15 @@ pub(crate) fn persist_set_policy_binding_state(request: Internal) -> JsonB {
         let automation_oid = validate_principal_role(&automation_role, helper.oid, execution_oid)?;
         Spi::connect_mut(|client| {
             let row = client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) SELECT $1::uuid, $2, $3, $4, 1 WHERE $5 >= 0 AND EXISTS (SELECT 1 FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND entity_id = $6::uuid AND replaced_by IS NULL) AND ($5 = 0 OR EXISTS (SELECT 1 FROM mdm_internal.policy_binding_runtime WHERE binding_id = $1::uuid AND runtime_version = $5)) ON CONFLICT (binding_id) DO UPDATE SET database_oid = EXCLUDED.database_oid, automation_role_oid = EXCLUDED.automation_role_oid, state = EXCLUDED.state, runtime_version = mdm_internal.policy_binding_runtime.runtime_version + 1, changed_at = pg_catalog.statement_timestamp() WHERE mdm_internal.policy_binding_runtime.runtime_version = $5 RETURNING runtime_version", Some(1), &[request.binding_id.into(), database_oid()?.into(), automation_oid.into(), request.state.clone().into(), request.expected_runtime_version.into(), entity_id.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
-            let version = row
-                .first()
-                .get::<i64>(1)
+            // Evaluate the SPI row only when the runtime CAS returned one.
+            let version = (!row.is_empty())
+                .then(|| row.first().get::<i64>(1))
+                .transpose()
                 .map_err(|e| MdmError::Spi(e.to_string()))?
-                .ok_or_else(|| {
-                    MdmError::PolicyBinding(
-                        "runtime version is stale or binding is replaced".into(),
-                    )
-                })?;
+                .flatten()
+                .ok_or(MdmError::PolicyBinding(
+                    "runtime version is stale or binding is replaced".into(),
+                ))?;
             operation(
                 client,
                 "policy_binding_state",
