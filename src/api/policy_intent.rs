@@ -580,9 +580,11 @@ pub(crate) fn persist_set_policy_binding_state(request: Internal) -> JsonB {
                 .first()
                 .get::<i64>(1)
                 .map_err(|e| MdmError::Spi(e.to_string()))?
-                .ok_or_else(|| MdmError::PolicyBinding(
-                    "runtime version is stale or binding is replaced".into(),
-                ))?;
+                .ok_or_else(|| {
+                    MdmError::PolicyBinding(
+                        "runtime version is stale or binding is replaced".into(),
+                    )
+                })?;
             operation(
                 client,
                 "policy_binding_state",
