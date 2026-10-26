@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "base_sha": "5fdee89b589da8fb3ab86157cc716a2aaff8bdf8",
+  "original_mdm_binary_source": "6ad23ca11cb956f264e93e46a6351d32ea4a1ca8",
+  "selected_producer_source": "c7e257e551d6f6bacb84ecfe6f5daf7637c53673",
+  "selected_producer_archive_sha256": "d6233d49cee80d33ac30626e0af7932a9698279233b8fceef3447275192abc27",
+  "source_sha256": {
+    "src/api/policy_intent.rs": "1df0d03aaac9b68c3605c90930a9a029a5ec126803035a0d1e57a1c5eccf4113",
+    "tests/policy_pause_barrier.sql": "ee3e170c830aa72f831f02acd9f82c4827484708ef90831efff2a199479ba809",
+    "tests/Dockerfile.e2e": "b2175c426fbb38e915cefc03adafcbcc0d4c368f4e7a10d6417a961d5b21922a",
+    "scripts/run_e2e_tests.sh": "cdf34d8600c26f877b23d0d8eda33d4c207b3966311644c28e03bed62fe57906"
+  },
+  "packaged_frozen_sql_sha256": "5545dbefddd80a6a2ce68affbc5b435031dd2ee972ded555e443e73824c56c9b",
+  "libraries": [
+    "34a46bbf37c3dcc327d156ae24663af44ca89f8bec0d634dd65f357b7711a4f5  /usr/lib/postgresql/18/lib/pg_react.so",
+    "a3e1602c98ee30c1ee8246abb62c408ec9940070b0dfed0bfbef35e59000c875  /usr/lib/postgresql/18/lib/pg_mdm.so",
+    "3f83ffdc01756e81b04785d173c7e8307327fc6bf09e019f8cc521dcb234fa58  /usr/lib/postgresql/18/lib/pg_trickle.so"
+  ],
+  "images": [
+    {
+      "Id": "sha256:8327768e129cfefbbb1ed958bb267d80f13297a494b2b27b2acba1cffa779558",
+      "RepoTags": [
+        "pgreact:auto-final-operator"
+      ],
+      "RepoDigests": [
+        "pgreact@sha256:8327768e129cfefbbb1ed958bb267d80f13297a494b2b27b2acba1cffa779558"
+      ],
+      "Comment": "buildkit.dockerfile.v0",
+      "Created": "2026-10-26T15:57:19.16870772Z",
+      "Config": {
+        "User": "postgres",
+        "ExposedPorts": {
+          "5432/tcp": {}
+        },
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/18/bin",
+          "GOSU_VERSION=1.19",
+          "LANG=en_US.utf8",
+          "PG_MAJOR=18",
+          "PG_VERSION=18.4-1.pgdg12+1",
+          "PGDATA=/var/lib/postgresql/18/docker",
+          "PG_REACT_INIT_VERSION=0.46.1"
+        ],
+        "Entrypoint": [
+          "docker-entrypoint.sh"
+        ],
+        "Cmd": [
+          "postgres"
+        ],
+        "Volumes": {
+          "/var/lib/postgresql": {}
+        },
+        "Labels": {
+          "pg_mdm.candidate_key": "unknown",
+          "pg_mdm.source_revision": "6ad23ca11cb956f264e93e46a6351d32ea4a1ca8",
+          "pg_trickle.source_archive_sha256": "d6233d49cee80d33ac30626e0af7932a9698279233b8fceef3447275192abc27",
+          "pg_trickle.source_revision": "c7e257e551d6f6bacb84ecfe6f5daf7637c53673"
+        },
+        "StopSignal": "SIGINT"
+      },
+      "Architecture": "amd64",
+      "Os": "linux",
+      "Size": 776708955,
+      "RootFS": {
+        "Type": "layers",
+        "Layers": [
+          "sha256:8db1b4d0e54f2fbc2baf1563e57d88a8e72d3c79a72a38b9e4dee36e84f1d8ce",
+          "sha256:c884d2ab312e92f8127fbc14fd2113f3ab6b13ffdf492e2a665dabf15391fb47",
+          "sha256:4cf9cf4206a1ba211530447377ec4be0de34919a61246c36d8b4b3aafa38cb14",
+          "sha256:b2c303ecff9a3fe2903f3afd1eb674d70884b9ce310a6b781aa96b8f969a8b64",
+          "sha256:fd91933cc794ea107a522db38f47a5b740807fe205b8dc510d16b9a4590f70e4",
+          "sha256:fcd90363802a43b4baec62c14e89495511ff67c3042e263a0629c102a4b5e360",
+          "sha256:e91dda07cc3829bc3fd5f1137843b88e06ae7aba546fc2d91cc89fab4d9a0da9",
+          "sha256:57831b2ad1470741577dd179f9531dccdc918f0f960383fa79eeeaa1a19b3221",
+          "sha256:8e7e6ea472173c82a36c5f6f6e8247909b96868edf6b3377c302db736daedbec",
+          "sha256:c5bf05ce091cace385b8d512b8c35e0bb3da0f4c16690157a9d09a80e39c3774",
+          "sha256:d7af73d8e8b8fc2038f54492315f1cbd3afecc6a3eabbb22e7a7eb3aec7fc786",
+          "sha256:1656a1c17a5338e376a22a359822a894f915a24bf264979a9dc684fd34318c3e",
+          "sha256:388655d910c8af438b3126437c099ca48f7946402df6adbe23d65c6ac8c9b38d",
+          "sha256:35d4558e3835ef78e9040d5749c06142068addb6eb03b757b739b682f3956ffa",
+          "sha256:5ef21cf23f0ff825bbd05e26e6c07429e48ec8108fcc3507547cf76d715ff11a",
+          "sha256:9c7c2fb20c3dfc1867d798f9b96c61d3878c179f4c36526d5b968966471e2e95",
+          "sha256:d4779011b89d9e44ffb5508675209cac96f886cc040693c531c008d7063750a3",
+          "sha256:c07b3669eb9a54f700a7600b7d3e28f2b7f351457ec516814bbfbaff4d9ef170",
+          "sha256:d280cba5b8bebe3f3c3908da99102208853cb2850016073ab00a90b2547b1bfd",
+          "sha256:bf28f1ce8dec60956a9ef3f01e1e37226b43621b6c1f99022afb2ddb7ce97a45",
+          "sha256:5d97d813ad6a6174d2f91a91738244a082860cad438627fa7e02f56cfa9457a1",
+          "sha256:3801e91bfb1e873ead863cb1e9682e5f4a190fc4f75f410cbcc1f5cb1e21f2e2",
+          "sha256:0147e8a56b4e3edca5e359d85944858d551a3c8d693336ddc447f2f97edac668",
+          "sha256:2dcd68f73baf56c71042827d3b37e5cf215aa7433d1fe0b98033896710adcfc8",
+          "sha256:a26a73ffbbc61fbb58638c76c63cf5d8fd98498776906157c2271f08a302841e",
+          "sha256:b81e9b6df4e2b133377865cec30366debe97a412fa37506b26aaba3e5cc72987",
+          "sha256:c2ee835ba6db92a53ec7eee3c4d6d23608955c60d54e54124399dc7c8171cc96",
+          "sha256:c4e9a02ea51e285c1d43fbe79e183ce8e2e0be326bdea2ad0779d7582c74e0e3",
+          "sha256:084ace220a25f266529c2a7f3bf18446b63af9934d663123d6a1dec49ee36fbc",
+          "sha256:78953fc109b8702c8b43b442624746487e2e9d95c08eadc872aae498bb1de54e",
+          "sha256:55654044f669081eaaab60e1b708f92a733ec5fe151869999e29928f6c4332d0",
+          "sha256:994462552a0d8136783e7c7ad06d931ec4c09ac5382a97553ade6003ef92e2f6",
+          "sha256:b1aea3964a63cb8c80139b5e162d5830774d78f2852bbefeb78297e0b538efbc",
+          "sha256:9baa2eab04d612a29897207d35e5427f6fb4c3a6d432e5b21c38b6b7c35d0e22",
+          "sha256:a31af5dc51aba59dc34eba9cd5e447df0db4e53e49e28f1c3f9e95412593ac2e",
+          "sha256:71d9d2a3db985638f6f8c4fd35773996ebee24b58a6f32f6f9ffcdd73b5c2976",
+          "sha256:40f331517b8c5fef845f546e0e2ddaf99d2062a208f51d59a4aaa37e9f6fff69",
+          "sha256:87644dd884903876b0f15ed122d63c262b9718d3ede7bc969a1321e9f06b7600",
+          "sha256:53aeacdb382d3aa35bcb23a44e198caf5fa24fc9de7b635e97b147baacd92b90",
+          "sha256:3b0fc3524ec8420ffd3d2f53058b78f3e683a112150dcad1bc0b7c459f478808"
+        ]
+      },
+      "Metadata": {
+        "LastTagTime": "2026-10-26T15:57:19.324538095Z"
+      },
+      "Descriptor": {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "digest": "sha256:8327768e129cfefbbb1ed958bb267d80f13297a494b2b27b2acba1cffa779558",
+        "size": 856
+      },
+      "Identity": {
+        "Pull": [
+          {
+            "Repository": "docker.io/library/pgreact"
+          }
+        ],
+        "Build": [
+          {
+            "Ref": "pi5a9cr0kvgdbas43z1x1mch7",
+            "CreatedAt": "2026-10-26T15:57:19.330929387Z"
+          }
+        ]
+      }
+    },
+    {
+      "Id": "sha256:75062b418aef52e644caa5f55298b78342053a0ccc01b86480360289436353f0",
+      "RepoTags": [
+        "pgreact:mdm-pause-candidate"
+      ],
+      "RepoDigests": [
+        "pgreact@sha256:75062b418aef52e644caa5f55298b78342053a0ccc01b86480360289436353f0"
+      ],
+      "Comment": "buildkit.dockerfile.v0",
+      "Created": "2026-10-26T16:49:21.227137929Z",
+      "Config": {
+        "User": "postgres",
+        "ExposedPorts": {
+          "5432/tcp": {}
+        },
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/18/bin",
+          "GOSU_VERSION=1.19",
+          "LANG=en_US.utf8",
+          "PG_MAJOR=18",
+          "PG_VERSION=18.4-1.pgdg12+1",
+          "PGDATA=/var/lib/postgresql/18/docker"
+        ],
+        "Entrypoint": [
+          "docker-entrypoint.sh"
+        ],
+        "Cmd": [
+          "postgres"
+        ],
+        "Volumes": {
+          "/var/lib/postgresql": {}
+        },
+        "Labels": {
+          "pg_mdm.candidate_key": "unknown",
+          "pg_mdm.source_revision": "5fdee89b589da8fb3ab86157cc716a2aaff8bdf8",
+          "pg_trickle.source_archive_sha256": "d6233d49cee80d33ac30626e0af7932a9698279233b8fceef3447275192abc27",
+          "pg_trickle.source_revision": "c7e257e551d6f6bacb84ecfe6f5daf7637c53673"
+        },
+        "StopSignal": "SIGINT"
+      },
+      "Architecture": "amd64",
+      "Os": "linux",
+      "Size": 165523144,
+      "RootFS": {
+        "Type": "layers",
+        "Layers": [
+          "sha256:8db1b4d0e54f2fbc2baf1563e57d88a8e72d3c79a72a38b9e4dee36e84f1d8ce",
+          "sha256:c884d2ab312e92f8127fbc14fd2113f3ab6b13ffdf492e2a665dabf15391fb47",
+          "sha256:4cf9cf4206a1ba211530447377ec4be0de34919a61246c36d8b4b3aafa38cb14",
+          "sha256:b2c303ecff9a3fe2903f3afd1eb674d70884b9ce310a6b781aa96b8f969a8b64",
+          "sha256:fd91933cc794ea107a522db38f47a5b740807fe205b8dc510d16b9a4590f70e4",
+          "sha256:fcd90363802a43b4baec62c14e89495511ff67c3042e263a0629c102a4b5e360",
+          "sha256:e91dda07cc3829bc3fd5f1137843b88e06ae7aba546fc2d91cc89fab4d9a0da9",
+          "sha256:57831b2ad1470741577dd179f9531dccdc918f0f960383fa79eeeaa1a19b3221",
+          "sha256:8e7e6ea472173c82a36c5f6f6e8247909b96868edf6b3377c302db736daedbec",
+          "sha256:c5bf05ce091cace385b8d512b8c35e0bb3da0f4c16690157a9d09a80e39c3774",
+          "sha256:d7af73d8e8b8fc2038f54492315f1cbd3afecc6a3eabbb22e7a7eb3aec7fc786",
+          "sha256:1656a1c17a5338e376a22a359822a894f915a24bf264979a9dc684fd34318c3e",
+          "sha256:388655d910c8af438b3126437c099ca48f7946402df6adbe23d65c6ac8c9b38d",
+          "sha256:35d4558e3835ef78e9040d5749c06142068addb6eb03b757b739b682f3956ffa",
+          "sha256:5ef21cf23f0ff825bbd05e26e6c07429e48ec8108fcc3507547cf76d715ff11a",
+          "sha256:27d2522d34bbaa68b77bcf6792429caa302605cd8952ca4ceca21a6d9f2226e1",
+          "sha256:dc568f0acbefab70346f41d2d98690aef1fbd1c69ebaf7a0126dc5867ba20128",
+          "sha256:478f4c6e74dfb358bc38fa11b21065507173e63eeb8e3fdd04c662aeb4117f1d",
+          "sha256:81a7e3fcf855f47976a271c16e8598b85f13b45ecf50623d61df1f8a2c34c6c5",
+          "sha256:54ec945c1a43ad1ce6feee56ac1bb3ae666b5d1fba7332512eddc598ee569cac",
+          "sha256:adc95437ae92a04e0ba607ceeb1f048494140c95603ae0e1477dfb4faceed9d2",
+          "sha256:02d283fb7bd4b81fd04c30d43ed29e57a977f862a456199f68a85f8fab11853b",
+          "sha256:e1728be1109f2f157ee40e51c2089e8960b335510db4701c627141681db5282c",
+          "sha256:a04ec6fb710b342a1a9e433dfaf26a49fe7f18356eab2537c5ec389f0f651d15",
+          "sha256:186a66b15094a692b21ac13f584284fd61983597b64f98cb8015a3346b24e227",
+          "sha256:502484ebcc88b014e2d00d2d38e71d0ef22a5d3c18ce090d4be2cae960959932",
+          "sha256:8bdc9dee098061c14c4c95222f90935a8f3c10ac4086e6b2157d8f9dfd8132d9",
+          "sha256:ba235af216379ed1eef1afc94d3f35dcf894c97d87ce2d35d1db0e8b96e70adf"
+        ]
+      },
+      "Metadata": {
+        "LastTagTime": "2026-10-26T16:49:21.522694929Z"
+      },
+      "Descriptor": {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "digest": "sha256:75062b418aef52e644caa5f55298b78342053a0ccc01b86480360289436353f0",
+        "size": 856
+      },
+      "Identity": {
+        "Pull": [
+          {
+            "Repository": "docker.io/library/pgreact"
+          }
+        ],
+        "Build": [
+          {
+            "Ref": "7fem4w3a6q2u0kqhk342m867c",
+            "CreatedAt": "2026-10-26T16:49:21.528095971Z"
+          }
+        ]
+      }
+    },
+    {
+      "Id": "sha256:1f75f500560033cf2249f79a08e0f993dc147a6a69718220f6eda7e65612467f",
+      "RepoTags": [
+        "pgreact:claimed-candidate"
+      ],
+      "RepoDigests": [
+        "pgreact@sha256:1f75f500560033cf2249f79a08e0f993dc147a6a69718220f6eda7e65612467f"
+      ],
+      "Comment": "buildkit.dockerfile.v0",
+      "Created": "2026-10-26T16:52:03.996207129Z",
+      "Config": {
+        "User": "postgres",
+        "ExposedPorts": {
+          "5432/tcp": {}
+        },
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/18/bin",
+          "GOSU_VERSION=1.19",
+          "LANG=en_US.utf8",
+          "PG_MAJOR=18",
+          "PG_VERSION=18.4-1.pgdg12+1",
+          "PGDATA=/var/lib/postgresql/18/docker",
+          "PG_REACT_INIT_VERSION=0.46.1"
+        ],
+        "Entrypoint": [
+          "docker-entrypoint.sh"
+        ],
+        "Cmd": [
+          "postgres"
+        ],
+        "Volumes": {
+          "/var/lib/postgresql": {}
+        },
+        "Labels": {
+          "pg_mdm.candidate_key": "unknown",
+          "pg_mdm.source_revision": "5fdee89b589da8fb3ab86157cc716a2aaff8bdf8",
+          "pg_trickle.source_archive_sha256": "d6233d49cee80d33ac30626e0af7932a9698279233b8fceef3447275192abc27",
+          "pg_trickle.source_revision": "c7e257e551d6f6bacb84ecfe6f5daf7637c53673"
+        },
+        "StopSignal": "SIGINT"
+      },
+      "Architecture": "amd64",
+      "Os": "linux",
+      "Size": 783736259,
+      "RootFS": {
+        "Type": "layers",
+        "Layers": [
+          "sha256:8db1b4d0e54f2fbc2baf1563e57d88a8e72d3c79a72a38b9e4dee36e84f1d8ce",
+          "sha256:c884d2ab312e92f8127fbc14fd2113f3ab6b13ffdf492e2a665dabf15391fb47",
+          "sha256:4cf9cf4206a1ba211530447377ec4be0de34919a61246c36d8b4b3aafa38cb14",
+          "sha256:b2c303ecff9a3fe2903f3afd1eb674d70884b9ce310a6b781aa96b8f969a8b64",
+          "sha256:fd91933cc794ea107a522db38f47a5b740807fe205b8dc510d16b9a4590f70e4",
+          "sha256:fcd90363802a43b4baec62c14e89495511ff67c3042e263a0629c102a4b5e360",
+          "sha256:e91dda07cc3829bc3fd5f1137843b88e06ae7aba546fc2d91cc89fab4d9a0da9",
+          "sha256:57831b2ad1470741577dd179f9531dccdc918f0f960383fa79eeeaa1a19b3221",
+          "sha256:8e7e6ea472173c82a36c5f6f6e8247909b96868edf6b3377c302db736daedbec",
+          "sha256:c5bf05ce091cace385b8d512b8c35e0bb3da0f4c16690157a9d09a80e39c3774",
+          "sha256:d7af73d8e8b8fc2038f54492315f1cbd3afecc6a3eabbb22e7a7eb3aec7fc786",
+          "sha256:1656a1c17a5338e376a22a359822a894f915a24bf264979a9dc684fd34318c3e",
+          "sha256:388655d910c8af438b3126437c099ca48f7946402df6adbe23d65c6ac8c9b38d",
+          "sha256:35d4558e3835ef78e9040d5749c06142068addb6eb03b757b739b682f3956ffa",
+          "sha256:5ef21cf23f0ff825bbd05e26e6c07429e48ec8108fcc3507547cf76d715ff11a",
+          "sha256:9c7c2fb20c3dfc1867d798f9b96c61d3878c179f4c36526d5b968966471e2e95",
+          "sha256:d4779011b89d9e44ffb5508675209cac96f886cc040693c531c008d7063750a3",
+          "sha256:c07b3669eb9a54f700a7600b7d3e28f2b7f351457ec516814bbfbaff4d9ef170",
+          "sha256:d280cba5b8bebe3f3c3908da99102208853cb2850016073ab00a90b2547b1bfd",
+          "sha256:bf28f1ce8dec60956a9ef3f01e1e37226b43621b6c1f99022afb2ddb7ce97a45",
+          "sha256:5d97d813ad6a6174d2f91a91738244a082860cad438627fa7e02f56cfa9457a1",
+          "sha256:3801e91bfb1e873ead863cb1e9682e5f4a190fc4f75f410cbcc1f5cb1e21f2e2",
+          "sha256:0147e8a56b4e3edca5e359d85944858d551a3c8d693336ddc447f2f97edac668",
+          "sha256:2dcd68f73baf56c71042827d3b37e5cf215aa7433d1fe0b98033896710adcfc8",
+          "sha256:a26a73ffbbc61fbb58638c76c63cf5d8fd98498776906157c2271f08a302841e",
+          "sha256:b81e9b6df4e2b133377865cec30366debe97a412fa37506b26aaba3e5cc72987",
+          "sha256:c2ee835ba6db92a53ec7eee3c4d6d23608955c60d54e54124399dc7c8171cc96",
+          "sha256:c4e9a02ea51e285c1d43fbe79e183ce8e2e0be326bdea2ad0779d7582c74e0e3",
+          "sha256:084ace220a25f266529c2a7f3bf18446b63af9934d663123d6a1dec49ee36fbc",
+          "sha256:78953fc109b8702c8b43b442624746487e2e9d95c08eadc872aae498bb1de54e",
+          "sha256:55654044f669081eaaab60e1b708f92a733ec5fe151869999e29928f6c4332d0",
+          "sha256:994462552a0d8136783e7c7ad06d931ec4c09ac5382a97553ade6003ef92e2f6",
+          "sha256:b1aea3964a63cb8c80139b5e162d5830774d78f2852bbefeb78297e0b538efbc",
+          "sha256:9baa2eab04d612a29897207d35e5427f6fb4c3a6d432e5b21c38b6b7c35d0e22",
+          "sha256:a31af5dc51aba59dc34eba9cd5e447df0db4e53e49e28f1c3f9e95412593ac2e",
+          "sha256:71d9d2a3db985638f6f8c4fd35773996ebee24b58a6f32f6f9ffcdd73b5c2976",
+          "sha256:40f331517b8c5fef845f546e0e2ddaf99d2062a208f51d59a4aaa37e9f6fff69",
+          "sha256:87644dd884903876b0f15ed122d63c262b9718d3ede7bc969a1321e9f06b7600",
+          "sha256:53aeacdb382d3aa35bcb23a44e198caf5fa24fc9de7b635e97b147baacd92b90",
+          "sha256:3b0fc3524ec8420ffd3d2f53058b78f3e683a112150dcad1bc0b7c459f478808",
+          "sha256:b68ceb8208df6369e6e329acf8f7f74cb8f2b2e16efcfb84f0350c5d50707880",
+          "sha256:9542cbdfb21394ca152a8048af1821205f2b27dc73743502b206cd01a95e65a3"
+        ]
+      },
+      "Metadata": {
+        "LastTagTime": "2026-10-26T16:52:04.202484129Z"
+      },
+      "Descriptor": {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "digest": "sha256:1f75f500560033cf2249f79a08e0f993dc147a6a69718220f6eda7e65612467f",
+        "size": 856
+      },
+      "Identity": {
+        "Build": [
+          {
+            "Ref": "r794cmz4v7d1hcvk5ffq04ixx",
+            "CreatedAt": "2026-10-26T16:52:04.209880838Z"
+          }
+        ]
+      }
+    }
+  ],
+  "commands": [
+    {
+      "command": "rtk docker build --platform linux/amd64 -f tests/Dockerfile.e2e --build-arg PG_MDM_SOURCE_REVISION=5fdee89b589da8fb3ab86157cc716a2aaff8bdf8 --build-arg PG_TRICKLE_REVISION=c7e257e551d6f6bacb84ecfe6f5daf7637c53673 --build-arg PG_TRICKLE_SHA256=d6233d49cee80d33ac30626e0af7932a9698279233b8fceef3447275192abc27 -t pgreact:mdm-pause-candidate .",
+      "exit_code": 0
+    },
+    {
+      "command": "rtk python3 /tmp/mdm-pause-sql-check.py pgreact:auto-final-operator /tmp/pgreact-mdm-sql-before",
+      "exit_code": 3,
+      "expected": "pause acknowledges too early; test fails"
+    },
+    {
+      "command": "rtk python3 /tmp/mdm-pause-sql-check.py pgreact:claimed-candidate /tmp/pgreact-mdm-sql-after",
+      "exit_code": 0,
+      "expected": "pause blocks, exact complete state passes"
+    },
+    {
+      "command": "rtk python3 tests/integrations/pg-mdm/time/audit.py pgreact:auto-final-operator /tmp/pgreact-claimed-native-before --claimed-work",
+      "exit_code": 1,
+      "expected": "real claimed React delivery applies ESCALATE after pause acknowledgment on original MDM"
+    },
+    {
+      "command": "rtk python3 tests/integrations/pg-mdm/time/audit.py pgreact:claimed-candidate /tmp/pgreact-claimed-final-repeat --claimed-work",
+      "exit_code": 0,
+      "expected": "full deterministic pause/edit/replacement/cross-key matrix passes with both fixes"
+    },
+    {
+      "command": "cargo fmt -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --all-targets --features pg18 -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --all-targets --features pg18",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo pgrx test pg18 --features pg_test",
+      "exit_code": 0
+    },
+    {
+      "command": "scripts/check_security_definer.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "python3 scripts/check_upgrade_paths.py",
+      "exit_code": 0
+    },
+    {
+      "command": "cmp /package/usr/share/postgresql/18/extension/pg_mdm--0.14.1.sql sql/archive/pg_mdm--0.14.1.sql",
+      "exit_code": 0
+    }
+  ],
+  "local_notes": [
+    "Two SQL string changes were built on base SHA with the recorded exact source checksum; no other Rust source changed. The subsequent commit retains that checksum.",
+    "The independent SQL regression used the committed fixture with only database name foundation replaced by s1_idle for the existing lightweight public-API bootstrap. Full standard E2E runs the original foundation fixture.",
+    "First lint attempt with --network none could not resolve crates.io. Its raw failure is retained; the complete rerun with network access passed.",
+    "Local image is Linux amd64 under aarch64 emulation. CARGO_BUILD_JOBS=2 bounds local compile parallelism; it does not change test/workload assertions.",
+    "React matrix includes the separate fresh-work terminal-pause hold repair; its original-hold failure is retained in the downstream PR evidence."
+  ],
+  "archives": [
+    {
+      "path": "observations.json.gz",
+      "sha256": "4a10e82dec94ccf2e3b4640a73c39186c50de40983bfb810d7598e67a3d67a25"
+    },
+    {
+      "path": "build-logs.json.gz",
+      "sha256": "9e40ce2688a5668fc5eea327aacb68a0457438649f94584b6f1e7a4666b7378c"
+    }
+  ],
+  "release_qualified": false,
+  "default_producer_pin_changed": false
+}
