@@ -559,7 +559,7 @@ pub(crate) fn persist_set_policy_binding_state(request: Internal) -> JsonB {
         let entity_name = Spi::get_one_with_args::<String>("SELECT e.entity_name::text FROM mdm_steward.policy_bindings_v1 b JOIN mdm_internal.entities e USING (entity_id) WHERE b.binding_id = $1::uuid", &[request.binding_id.into()]).map_err(|e| MdmError::Spi(e.to_string()))?.ok_or_else(|| MdmError::PolicyBinding("binding does not exist".into()))?;
         let (entity_id, selected_name, execution_oid) = validate_entity_admin(&entity_name)?;
         let automation_role = Spi::get_one_with_args::<String>(
-            "SELECT automation_role_name::text FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND replaced_by IS NULL",
+            "SELECT automation_role_name::text FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND replaced_by IS NULL FOR UPDATE",
             &[request.binding_id.into()],
         )
         .map_err(|e| MdmError::Spi(e.to_string()))?
@@ -964,7 +964,7 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
     Spi::connect_mut(|client| {
         let binding = client
             .select(
-                "SELECT b.entity_id::text, b.automation_role_name::text, COALESCE(r.automation_role_oid, 0), b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, CASE WHEN b.replaced_by IS NOT NULL THEN 'replaced' ELSE COALESCE(r.state, 'paused') END, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused') FROM mdm_steward.policy_bindings_v1 b LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid",
+                "SELECT b.entity_id::text, b.automation_role_name::text, COALESCE(r.automation_role_oid, 0), b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, CASE WHEN b.replaced_by IS NOT NULL THEN 'replaced' ELSE COALESCE(r.state, 'paused') END, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused') FROM mdm_steward.policy_bindings_v1 b LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid FOR UPDATE OF b",
                 Some(1),
                 &[request.binding_id.to_string().into()],
             )
