@@ -1,0 +1,17 @@
+{
+  "runs": [
+    {
+      "source": "74b5936d8cd6f1c21553913c3de2739eb20fb975 plus uncommitted e2e.sql",
+      "exit": 1,
+      "result": "Image build rejected dirty source before tests"
+    },
+    {
+      "source": "231f7220c523c7b8c189a2b08a0fb26bd586622e",
+      "exit": 3,
+      "result": "Adjacent upgrade succeeded; private-helper privilege assertion exposed PUBLIC execute on activation epoch"
+    }
+  ],
+  "command": "scripts/run_e2e_tests.sh",
+  "archive_sha256": "0e897028b1bc8ab3face7c8a94ab7898f6a07a17a01e52b7e937062d17d41a0a",
+  "scope": "Local amd64-emulated PostgreSQL; not release qualification"
+}
