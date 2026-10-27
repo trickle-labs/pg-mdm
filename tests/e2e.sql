@@ -290,6 +290,18 @@ BEGIN
 END
 $$;
 
+ALTER EXTENSION pg_mdm UPDATE TO '0.14.2';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.14.2')
+       OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid = 'mdm_internal.policy_binding_runtime'::regclass
+                        AND attname = 'activation_epoch' AND NOT attisdropped) THEN
+        RAISE EXCEPTION '0.14.1 to 0.14.2 upgrade did not install the activation epoch';
+    END IF;
+END
+$$;
+
 \connect postgres postgres
 CREATE DATABASE upgrade;
 \connect upgrade postgres
