@@ -63,6 +63,7 @@ JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = target_schema.nspowne
 WHERE target_schema.nspname = pg_catalog.format('%s_%s', 'pgtrickle', 'changes');
 \gexec
 GRANT EXECUTE ON FUNCTION pgtrickle.integration_capabilities() TO :"helper_owner";
+GRANT EXECUTE ON FUNCTION mdm_internal.policy_runtime_epoch() TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.create_stream_table(text, text, text, text, boolean, text, text, text, boolean, boolean, text, integer, double precision, text, boolean, text, integer, text, text) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.stream_table_contract(regclass) TO :"helper_owner";
 GRANT EXECUTE ON FUNCTION pgtrickle.graph_contract(regclass[]) TO :"helper_owner";

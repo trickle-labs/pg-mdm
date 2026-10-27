@@ -31,6 +31,23 @@ pub mod version;
 
 ::pgrx::pg_module_magic!();
 
+// Backends inherit this value from their postmaster; a copied data directory cannot.
+static POSTMASTER_EPOCH: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+#[pgrx::pg_guard]
+pub extern "C-unwind" fn _PG_init() {
+    if unsafe { pgrx::pg_sys::process_shared_preload_libraries_in_progress } {
+        let mut epoch = vec![0_u8; 32];
+        if unsafe { pgrx::pg_sys::pg_strong_random(epoch.as_mut_ptr().cast(), epoch.len()) } {
+            let _ = POSTMASTER_EPOCH.set(epoch);
+        }
+    }
+}
+
+fn postmaster_epoch() -> Option<Vec<u8>> {
+    POSTMASTER_EPOCH.get().cloned()
+}
+
 fn raise(error: error::MdmError) -> ! {
     pgrx::error!("{}: {}", error.code(), error)
 }
@@ -41,6 +58,6 @@ pub mod pg_test {
     pub fn setup(_options: Vec<&str>) {}
 
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        vec!["shared_preload_libraries = 'pg_trickle'"]
+        vec!["shared_preload_libraries = 'pg_trickle,pg_mdm'"]
     }
 }
