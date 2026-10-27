@@ -1205,7 +1205,8 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'public source actions must be SECURITY INVOKER';
     END IF;
-    IF has_schema_privilege('mdm_administrator', 'mdm_internal', 'USAGE')
+    IF NOT has_function_privilege('mdm_helper_owner', 'mdm_internal.policy_runtime_epoch()', 'EXECUTE')
+       OR has_schema_privilege('mdm_administrator', 'mdm_internal', 'USAGE')
        OR EXISTS (
            SELECT FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
            WHERE n.nspname = 'mdm_internal'

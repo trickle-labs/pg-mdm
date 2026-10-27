@@ -14,7 +14,7 @@ use crate::source_record::quote_identifier;
 
 #[pg_extern(
     name = "policy_runtime_epoch",
-    sql = "CREATE FUNCTION mdm_internal.policy_runtime_epoch() RETURNS bytea LANGUAGE c STABLE PARALLEL SAFE AS 'MODULE_PATHNAME', 'policy_runtime_epoch_wrapper';"
+    sql = "CREATE FUNCTION mdm_internal.policy_runtime_epoch() RETURNS bytea LANGUAGE c STABLE PARALLEL SAFE AS 'MODULE_PATHNAME', 'policy_runtime_epoch_wrapper'; REVOKE ALL ON FUNCTION mdm_internal.policy_runtime_epoch() FROM PUBLIC;"
 )]
 pub(crate) fn policy_runtime_epoch() -> Option<Vec<u8>> {
     crate::postmaster_epoch()

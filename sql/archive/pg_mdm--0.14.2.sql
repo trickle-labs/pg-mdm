@@ -870,7 +870,7 @@ CREATE FUNCTION mdm_internal.policy_case_basis_digest(basis jsonb) RETURNS bytea
 /* <begin connected objects> */
 -- src/api/policy_intent.rs:15
 -- pg_mdm::api::policy_intent::policy_runtime_epoch
-CREATE FUNCTION mdm_internal.policy_runtime_epoch() RETURNS bytea LANGUAGE c STABLE PARALLEL SAFE AS 'MODULE_PATHNAME', 'policy_runtime_epoch_wrapper';
+CREATE FUNCTION mdm_internal.policy_runtime_epoch() RETURNS bytea LANGUAGE c STABLE PARALLEL SAFE AS 'MODULE_PATHNAME', 'policy_runtime_epoch_wrapper'; REVOKE ALL ON FUNCTION mdm_internal.policy_runtime_epoch() FROM PUBLIC;
 /* </end connected objects> */
 
 /* <begin connected objects> */
