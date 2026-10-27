@@ -1,0 +1,37 @@
+{
+  "scope": "Focused dirty-source prototype only; not final artifact or release qualification.",
+  "mdm_base": "061705d17dae52697f6e7371b7840722a6ad4bde",
+  "react_base": "96e07090be0da636445b5a27fd8d5e39cc5476f1",
+  "pg_trickle_source": "c7e257e551d6f6bacb84ecfe6f5daf7637c53673",
+  "pg_trickle_archive_sha256": "d6233d49cee80d33ac30626e0af7932a9698279233b8fceef3447275192abc27",
+  "prototype_image": "sha256:b2763ff4f6e157a5e2fa28403d0a79fa70664a27c1e9a6ee6d348b1a48b5db42",
+  "architecture": "amd64 emulation on aarch64",
+  "runs": [
+    {
+      "path": "pgreact-direct-no-receipt-before-20261027",
+      "exit": 1,
+      "result": "original merged source applied direct control before activation"
+    },
+    {
+      "path": "pgreact-clean-clone-activation-prototype-v4-20261027",
+      "exit": 0,
+      "result": "focused physical-clone replay and bounded resumption passed"
+    },
+    {
+      "path": "pgreact-direct-no-receipt-after-v4-20261027",
+      "exit": 0,
+      "result": "direct clone request rejected without durable changes"
+    },
+    {
+      "path": "pgreact-no-preload-rejection-20261027",
+      "exit": 1,
+      "result": "expected diagnostic: activation rejected because pg_mdm was not preloaded"
+    }
+  ],
+  "raw_sha256": "799d80964d35b7b23d22bd13e55b1fa69f8cdeb5823c8b385317f63805aa60e3",
+  "limitations": [
+    "Sources were uncommitted; generated image labels explicitly identify a dirty prototype.",
+    "Actual populated adjacent upgrade, logical restore and release qualification remain outstanding."
+  ],
+  "release_qualified": false
+}

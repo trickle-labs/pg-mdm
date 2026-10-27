@@ -484,6 +484,7 @@ CREATE TABLE mdm_internal.policy_binding_runtime (
     automation_role_oid oid NOT NULL,
     state text NOT NULL CHECK (state IN ('active', 'paused')),
     runtime_version bigint NOT NULL CHECK (runtime_version > 0),
+    activation_epoch bytea,
     changed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp()
 );
 

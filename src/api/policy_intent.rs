@@ -12,6 +12,14 @@ use crate::policy::{
 };
 use crate::source_record::quote_identifier;
 
+#[pg_extern(
+    name = "policy_runtime_epoch",
+    sql = "CREATE FUNCTION mdm_internal.policy_runtime_epoch() RETURNS bytea LANGUAGE c STABLE PARALLEL SAFE AS 'MODULE_PATHNAME', 'policy_runtime_epoch_wrapper';"
+)]
+pub(crate) fn policy_runtime_epoch() -> Option<Vec<u8>> {
+    crate::postmaster_epoch()
+}
+
 #[derive(Clone)]
 struct BindingRequest {
     entity_name: String,
@@ -324,6 +332,9 @@ fn persist_binding(request: &BindingRequest) -> Result<Value, MdmError> {
     let (entity_id, selected, execution_oid) = validate_entity_admin(&request.entity_name)?;
     let automation_oid = validate_binding_request(request, execution_oid)?;
     let db_oid = database_oid()?;
+    let epoch = crate::postmaster_epoch().ok_or_else(|| {
+        MdmError::PolicyBinding("pg_mdm must be preloaded for policy activation".into())
+    })?;
     Spi::connect_mut(|client| {
         client
             .select(
@@ -371,7 +382,7 @@ fn persist_binding(request: &BindingRequest) -> Result<Value, MdmError> {
             .map_err(|e| MdmError::Spi(e.to_string()))?
             .ok_or_else(|| MdmError::Spi("binding version is NULL".into()))?;
         let state = if old_id.is_some() { "paused" } else { "active" };
-        client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) VALUES ($1::uuid, $2, $3, $4, 1)", None, &[id.clone().into(), db_oid.into(), automation_oid.into(), state.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+        client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version, activation_epoch) VALUES ($1::uuid, $2, $3, $4, 1, $5)", None, &[id.clone().into(), db_oid.into(), automation_oid.into(), state.into(), epoch.clone().into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
         grant_binding_role(client, &request.automation_role_name)?;
         operation(
             client,
@@ -566,8 +577,17 @@ pub(crate) fn persist_set_policy_binding_state(request: Internal) -> JsonB {
         .ok_or_else(|| MdmError::PolicyBinding("binding is replaced".into()))?;
         let helper = catalog::validate_helper_owner()?;
         let automation_oid = validate_principal_role(&automation_role, helper.oid, execution_oid)?;
+        if request.state == "active" {
+            crate::integration::require_graph_v1()?;
+        }
+        let epoch = crate::postmaster_epoch();
+        if request.state == "active" && epoch.is_none() {
+            return Err(MdmError::PolicyBinding(
+                "pg_mdm must be preloaded for policy activation".into(),
+            ));
+        }
         Spi::connect_mut(|client| {
-            let row = client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version) SELECT $1::uuid, $2, $3, $4, 1 WHERE $5 >= 0 AND EXISTS (SELECT 1 FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND entity_id = $6::uuid AND replaced_by IS NULL) AND ($5 = 0 OR EXISTS (SELECT 1 FROM mdm_internal.policy_binding_runtime WHERE binding_id = $1::uuid AND runtime_version = $5)) ON CONFLICT (binding_id) DO UPDATE SET database_oid = EXCLUDED.database_oid, automation_role_oid = EXCLUDED.automation_role_oid, state = EXCLUDED.state, runtime_version = mdm_internal.policy_binding_runtime.runtime_version + 1, changed_at = pg_catalog.statement_timestamp() WHERE mdm_internal.policy_binding_runtime.runtime_version = $5 RETURNING runtime_version", Some(1), &[request.binding_id.into(), database_oid()?.into(), automation_oid.into(), request.state.clone().into(), request.expected_runtime_version.into(), entity_id.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
+            let row = client.update("INSERT INTO mdm_internal.policy_binding_runtime (binding_id, database_oid, automation_role_oid, state, runtime_version, activation_epoch) SELECT $1::uuid, $2, $3, $4, 1, $7 WHERE $5 >= 0 AND EXISTS (SELECT 1 FROM mdm_steward.policy_bindings_v1 WHERE binding_id = $1::uuid AND entity_id = $6::uuid AND replaced_by IS NULL) AND ($5 = 0 OR EXISTS (SELECT 1 FROM mdm_internal.policy_binding_runtime WHERE binding_id = $1::uuid AND runtime_version = $5)) ON CONFLICT (binding_id) DO UPDATE SET database_oid = EXCLUDED.database_oid, automation_role_oid = EXCLUDED.automation_role_oid, state = EXCLUDED.state, activation_epoch = EXCLUDED.activation_epoch, runtime_version = mdm_internal.policy_binding_runtime.runtime_version + 1, changed_at = pg_catalog.statement_timestamp() WHERE mdm_internal.policy_binding_runtime.runtime_version = $5 RETURNING runtime_version", Some(1), &[request.binding_id.into(), database_oid()?.into(), automation_oid.into(), request.state.clone().into(), request.expected_runtime_version.into(), entity_id.into(), epoch.into()]).map_err(|e| MdmError::Spi(e.to_string()))?;
             // Evaluate the SPI row only when the runtime CAS returned one.
             let version = (!row.is_empty())
                 .then(|| row.first().get::<i64>(1))
@@ -991,7 +1011,7 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
         }
         let binding = client
             .select(
-                "SELECT b.entity_id::text, b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, CASE WHEN b.replaced_by IS NOT NULL THEN 'replaced' ELSE COALESCE(r.state, 'paused') END, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused'), e.entity_name::text FROM mdm_steward.policy_bindings_v1 b JOIN mdm_internal.entities e USING (entity_id) LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid FOR UPDATE OF b",
+                "SELECT b.entity_id::text, b.policy_digest, b.allowed_actions, b.allowed_queues::text[], b.max_due_interval::text, b.max_escalation_level, b.binding_version, CASE WHEN b.replaced_by IS NOT NULL THEN 'replaced' ELSE COALESCE(r.state, 'paused') END, COALESCE(r.database_oid, 0), COALESCE(r.automation_role_oid, 0), COALESCE(r.state, 'paused'), e.entity_name::text, r.activation_epoch FROM mdm_steward.policy_bindings_v1 b JOIN mdm_internal.entities e USING (entity_id) LEFT JOIN mdm_internal.policy_binding_runtime r ON r.binding_id = b.binding_id WHERE b.binding_id = $1::pg_catalog.uuid FOR UPDATE OF b",
                 Some(1),
                 &[request.binding_id.to_string().into()],
             )
@@ -1044,8 +1064,17 @@ fn submit_intent(request: &IntentRequest) -> Result<Value, MdmError> {
             .get::<String>(12)
             .map_err(|error| MdmError::Spi(error.to_string()))?
             .ok_or_else(|| MdmError::Spi("binding scope is NULL".into()))?;
+        let activation_epoch = binding
+            .get::<Vec<u8>>(13)
+            .map_err(|e| MdmError::Spi(e.to_string()))?;
+        let current_epoch = crate::postmaster_epoch();
         if let Some(result) = replay_receipt(client, request, &digest)? {
             return Ok(result);
+        }
+        if current_epoch.is_none() || activation_epoch != current_epoch {
+            return Err(MdmError::PolicyBinding(
+                "explicit policy activation is required for this postmaster".into(),
+            ));
         }
         let case = client
             .select(

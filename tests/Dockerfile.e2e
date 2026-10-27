@@ -82,7 +82,7 @@ COPY tests/incremental_qualification.sql /tests/incremental_qualification.sql
 COPY tests/operating_envelope.sql /tests/operating_envelope.sql
 COPY tests/restore.sql /tests/restore.sql
 COPY sql/configure_helper.sql /sql/configure_helper.sql
-RUN echo "shared_preload_libraries = 'pg_trickle'" >> /usr/share/postgresql/postgresql.conf.sample \
+RUN echo "shared_preload_libraries = 'pg_trickle,pg_mdm'" >> /usr/share/postgresql/postgresql.conf.sample \
     && echo "pg_trickle.enable_output_delta_qualification = on" >> /usr/share/postgresql/postgresql.conf.sample
 USER postgres
 ARG PG_MDM_SOURCE_REVISION=unknown

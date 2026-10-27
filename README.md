@@ -13,6 +13,8 @@ The project is built around a deliberate division of responsibility. [`pg_trickl
 
 The compiler v11 source supports PostgreSQL 18 with the checksum-pinned `pg_trickle` 0.108.3 source repairs in [`DEPENDENCIES.md`](DEPENDENCIES.md). The released pg_mdm 0.14.0 package was qualified with pg_trickle 0.108.0 and does not accept the v3 profile. Install the pinned producer and adapter, add `pg_trickle` to `shared_preload_libraries`, and restart PostgreSQL. Before upgrading pg_trickle to 0.108.3, request a resnapshot for each active output-delta consumer; the next pg_mdm refresh rebuilds its consumer state from the fresh snapshot.
 
+The 0.14.2 candidate requires `pg_mdm` in `shared_preload_libraries` for policy automation. After every PostgreSQL restart, restore or clone, the entity execution role must recheck the environment and explicitly activate each policy binding with its current runtime version. Until then new intents fail without a receipt; an existing matching receipt remains replayable. Without the preload, activation fails closed and pausing remains available. This candidate has not yet completed release qualification.
+
 The extension stores definitions, installs private Graph V1.2 members, consumes Delta V1.1 changes, and publishes PostgreSQL output tables in one transaction. The v0.14 CI suite compares differential and full results, tests affected resolution, and covers rollback, retry, policy intents, upgrade, and restore on PostgreSQL 18.
 
 Build and copy the package:
