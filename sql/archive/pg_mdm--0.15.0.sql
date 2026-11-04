@@ -761,13 +761,13 @@ CREATE FUNCTION mdm_internal.normalized_levenshtein_score(left_value text, right
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:546
+-- src/api/policy.rs:579
 -- pg_mdm::api::policy::persist_backfill_policy_case_opened_at
 CREATE FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_backfill_policy_case_opened_at_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:511
+-- src/api/policy.rs:544
 -- pg_mdm::api::policy::backfill_policy_case_opened_at
 CREATE FUNCTION mdm_admin.backfill_policy_case_opened_at(case_key bigint, opened_at timestamptz, reason text) RETURNS TABLE (operation_id uuid, action_revision bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'backfill_policy_case_opened_at_wrapper';
 /* </end connected objects> */
@@ -881,7 +881,7 @@ CREATE FUNCTION mdm_internal.persist_set_policy_binding_state(request internal) 
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:500
+-- src/api/policy.rs:533
 -- pg_mdm::api::policy::policy_case_basis_digest
 CREATE FUNCTION mdm_internal.policy_case_basis_digest(basis jsonb) RETURNS bytea IMMUTABLE STRICT PARALLEL SAFE SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'policy_case_basis_digest_wrapper';
 /* </end connected objects> */
