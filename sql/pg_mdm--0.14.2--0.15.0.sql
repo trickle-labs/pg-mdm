@@ -26,6 +26,19 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_receipt_publicati
 REVOKE ALL ON TABLE mdm_steward.policy_receipt_publications_v1 FROM PUBLIC;
 
 DO $$
+DECLARE helper_owner name;
+BEGIN
+    SELECT pg_catalog.pg_get_userbyid(relowner) INTO STRICT helper_owner
+    FROM pg_catalog.pg_class
+    WHERE oid = 'mdm_steward.policy_receipts_v1'::pg_catalog.regclass;
+    EXECUTE pg_catalog.format(
+        'GRANT INSERT ON TABLE mdm_steward.policy_receipt_publications_v1 TO %I',
+        helper_owner
+    );
+END
+$$;
+
+DO $$
 DECLARE principal_role name;
 BEGIN
     FOR principal_role IN

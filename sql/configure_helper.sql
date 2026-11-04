@@ -105,6 +105,7 @@ ALTER TABLE mdm_internal.reviews OWNER TO :"helper_owner";
 ALTER TABLE mdm_steward.policy_cases_v1 OWNER TO :"helper_owner";
 ALTER TABLE mdm_steward.policy_bindings_v1 OWNER TO :"helper_owner";
 ALTER TABLE mdm_steward.policy_receipts_v1 OWNER TO :"helper_owner";
+ALTER TABLE mdm_steward.policy_receipt_publications_v1 OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.policy_binding_runtime OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.resolution_facts OWNER TO :"helper_owner";
 ALTER TABLE mdm_internal.golden_override_directives OWNER TO :"helper_owner";
