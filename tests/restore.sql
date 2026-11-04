@@ -466,37 +466,31 @@ RESET ROLE;
 
 \connect restored postgres
 DO $$
-DECLARE changed_rows jsonb; refresh_outcome jsonb;
 BEGIN
-    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-               'case_key', c.case_key,
-               'before', s.state,
-               'after', pg_catalog.to_jsonb(c) - 'last_observed_at')
-           ORDER BY c.case_key)
-    INTO changed_rows
-    FROM mdm_steward.policy_cases_v1 c
-    JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
-    WHERE pg_catalog.to_jsonb(c) - 'last_observed_at' IS DISTINCT FROM s.state;
-    IF changed_rows IS NOT NULL THEN
-        SELECT o.outcome INTO STRICT refresh_outcome
-        FROM mdm_internal.operations o
-        WHERE o.entity_name = 'policy_qualification'
-          AND o.operation_kind = 'refresh'
-          AND o.status = 'succeeded'
-        ORDER BY o.completed_at DESC, o.operation_id DESC
-        LIMIT 1;
-        RAISE EXCEPTION 'graph warm-up changed restored policy rows: %, refresh %, source rows %, active source records %',
-            changed_rows,
-            jsonb_build_object('active_records', refresh_outcome->'active_records',
-                               'open_reviews', refresh_outcome->'open_reviews',
-                               'resolver_strategy', refresh_outcome->'resolver_strategy',
-                               'node_results', refresh_outcome->'node_results'),
-            (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM public.policy_qualification_source p),
-            (SELECT jsonb_agg(r.source_record_id ORDER BY r.source_record_id)
-             FROM mdm_internal.source_records r
-             JOIN mdm_internal.source_identities s USING (source_identity_id)
-             JOIN mdm_internal.entities e ON e.entity_id = s.entity_id
-             WHERE e.entity_name = 'policy_qualification' AND r.active);
+    IF EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
+        WHERE (pg_catalog.to_jsonb(c) - ARRAY['last_observed_at', 'stewardship_epoch',
+                                               'evidence_basis_digest', 'action_revision'])
+              IS DISTINCT FROM
+              (s.state - ARRAY['last_observed_at', 'stewardship_epoch',
+                               'evidence_basis_digest', 'action_revision'])
+    ) OR EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
+        WHERE c.stewardship_epoch <> (SELECT decision_epoch FROM mdm_internal.entities
+                                      WHERE entity_name = 'policy_qualification')
+           OR c.action_revision <> (s.state->>'action_revision')::bigint
+                                  + CASE WHEN c.stewardship_epoch = (s.state->>'stewardship_epoch')::bigint
+                                         THEN 0 ELSE 1 END
+           OR (c.stewardship_epoch = (s.state->>'stewardship_epoch')::bigint
+               AND c.evidence_basis_digest IS DISTINCT FROM (s.state->>'evidence_basis_digest')::bytea)
+           OR (c.stewardship_epoch <> (s.state->>'stewardship_epoch')::bigint
+               AND c.evidence_basis_digest = (s.state->>'evidence_basis_digest')::bytea)
+    ) THEN
+        RAISE EXCEPTION 'graph warm-up did not preserve restored policy state and refresh freshness tokens';
     END IF;
 END
 $$;

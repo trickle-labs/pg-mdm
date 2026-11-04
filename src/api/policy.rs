@@ -283,7 +283,10 @@ pub(crate) fn project_policy_cases(
             vec!["ASSIGN_QUEUE".into(), "ESCALATE".into()]
         };
         let approved_metadata = json!({});
-        let evidence_basis_digest = if basis_changed {
+        let observed_epoch_changed = existing
+            .as_ref()
+            .is_some_and(|case| case.stewardship_epoch != decision_epoch);
+        let evidence_basis_digest = if basis_changed || observed_epoch_changed {
             basis_digest(&PolicyCaseBasis {
                 approved_metadata: approved_metadata.clone(),
                 artifact_digest: artifact_digest
