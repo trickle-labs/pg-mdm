@@ -67,8 +67,12 @@ BEGIN
            WHERE e.entity_name = 'customer' AND r.active) <> 9 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;
-    IF (SELECT count(*) FROM mdm_internal.steward_decisions WHERE is_current) <> 3
-       OR (SELECT count(*) FROM mdm_internal.steward_decisions WHERE NOT is_current) <> 1
+    IF (SELECT count(*) FROM mdm_internal.steward_decisions
+        WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
+          AND is_current) <> 3
+       OR (SELECT count(*) FROM mdm_internal.steward_decisions
+           WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
+             AND NOT is_current) <> 1
        OR NOT EXISTS (
             SELECT 1
             FROM mdm_internal.steward_decisions newer
@@ -78,6 +82,7 @@ BEGIN
              AND older.left_source_record_id = newer.left_source_record_id
              AND older.right_source_record_id = newer.right_source_record_id
             WHERE newer.decision_version = 2
+              AND newer.entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
               AND newer.decision = 'NOT_MATCH'
               AND newer.is_current
               AND older.decision_version = 1
@@ -86,10 +91,11 @@ BEGIN
        )
        OR EXISTS (
             SELECT 1 FROM mdm_internal.steward_decisions
-            WHERE created_by_name <> 'mdm_test_login'
+            WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
+              AND (created_by_name <> 'mdm_test_login'
                OR created_as_role_name <> 'mdm_administrator'
                OR operation_id IS NULL
-               OR decision_epoch NOT BETWEEN 1 AND 5
+               OR decision_epoch NOT BETWEEN 1 AND 5)
        ) THEN
         RAISE EXCEPTION 'current and superseded steward decisions lost their durable meaning';
     END IF;
