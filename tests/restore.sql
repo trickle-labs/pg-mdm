@@ -635,6 +635,11 @@ SELECT e.entity_id,
        COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.receipt_id)
                  FROM mdm_steward.policy_receipts_v1 r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
                  WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS receipts,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.receipt_id)
+                 FROM mdm_steward.policy_receipt_publications_v1 p
+                 JOIN mdm_steward.policy_receipts_v1 r USING (receipt_id)
+                 JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS receipt_publications,
        COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id)
                  FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
                  WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS runtime,
@@ -678,6 +683,12 @@ BEGIN
            FROM mdm_steward.policy_receipts_v1 r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
            JOIN e2e_restore_drop_snapshot s USING (entity_id))
           IS DISTINCT FROM (SELECT receipts FROM e2e_restore_drop_snapshot)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.receipt_id), '[]'::jsonb)
+           FROM mdm_steward.policy_receipt_publications_v1 p
+           JOIN mdm_steward.policy_receipts_v1 r USING (receipt_id)
+           JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+           JOIN e2e_restore_drop_snapshot s USING (entity_id))
+          IS DISTINCT FROM (SELECT receipt_publications FROM e2e_restore_drop_snapshot)
        OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id), '[]'::jsonb)
            FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
            JOIN e2e_restore_drop_snapshot s USING (entity_id))
@@ -706,6 +717,10 @@ BEGIN
                   WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
                                          FROM e2e_restore_drop_snapshot s
                                          CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b))
+       OR EXISTS (SELECT FROM mdm_steward.policy_receipt_publications_v1 p
+                  WHERE p.receipt_id IN (SELECT (r->>'receipt_id')::uuid
+                                         FROM e2e_restore_drop_snapshot s
+                                         CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.receipts) r))
        OR EXISTS (SELECT FROM mdm_internal.policy_binding_runtime r
                   WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
                                          FROM e2e_restore_drop_snapshot s
@@ -713,7 +728,7 @@ BEGIN
        OR EXISTS (SELECT FROM e2e_restore_drop_snapshot s
                   CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.members) m
                   JOIN pg_catalog.pg_class c ON c.oid = (m->>'relation_oid')::pg_catalog.oid) THEN
-        RAISE EXCEPTION 'successful policy entity drop left entity, cases, binding, receipt, or runtime rows';
+        RAISE EXCEPTION 'successful policy entity drop left entity, cases, binding, receipt, receipt publication, or runtime rows';
     END IF;
 END
 $$;
