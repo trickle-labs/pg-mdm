@@ -283,6 +283,14 @@ pub(crate) fn project_policy_cases(
             vec!["ASSIGN_QUEUE".into(), "ESCALATE".into()]
         };
         let approved_metadata = json!({});
+        let basis_definition_version = if basis_changed {
+            definition_version
+        } else {
+            existing
+                .as_ref()
+                .map(|case| case.definition_version)
+                .ok_or_else(|| MdmError::PolicyProjection("missing definition version".into()))?
+        };
         let observed_epoch_changed = existing
             .as_ref()
             .is_some_and(|case| case.stewardship_epoch != decision_epoch);
@@ -294,7 +302,7 @@ pub(crate) fn project_policy_cases(
                     .map(|byte| format!("{byte:02x}"))
                     .collect(),
                 canonical_encoding_version: 1,
-                definition_version: u64::try_from(definition_version).map_err(|_| {
+                definition_version: u64::try_from(basis_definition_version).map_err(|_| {
                     MdmError::PolicyProjection("definition version is invalid".into())
                 })?,
                 entity_name: entity_name.into(),
@@ -333,14 +341,6 @@ pub(crate) fn project_policy_cases(
                 .as_ref()
                 .map(|case| case.review_version)
                 .ok_or_else(|| MdmError::PolicyProjection("missing review version".into()))?
-        };
-        let basis_definition_version = if basis_changed {
-            definition_version
-        } else {
-            existing
-                .as_ref()
-                .map(|case| case.definition_version)
-                .ok_or_else(|| MdmError::PolicyProjection("missing definition version".into()))?
         };
         let basis_publication_revision = if basis_changed {
             publication_revision
