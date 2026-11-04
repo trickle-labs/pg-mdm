@@ -1,0 +1,35 @@
+{
+  "contract": "MDM-STEWARDSHIP/1",
+  "revision": 4,
+  "status": "proposed",
+  "supersedes_revision": 3,
+  "approvals": {
+    "pg_mdm_owner": {
+      "status": "pending",
+      "role": "pg-mdm M0 contract owner"
+    },
+    "pg_react_owner": {
+      "status": "pending",
+      "role": "pg-react R0 adapter owner"
+    }
+  },
+  "source_requirement": "pg-mdm v0.15 M4 and pg-react v0.50 R5 accepted-but-unpublished operational query",
+  "sql": {
+    "relation": "mdm_steward.policy_cases_v1",
+    "append_column": {
+      "name": "pending_since",
+      "type": "timestamptz",
+      "nullable": true,
+      "position": "after last_observed_at",
+      "meaning": "MDM statement timestamp when an open case first becomes pending stewardship after an authenticated human decision."
+    }
+  },
+  "lifecycle": {
+    "set": "Set pending_since and pending_stewardship=true in the same transaction when a human decision first marks an open case pending.",
+    "preserve": "Keep the original pending_since across further decisions and failed publication attempts while pending_stewardship remains true.",
+    "clear": "Clear pending_since in the successful publication transaction that clears pending_stewardship.",
+    "legacy_rows": "Existing pending rows receive NULL because their transition time cannot be reconstructed; consumers report age as unknown.",
+    "invariant": "pending_stewardship=false implies pending_since IS NULL; true with NULL is permitted only to represent an unknown legacy start time."
+  },
+  "compatibility": "Revision 4 appends one nullable column and leaves revision 3 meanings and intent behavior unchanged. Consumers using explicit column lists remain compatible; SELECT * consumers see the new trailing column."
+}

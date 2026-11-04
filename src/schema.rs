@@ -438,7 +438,10 @@ CREATE TABLE mdm_steward.policy_cases_v1 (
     action_revision bigint NOT NULL CHECK (action_revision > 0),
     pending_stewardship boolean NOT NULL,
     last_observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    pending_since timestamptz,
     UNIQUE (entity_name, issue_key, occurrence),
+    CONSTRAINT policy_cases_v1_pending_since_check
+        CHECK (pending_stewardship OR pending_since IS NULL),
     CHECK (
         permitted_actions = '{}'::text[]
         OR permitted_actions = ARRAY['ASSIGN_QUEUE']::text[]
