@@ -465,6 +465,17 @@ pub(crate) fn project_policy_cases(
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
         }
     }
+    let pending_since_update = if publication_tracking {
+        "pending_since = NULL, "
+    } else {
+        ""
+    };
+    let query = format!(
+        "UPDATE mdm_steward.policy_cases_v1 SET pending_stewardship = false, {pending_since_update}action_revision = action_revision + 1, last_observed_at = pg_catalog.statement_timestamp() WHERE entity_name = $1::pg_catalog.name AND pending_stewardship"
+    );
+    client
+        .update(&query, None, &[entity_name.into()])
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
     if publication_tracking {
         record_policy_receipt_publications(client, entity_name)?;
     }
