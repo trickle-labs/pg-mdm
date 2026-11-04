@@ -495,6 +495,11 @@ BEGIN
 END
 $$;
 DROP TABLE public.e2e_restore_warmup_snapshot;
+SELECT pg_catalog.md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
+                               FROM mdm_steward.policy_cases_v1 c
+                               WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
+       AS original_policy_digest
+\gset
 CREATE TEMP TABLE e2e_restore_vars AS
 SELECT :original_operations::bigint AS original_operations,
        :original_policy_max::bigint AS original_policy_max,
