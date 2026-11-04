@@ -157,8 +157,19 @@ fn pending_publication_age_contract_is_explicitly_proposed() {
             "PUBLISHED or SUPERSEDED_BEFORE_PUBLICATION"
         ])
     );
-    assert_eq!(proposal["approvals"]["pg_mdm_owner"]["status"], "pending");
-    assert_eq!(proposal["approvals"]["pg_react_owner"]["status"], "pending");
+    assert_eq!(proposal["approvals"]["pg_mdm_owner"]["status"], "approved");
+    assert_eq!(
+        proposal["approvals"]["pg_mdm_owner"]["approved_on"],
+        "2026-11-04"
+    );
+    assert_eq!(
+        proposal["approvals"]["pg_react_owner"]["status"],
+        "approved"
+    );
+    assert_eq!(
+        proposal["approvals"]["pg_react_owner"]["approved_on"],
+        "2026-11-04"
+    );
     assert_eq!(
         proposal["lifecycle"]["legacy_rows"],
         "Existing pending rows receive NULL because their transition time cannot be reconstructed; consumers report age as unknown."

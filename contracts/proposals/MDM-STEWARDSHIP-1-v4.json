@@ -5,12 +5,14 @@
   "supersedes_revision": 3,
   "approvals": {
     "pg_mdm_owner": {
-      "status": "pending",
-      "role": "pg-mdm M0 contract owner"
+      "status": "approved",
+      "role": "pg-mdm M0 contract owner",
+      "approved_on": "2026-11-04"
     },
     "pg_react_owner": {
-      "status": "pending",
-      "role": "pg-react R0 adapter owner"
+      "status": "approved",
+      "role": "pg-react R0 adapter owner",
+      "approved_on": "2026-11-04"
     }
   },
   "source_requirement": "pg-mdm v0.15 M4 and pg-react v0.50 R5 accepted-but-unpublished state, publication correlation, and age",
