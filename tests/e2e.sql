@@ -326,8 +326,15 @@ BEGIN
       FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = snapshot.case_key;
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.15.0')
        OR actual_state IS DISTINCT FROM expected_state
-       OR pending_since IS NOT NULL THEN
-        RAISE EXCEPTION '0.14.2 to 0.15.0 upgrade changed policy data or fabricated a pending start: expected %, actual %, pending_since %',
+       OR pending_since IS NOT NULL
+       OR pg_catalog.to_regclass('mdm_steward.policy_receipt_publications_v1') IS NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_attribute
+           WHERE attrelid = 'mdm_steward.policy_receipts_v1'::pg_catalog.regclass
+             AND attname = 'publication_tracking_started_at'
+             AND attnotnull AND NOT attisdropped
+       ) THEN
+        RAISE EXCEPTION '0.14.2 to 0.15.0 upgrade changed policy data or failed publication tracking: expected %, actual %, pending_since %',
             expected_state, actual_state, pending_since;
     END IF;
 END

@@ -141,10 +141,30 @@ fn pending_publication_age_contract_is_explicitly_proposed() {
     assert_eq!(proposal["sql"]["relation"], "mdm_steward.policy_cases_v1");
     assert_eq!(proposal["sql"]["append_column"]["name"], "pending_since");
     assert_eq!(proposal["sql"]["append_column"]["type"], "timestamptz");
+    assert_eq!(
+        proposal["sql"]["append_receipt_column"]["name"],
+        "publication_tracking_started_at"
+    );
+    assert_eq!(
+        proposal["sql"]["new_relation"]["relation"],
+        "mdm_steward.policy_receipt_publications_v1"
+    );
+    assert_eq!(
+        proposal["sql"]["new_relation"]["columns"][4],
+        serde_json::json!([
+            "publication_state",
+            "text",
+            "PUBLISHED or SUPERSEDED_BEFORE_PUBLICATION"
+        ])
+    );
     assert_eq!(proposal["approvals"]["pg_mdm_owner"]["status"], "pending");
     assert_eq!(proposal["approvals"]["pg_react_owner"]["status"], "pending");
     assert_eq!(
         proposal["lifecycle"]["legacy_rows"],
         "Existing pending rows receive NULL because their transition time cannot be reconstructed; consumers report age as unknown."
     );
+    assert!(proposal["lifecycle"]["accepted_controls"]
+        .as_str()
+        .expect("accepted-control lifecycle is present")
+        .contains("Legacy receipts predating publication tracking remain UNKNOWN_LEGACY with unknown age."));
 }

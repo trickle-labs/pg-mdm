@@ -2,7 +2,7 @@
 
 ## 0.15.0
 
-- Add the proposed MDM-owned pending-publication age to the stewardship projection; existing pending rows remain unknown after upgrade.
+- Add proposed MDM-owned pending-publication age and receipt-to-publication correlation; legacy publication history remains unknown after upgrade.
 - Add the 0.14.2 to 0.15.0 upgrade path.
 
 ## 0.14.1

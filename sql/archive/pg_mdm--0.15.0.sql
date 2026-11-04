@@ -484,7 +484,21 @@ CREATE TABLE mdm_steward.policy_receipts_v1 (
     control jsonb,
     resulting_publication_revision bigint,
     created_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    publication_tracking_started_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
     UNIQUE (binding_id, request_key)
+);
+
+CREATE INDEX policy_receipts_publication_pending_idx
+    ON mdm_steward.policy_receipts_v1 (case_key, action_revision)
+    WHERE outcome = 'APPLIED_CONTROL';
+
+CREATE TABLE mdm_steward.policy_receipt_publications_v1 (
+    receipt_id uuid PRIMARY KEY REFERENCES mdm_steward.policy_receipts_v1(receipt_id),
+    case_key bigint NOT NULL CHECK (case_key > 0),
+    action_revision bigint NOT NULL CHECK (action_revision > 0),
+    publication_revision bigint NOT NULL CHECK (publication_revision >= 0),
+    publication_state text NOT NULL CHECK (publication_state IN ('PUBLISHED', 'SUPERSEDED_BEFORE_PUBLICATION')),
+    observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp()
 );
 
 CREATE TABLE mdm_internal.resolution_facts (
@@ -645,6 +659,7 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.reviews'::pg_catalog.re
 SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_cases_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_bindings_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_receipts_v1'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_receipt_publications_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.resolution_facts'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.golden_override_directives'::pg_catalog.regclass, '');
 
@@ -654,6 +669,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA mdm_internal FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_cases_v1 FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_bindings_v1 FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_receipts_v1 FROM PUBLIC;
+REVOKE ALL ON TABLE mdm_steward.policy_receipt_publications_v1 FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_internal.policy_binding_runtime FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.validate_golden_override_chain() FROM PUBLIC;
 REVOKE CREATE ON SCHEMA mdm, mdm_out, mdm_steward, mdm_admin, mdm_graph FROM PUBLIC;
@@ -745,13 +761,13 @@ CREATE FUNCTION mdm_internal.normalized_levenshtein_score(left_value text, right
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:531
+-- src/api/policy.rs:546
 -- pg_mdm::api::policy::persist_backfill_policy_case_opened_at
 CREATE FUNCTION mdm_internal.persist_backfill_policy_case_opened_at(request internal) RETURNS jsonb SECURITY DEFINER SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'persist_backfill_policy_case_opened_at_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:496
+-- src/api/policy.rs:511
 -- pg_mdm::api::policy::backfill_policy_case_opened_at
 CREATE FUNCTION mdm_admin.backfill_policy_case_opened_at(case_key bigint, opened_at timestamptz, reason text) RETURNS TABLE (operation_id uuid, action_revision bigint) LANGUAGE c AS 'MODULE_PATHNAME', 'backfill_policy_case_opened_at_wrapper';
 /* </end connected objects> */
@@ -865,7 +881,7 @@ CREATE FUNCTION mdm_internal.persist_set_policy_binding_state(request internal) 
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/api/policy.rs:485
+-- src/api/policy.rs:500
 -- pg_mdm::api::policy::policy_case_basis_digest
 CREATE FUNCTION mdm_internal.policy_case_basis_digest(basis jsonb) RETURNS bytea IMMUTABLE STRICT PARALLEL SAFE SET search_path TO pg_catalog, mdm_internal, pg_temp LANGUAGE c AS 'MODULE_PATHNAME', 'policy_case_basis_digest_wrapper';
 /* </end connected objects> */
@@ -967,7 +983,7 @@ CREATE FUNCTION mdm_admin.verify_installation() RETURNS text STRICT SECURITY DEF
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/schema.rs:697
+-- src/schema.rs:713
 -- requires:
 --   verify_installation
 --   normalize_text

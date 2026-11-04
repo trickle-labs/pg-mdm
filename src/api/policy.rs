@@ -445,7 +445,22 @@ pub(crate) fn project_policy_cases(
                 )
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
         }
+        record_policy_receipt_publications(client, review.review_id)?;
     }
+    Ok(())
+}
+
+fn record_policy_receipt_publications(
+    client: &mut SpiClient<'_>,
+    review_id: Uuid,
+) -> Result<(), MdmError> {
+    client
+        .update(
+            "INSERT INTO mdm_steward.policy_receipt_publications_v1 (receipt_id, case_key, action_revision, publication_revision, publication_state) SELECT receipt.receipt_id, receipt.case_key, receipt.action_revision, case_row.publication_revision, CASE WHEN (receipt.action = 'ASSIGN_QUEUE' AND receipt.control->>'assigned_queue' IS NOT DISTINCT FROM case_row.assigned_queue::text) OR (receipt.action = 'SET_DUE_AT' AND (receipt.control->>'due_at')::pg_catalog.timestamptz IS NOT DISTINCT FROM case_row.due_at) OR (receipt.action = 'ESCALATE' AND (receipt.control->>'escalation_level')::integer = case_row.escalation_level) THEN 'PUBLISHED' ELSE 'SUPERSEDED_BEFORE_PUBLICATION' END FROM mdm_steward.policy_receipts_v1 AS receipt JOIN mdm_steward.policy_cases_v1 AS case_row USING (case_key) WHERE case_row.review_id = $1::pg_catalog.uuid AND receipt.outcome = 'APPLIED_CONTROL' AND receipt.publication_tracking_started_at <= receipt.created_at AND receipt.action_revision <= case_row.action_revision ON CONFLICT (receipt_id) DO NOTHING",
+            None,
+            &[review_id.into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
     Ok(())
 }
 

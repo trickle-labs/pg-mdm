@@ -13,7 +13,7 @@
       "role": "pg-react R0 adapter owner"
     }
   },
-  "source_requirement": "pg-mdm v0.15 M4 and pg-react v0.50 R5 accepted-but-unpublished operational query",
+  "source_requirement": "pg-mdm v0.15 M4 and pg-react v0.50 R5 accepted-but-unpublished state, publication correlation, and age",
   "sql": {
     "relation": "mdm_steward.policy_cases_v1",
     "append_column": {
@@ -22,6 +22,25 @@
       "nullable": true,
       "position": "after last_observed_at",
       "meaning": "MDM statement timestamp when an open case first becomes pending stewardship after an authenticated human decision."
+    },
+    "append_receipt_column": {
+      "relation": "mdm_steward.policy_receipts_v1",
+      "name": "publication_tracking_started_at",
+      "type": "timestamptz",
+      "nullable": false,
+      "meaning": "Receipt creation time for new rows; migration time for legacy rows, distinguishing known pending controls from unobservable legacy history."
+    },
+    "new_relation": {
+      "relation": "mdm_steward.policy_receipt_publications_v1",
+      "columns": [
+        ["receipt_id", "uuid", "primary key, references policy_receipts_v1"],
+        ["case_key", "bigint", "not null"],
+        ["action_revision", "bigint", "not null, receipt revision"],
+        ["publication_revision", "bigint", "not null, successful projection revision that first observed the receipt"],
+        ["publication_state", "text", "PUBLISHED or SUPERSEDED_BEFORE_PUBLICATION"],
+        ["observed_at", "timestamptz", "not null, successful projection timestamp"]
+      ],
+      "reader_access": "Bound automation roles receive SELECT; no PUBLIC grants. MDM inserts one immutable mapping per tracked APPLIED_CONTROL receipt."
     }
   },
   "lifecycle": {
@@ -29,7 +48,8 @@
     "preserve": "Keep the original pending_since across further decisions and failed publication attempts while pending_stewardship remains true.",
     "clear": "Clear pending_since in the successful publication transaction that clears pending_stewardship.",
     "legacy_rows": "Existing pending rows receive NULL because their transition time cannot be reconstructed; consumers report age as unknown.",
+    "accepted_controls": "New APPLIED_CONTROL receipts remain pending with age from created_at until the first successful policy-case projection after acceptance. In that same transaction MDM inserts one immutable receipt publication row: PUBLISHED if the receipt's typed control value is present, otherwise SUPERSEDED_BEFORE_PUBLICATION. A failed refresh rolls back the mapping. Legacy receipts predating publication tracking remain UNKNOWN_LEGACY with unknown age.",
     "invariant": "pending_stewardship=false implies pending_since IS NULL; true with NULL is permitted only to represent an unknown legacy start time."
   },
-  "compatibility": "Revision 4 appends one nullable column and leaves revision 3 meanings and intent behavior unchanged. Consumers using explicit column lists remain compatible; SELECT * consumers see the new trailing column."
+  "compatibility": "Revision 4 appends one nullable case column, one non-null receipt column, and one read-only publication relation. Revision 3 receipt rows remain immutable and every intent still returns resulting_publication_revision NULL; consumers using explicit column lists remain compatible."
 }

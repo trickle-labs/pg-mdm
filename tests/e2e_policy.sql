@@ -1949,7 +1949,35 @@ CREATE TABLE public.e2e_pending_publication_state (
 );
 INSERT INTO public.e2e_pending_publication_state
 VALUES (:'pending_case_case_key', :'pending_pair_left_id', :'pending_pair_right_id', :'pending_case_state'::jsonb);
+CREATE TABLE public.e2e_pending_receipt_state AS
+SELECT receipt.receipt_id, receipt.case_key, receipt.action_revision,
+       receipt.action, receipt.control, receipt.created_at,
+       receipt.publication_tracking_started_at
+FROM mdm_steward.policy_receipts_v1 receipt
+JOIN mdm_steward.policy_cases_v1 case_row USING (case_key)
+WHERE receipt.outcome = 'APPLIED_CONTROL'
+  AND receipt.publication_tracking_started_at = receipt.created_at
+  AND NOT EXISTS (
+      SELECT 1 FROM mdm_steward.policy_receipt_publications_v1 publication
+      WHERE publication.receipt_id = receipt.receipt_id
+  )
+  AND ((receipt.action = 'ASSIGN_QUEUE'
+        AND receipt.control->>'assigned_queue' IS NOT DISTINCT FROM case_row.assigned_queue::text)
+       OR (receipt.action = 'SET_DUE_AT'
+           AND (receipt.control->>'due_at')::timestamptz IS NOT DISTINCT FROM case_row.due_at)
+       OR (receipt.action = 'ESCALATE'
+           AND (receipt.control->>'escalation_level')::integer = case_row.escalation_level))
+ORDER BY receipt.created_at DESC
+LIMIT 1;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM public.e2e_pending_receipt_state) <> 1 THEN
+        RAISE EXCEPTION 'no tracked accepted control is available for publication correlation';
+    END IF;
+END
+$$;
 REVOKE ALL ON public.e2e_pending_publication_state FROM PUBLIC;
+REVOKE ALL ON public.e2e_pending_receipt_state FROM PUBLIC;
 GRANT SELECT, UPDATE ON public.e2e_pending_publication_state TO mdm_legacy_administrator;
 GRANT EXECUTE ON FUNCTION mdm_steward.decide(text, uuid, uuid, text, bigint, text)
 TO mdm_legacy_administrator;
@@ -2010,13 +2038,12 @@ RESET ROLE;
 CREATE FUNCTION public.fail_pending_policy_publication()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    RAISE EXCEPTION 'injected pending policy publication failure';
+    RAISE EXCEPTION 'injected receipt publication correlation failure';
 END
 $$;
 CREATE TRIGGER fail_pending_policy_publication
-BEFORE UPDATE ON mdm_steward.policy_cases_v1
+BEFORE INSERT ON mdm_steward.policy_receipt_publications_v1
 FOR EACH ROW
-WHEN (OLD.entity_name = 'policy_qualification' AND OLD.pending_stewardship)
 EXECUTE FUNCTION public.fail_pending_policy_publication();
 \connect foundation mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
@@ -2026,7 +2053,7 @@ BEGIN
         PERFORM mdm.refresh('policy_qualification', 'ALLOW');
         RAISE EXCEPTION 'refresh unexpectedly passed the injected pending policy failure';
     EXCEPTION WHEN OTHERS THEN
-        IF pg_catalog.strpos(SQLERRM, 'injected pending policy publication failure') = 0 THEN RAISE; END IF;
+        IF pg_catalog.strpos(SQLERRM, 'injected receipt publication correlation failure') = 0 THEN RAISE; END IF;
     END;
 END
 $$;
@@ -2040,13 +2067,17 @@ BEGIN
     SELECT pg_catalog.to_jsonb(c) INTO STRICT actual_state
     FROM mdm_steward.policy_cases_v1 c
     JOIN public.e2e_pending_publication_state s USING (case_key);
-    IF actual_state IS DISTINCT FROM expected_state THEN
-        RAISE EXCEPTION 'failed publication changed pending case state: expected %, actual %',
+    IF actual_state IS DISTINCT FROM expected_state
+       OR EXISTS (
+           SELECT 1 FROM mdm_steward.policy_receipt_publications_v1 publication
+           JOIN public.e2e_pending_receipt_state receipt USING (receipt_id)
+       ) THEN
+        RAISE EXCEPTION 'failed publication changed pending state or recorded a receipt publication: expected %, actual %',
             expected_state, actual_state;
     END IF;
 END
 $$;
-DROP TRIGGER fail_pending_policy_publication ON mdm_steward.policy_cases_v1;
+DROP TRIGGER fail_pending_policy_publication ON mdm_steward.policy_receipt_publications_v1;
 DROP FUNCTION public.fail_pending_policy_publication();
 \connect foundation mdm_legacy_login
 SET ROLE mdm_legacy_administrator;
@@ -2054,7 +2085,7 @@ SELECT mdm.refresh('policy_qualification', 'ALLOW');
 RESET ROLE;
 \connect foundation postgres
 DO $$
-DECLARE actual_state jsonb;
+DECLARE actual_state jsonb; actual_mapping jsonb; expected_mapping jsonb;
 BEGIN
     SELECT pg_catalog.to_jsonb(c) INTO STRICT actual_state
     FROM mdm_steward.policy_cases_v1 c
@@ -2063,7 +2094,43 @@ BEGIN
        OR actual_state->'pending_since' IS DISTINCT FROM 'null'::jsonb THEN
         RAISE EXCEPTION 'successful publication did not clear the exact pending age: %', actual_state;
     END IF;
+    SELECT pg_catalog.jsonb_build_object(
+        'receipt_id', receipt.receipt_id,
+        'case_key', receipt.case_key,
+        'action_revision', receipt.action_revision,
+        'publication_revision', c.publication_revision,
+        'publication_state', 'PUBLISHED',
+        'observed_at', c.last_observed_at
+    ) INTO STRICT expected_mapping
+    FROM public.e2e_pending_receipt_state receipt
+    JOIN mdm_steward.policy_cases_v1 c USING (case_key);
+    SELECT pg_catalog.to_jsonb(publication) INTO STRICT actual_mapping
+    FROM mdm_steward.policy_receipt_publications_v1 publication
+    JOIN public.e2e_pending_receipt_state receipt USING (receipt_id);
+    IF actual_mapping IS DISTINCT FROM expected_mapping THEN
+        RAISE EXCEPTION 'successful publication did not record the exact accepted-control correlation: expected %, actual %',
+            expected_mapping, actual_mapping;
+    END IF;
 END
 $$;
+
+\connect foundation mdm_legacy_login
+SET ROLE mdm_policy_worker;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_receipt_publications_v1 publication
+        JOIN mdm_steward.policy_receipts_v1 receipt USING (receipt_id)
+        WHERE receipt.outcome = 'APPLIED_CONTROL'
+          AND publication.publication_state = 'PUBLISHED'
+    ) THEN
+        RAISE EXCEPTION 'bound automation role cannot read the accepted-control publication relation';
+    END IF;
+END
+$$;
+RESET ROLE;
+\connect foundation postgres
 DROP TABLE public.e2e_pending_publication_state;
-\echo PASS: pending publication age is set by a human decision, survives failed publication, and clears after successful publication
+DROP TABLE public.e2e_pending_receipt_state;
+\echo PASS: pending publication age and accepted-control correlation survive failure and resolve after successful publication

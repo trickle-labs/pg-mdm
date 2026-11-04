@@ -131,4 +131,10 @@ fn test_upgrade_scripts_exist() {
     let sql_14_2_15_0 = fs::read_to_string(&upgrade_14_2_15_0).expect("read 0.14.2 to 0.15.0");
     assert!(sql_14_2_15_0.contains("ADD COLUMN pending_since timestamptz"));
     assert!(sql_14_2_15_0.contains("pending_stewardship OR pending_since IS NULL"));
+    assert!(sql_14_2_15_0.contains("ADD COLUMN publication_tracking_started_at timestamptz"));
+    assert!(sql_14_2_15_0.contains("CREATE TABLE mdm_steward.policy_receipt_publications_v1"));
+    assert!(
+        sql_14_2_15_0
+            .contains("pg_extension_config_dump('mdm_steward.policy_receipt_publications_v1'")
+    );
 }
