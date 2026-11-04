@@ -67,8 +67,12 @@ BEGIN
            WHERE e.entity_name = 'customer' AND r.active) <> 9 THEN
         RAISE EXCEPTION 'durable catalog data did not survive restore: %', actual;
     END IF;
-    IF (SELECT count(*) FROM mdm_internal.steward_decisions WHERE is_current) <> 3
-       OR (SELECT count(*) FROM mdm_internal.steward_decisions WHERE NOT is_current) <> 1
+    IF (SELECT count(*) FROM mdm_internal.steward_decisions
+        WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
+          AND is_current) <> 3
+       OR (SELECT count(*) FROM mdm_internal.steward_decisions
+           WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
+             AND NOT is_current) <> 1
        OR NOT EXISTS (
             SELECT 1
             FROM mdm_internal.steward_decisions newer
@@ -78,6 +82,7 @@ BEGIN
              AND older.left_source_record_id = newer.left_source_record_id
              AND older.right_source_record_id = newer.right_source_record_id
             WHERE newer.decision_version = 2
+              AND newer.entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
               AND newer.decision = 'NOT_MATCH'
               AND newer.is_current
               AND older.decision_version = 1
@@ -86,10 +91,11 @@ BEGIN
        )
        OR EXISTS (
             SELECT 1 FROM mdm_internal.steward_decisions
-            WHERE created_by_name <> 'mdm_test_login'
+            WHERE entity_id = (SELECT entity_id FROM mdm_internal.entities WHERE entity_name = 'customer')
+              AND (created_by_name <> 'mdm_test_login'
                OR created_as_role_name <> 'mdm_administrator'
                OR operation_id IS NULL
-               OR decision_epoch NOT BETWEEN 1 AND 5
+               OR decision_epoch NOT BETWEEN 1 AND 5)
        ) THEN
         RAISE EXCEPTION 'current and superseded steward decisions lost their durable meaning';
     END IF;
@@ -460,41 +466,40 @@ RESET ROLE;
 
 \connect restored postgres
 DO $$
-DECLARE changed_rows jsonb; refresh_outcome jsonb;
 BEGIN
-    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-               'case_key', c.case_key,
-               'before', s.state,
-               'after', pg_catalog.to_jsonb(c) - 'last_observed_at')
-           ORDER BY c.case_key)
-    INTO changed_rows
-    FROM mdm_steward.policy_cases_v1 c
-    JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
-    WHERE pg_catalog.to_jsonb(c) - 'last_observed_at' IS DISTINCT FROM s.state;
-    IF changed_rows IS NOT NULL THEN
-        SELECT o.outcome INTO STRICT refresh_outcome
-        FROM mdm_internal.operations o
-        WHERE o.entity_name = 'policy_qualification'
-          AND o.operation_kind = 'refresh'
-          AND o.status = 'succeeded'
-        ORDER BY o.completed_at DESC, o.operation_id DESC
-        LIMIT 1;
-        RAISE EXCEPTION 'graph warm-up changed restored policy rows: %, refresh %, source rows %, active source records %',
-            changed_rows,
-            jsonb_build_object('active_records', refresh_outcome->'active_records',
-                               'open_reviews', refresh_outcome->'open_reviews',
-                               'resolver_strategy', refresh_outcome->'resolver_strategy',
-                               'node_results', refresh_outcome->'node_results'),
-            (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM public.policy_qualification_source p),
-            (SELECT jsonb_agg(r.source_record_id ORDER BY r.source_record_id)
-             FROM mdm_internal.source_records r
-             JOIN mdm_internal.source_identities s USING (source_identity_id)
-             JOIN mdm_internal.entities e ON e.entity_id = s.entity_id
-             WHERE e.entity_name = 'policy_qualification' AND r.active);
+    IF EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
+        WHERE (pg_catalog.to_jsonb(c) - ARRAY['last_observed_at', 'stewardship_epoch',
+                                               'evidence_basis_digest', 'action_revision'])
+              IS DISTINCT FROM
+              (s.state - ARRAY['last_observed_at', 'stewardship_epoch',
+                               'evidence_basis_digest', 'action_revision'])
+    ) OR EXISTS (
+        SELECT 1
+        FROM mdm_steward.policy_cases_v1 c
+        JOIN public.e2e_restore_warmup_snapshot s USING (case_key)
+        WHERE c.stewardship_epoch <> (SELECT decision_epoch FROM mdm_internal.entities
+                                      WHERE entity_name = 'policy_qualification')
+           OR c.action_revision <> (s.state->>'action_revision')::bigint
+                                  + CASE WHEN c.stewardship_epoch = (s.state->>'stewardship_epoch')::bigint
+                                         THEN 0 ELSE 1 END
+           OR (c.stewardship_epoch = (s.state->>'stewardship_epoch')::bigint
+               AND c.evidence_basis_digest IS DISTINCT FROM (s.state->>'evidence_basis_digest')::bytea)
+           OR (c.stewardship_epoch <> (s.state->>'stewardship_epoch')::bigint
+               AND c.evidence_basis_digest = (s.state->>'evidence_basis_digest')::bytea)
+    ) THEN
+        RAISE EXCEPTION 'graph warm-up did not preserve restored policy state and refresh freshness tokens';
     END IF;
 END
 $$;
 DROP TABLE public.e2e_restore_warmup_snapshot;
+SELECT pg_catalog.md5(COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) - 'last_observed_at' ORDER BY c.case_key)
+                               FROM mdm_steward.policy_cases_v1 c
+                               WHERE c.entity_name = 'policy_qualification'), '[]'::jsonb)::text)
+       AS original_policy_digest
+\gset
 CREATE TEMP TABLE e2e_restore_vars AS
 SELECT :original_operations::bigint AS original_operations,
        :original_policy_max::bigint AS original_policy_max,
@@ -630,6 +635,11 @@ SELECT e.entity_id,
        COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.receipt_id)
                  FROM mdm_steward.policy_receipts_v1 r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
                  WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS receipts,
+       COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.receipt_id)
+                 FROM mdm_steward.policy_receipt_publications_v1 p
+                 JOIN mdm_steward.policy_receipts_v1 r USING (receipt_id)
+                 JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+                 WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS receipt_publications,
        COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id)
                  FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
                  WHERE b.entity_id = e.entity_id), '[]'::jsonb) AS runtime,
@@ -673,6 +683,12 @@ BEGIN
            FROM mdm_steward.policy_receipts_v1 r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
            JOIN e2e_restore_drop_snapshot s USING (entity_id))
           IS DISTINCT FROM (SELECT receipts FROM e2e_restore_drop_snapshot)
+       OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p) ORDER BY p.receipt_id), '[]'::jsonb)
+           FROM mdm_steward.policy_receipt_publications_v1 p
+           JOIN mdm_steward.policy_receipts_v1 r USING (receipt_id)
+           JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
+           JOIN e2e_restore_drop_snapshot s USING (entity_id))
+          IS DISTINCT FROM (SELECT receipt_publications FROM e2e_restore_drop_snapshot)
        OR (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(r) ORDER BY r.binding_id), '[]'::jsonb)
            FROM mdm_internal.policy_binding_runtime r JOIN mdm_steward.policy_bindings_v1 b USING (binding_id)
            JOIN e2e_restore_drop_snapshot s USING (entity_id))
@@ -701,6 +717,10 @@ BEGIN
                   WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
                                          FROM e2e_restore_drop_snapshot s
                                          CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.bindings) b))
+       OR EXISTS (SELECT FROM mdm_steward.policy_receipt_publications_v1 p
+                  WHERE p.receipt_id IN (SELECT (r->>'receipt_id')::uuid
+                                         FROM e2e_restore_drop_snapshot s
+                                         CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.receipts) r))
        OR EXISTS (SELECT FROM mdm_internal.policy_binding_runtime r
                   WHERE r.binding_id IN (SELECT (b->>'binding_id')::uuid
                                          FROM e2e_restore_drop_snapshot s
@@ -708,7 +728,7 @@ BEGIN
        OR EXISTS (SELECT FROM e2e_restore_drop_snapshot s
                   CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(s.members) m
                   JOIN pg_catalog.pg_class c ON c.oid = (m->>'relation_oid')::pg_catalog.oid) THEN
-        RAISE EXCEPTION 'successful policy entity drop left entity, cases, binding, receipt, or runtime rows';
+        RAISE EXCEPTION 'successful policy entity drop left entity, cases, binding, receipt, receipt publication, or runtime rows';
     END IF;
 END
 $$;

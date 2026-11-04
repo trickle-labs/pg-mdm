@@ -106,6 +106,20 @@ fn policy_subjects(value: &Value) -> Vec<PolicySubject> {
     }]
 }
 
+fn publication_tracking_available(client: &mut SpiClient<'_>) -> Result<bool, MdmError> {
+    client
+        .select(
+            "SELECT pg_catalog.to_regclass('mdm_steward.policy_receipt_publications_v1') IS NOT NULL",
+            Some(1),
+            &[],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .first()
+        .get::<bool>(1)
+        .map_err(|error| MdmError::Spi(error.to_string()))?
+        .ok_or_else(|| MdmError::Spi("publication tracking availability is NULL".into()))
+}
+
 fn load_existing_case(
     client: &mut SpiClient<'_>,
     review_id: Uuid,
@@ -213,6 +227,7 @@ pub(crate) fn project_policy_cases(
     source_boundary_digest: &[u8],
     reviews: &[Review],
 ) -> Result<(), MdmError> {
+    let publication_tracking = publication_tracking_available(client)?;
     let semantic_versions = BTreeMap::from([
         ("candidate".into(), 1_u64),
         ("clustering".into(), 1_u64),
@@ -268,7 +283,18 @@ pub(crate) fn project_policy_cases(
             vec!["ASSIGN_QUEUE".into(), "ESCALATE".into()]
         };
         let approved_metadata = json!({});
-        let evidence_basis_digest = if basis_changed {
+        let basis_definition_version = if basis_changed {
+            definition_version
+        } else {
+            existing
+                .as_ref()
+                .map(|case| case.definition_version)
+                .ok_or_else(|| MdmError::PolicyProjection("missing definition version".into()))?
+        };
+        let observed_epoch_changed = existing
+            .as_ref()
+            .is_some_and(|case| case.stewardship_epoch != decision_epoch);
+        let evidence_basis_digest = if basis_changed || observed_epoch_changed {
             basis_digest(&PolicyCaseBasis {
                 approved_metadata: approved_metadata.clone(),
                 artifact_digest: artifact_digest
@@ -276,7 +302,7 @@ pub(crate) fn project_policy_cases(
                     .map(|byte| format!("{byte:02x}"))
                     .collect(),
                 canonical_encoding_version: 1,
-                definition_version: u64::try_from(definition_version).map_err(|_| {
+                definition_version: u64::try_from(basis_definition_version).map_err(|_| {
                     MdmError::PolicyProjection("definition version is invalid".into())
                 })?,
                 entity_name: entity_name.into(),
@@ -315,14 +341,6 @@ pub(crate) fn project_policy_cases(
                 .as_ref()
                 .map(|case| case.review_version)
                 .ok_or_else(|| MdmError::PolicyProjection("missing review version".into()))?
-        };
-        let basis_definition_version = if basis_changed {
-            definition_version
-        } else {
-            existing
-                .as_ref()
-                .map(|case| case.definition_version)
-                .ok_or_else(|| MdmError::PolicyProjection("missing definition version".into()))?
         };
         let basis_publication_revision = if basis_changed {
             publication_revision
@@ -429,12 +447,16 @@ pub(crate) fn project_policy_cases(
             false.into(),
         ];
         if existing.is_some() {
+            let pending_since_update = if publication_tracking {
+                ", pending_since = NULL"
+            } else {
+                ""
+            };
+            let query = format!(
+                "UPDATE mdm_steward.policy_cases_v1 SET entity_name = $3::pg_catalog.name, issue_key = $1, occurrence = $4, status = $5, severity = $6, reason_code = $7, approved_metadata = $8, permitted_actions = ARRAY(SELECT pg_catalog.jsonb_array_elements_text($9::pg_catalog.jsonb)), assigned_queue = $10::pg_catalog.name, due_at = $11::timestamptz, escalation_level = $12, manual_assignment_protected = $13, opened_at = $14::timestamptz, opened_at_source = $15, resolved_at = $16::timestamptz, review_version = $17, definition_version = $18, publication_revision = $19, stewardship_epoch = $20, evidence_basis_digest = $21, action_revision = $22, pending_stewardship = $23{pending_since_update}, last_observed_at = pg_catalog.statement_timestamp() WHERE review_id = $2::pg_catalog.uuid"
+            );
             client
-                .update(
-                    "UPDATE mdm_steward.policy_cases_v1 SET entity_name = $3::pg_catalog.name, issue_key = $1, occurrence = $4, status = $5, severity = $6, reason_code = $7, approved_metadata = $8, permitted_actions = ARRAY(SELECT pg_catalog.jsonb_array_elements_text($9::pg_catalog.jsonb)), assigned_queue = $10::pg_catalog.name, due_at = $11::timestamptz, escalation_level = $12, manual_assignment_protected = $13, opened_at = $14::timestamptz, opened_at_source = $15, resolved_at = $16::timestamptz, review_version = $17, definition_version = $18, publication_revision = $19, stewardship_epoch = $20, evidence_basis_digest = $21, action_revision = $22, pending_stewardship = $23, last_observed_at = pg_catalog.statement_timestamp() WHERE review_id = $2::pg_catalog.uuid",
-                    None,
-                    args,
-                )
+                .update(&query, None, args)
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
         } else {
             client
@@ -446,6 +468,34 @@ pub(crate) fn project_policy_cases(
                 .map_err(|error| MdmError::Spi(error.to_string()))?;
         }
     }
+    let pending_since_update = if publication_tracking {
+        "pending_since = NULL, "
+    } else {
+        ""
+    };
+    let query = format!(
+        "UPDATE mdm_steward.policy_cases_v1 SET pending_stewardship = false, {pending_since_update}action_revision = action_revision + 1, last_observed_at = pg_catalog.statement_timestamp() WHERE entity_name = $1::pg_catalog.name AND pending_stewardship"
+    );
+    client
+        .update(&query, None, &[entity_name.into()])
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
+    if publication_tracking {
+        record_policy_receipt_publications(client, entity_name)?;
+    }
+    Ok(())
+}
+
+fn record_policy_receipt_publications(
+    client: &mut SpiClient<'_>,
+    entity_name: &str,
+) -> Result<(), MdmError> {
+    client
+        .update(
+            "INSERT INTO mdm_steward.policy_receipt_publications_v1 (receipt_id, case_key, action_revision, publication_revision, publication_state, observed_at) SELECT receipt.receipt_id, receipt.case_key, receipt.action_revision, case_row.publication_revision, CASE WHEN (receipt.action = 'ASSIGN_QUEUE' AND receipt.control->>'assigned_queue' IS NOT DISTINCT FROM case_row.assigned_queue::text) OR (receipt.action = 'SET_DUE_AT' AND (receipt.control->>'due_at')::pg_catalog.timestamptz IS NOT DISTINCT FROM case_row.due_at) OR (receipt.action = 'ESCALATE' AND (receipt.control->>'escalation_level')::integer = case_row.escalation_level) THEN 'PUBLISHED' ELSE 'SUPERSEDED_BEFORE_PUBLICATION' END, case_row.last_observed_at FROM mdm_steward.policy_receipts_v1 AS receipt JOIN mdm_steward.policy_cases_v1 AS case_row USING (case_key) WHERE case_row.entity_name = $1::pg_catalog.name AND receipt.outcome = 'APPLIED_CONTROL' AND receipt.publication_tracking_started_at <= receipt.created_at AND receipt.action_revision <= case_row.action_revision ON CONFLICT (receipt_id) DO NOTHING",
+            None,
+            &[entity_name.into()],
+        )
+        .map_err(|error| MdmError::Spi(error.to_string()))?;
     Ok(())
 }
 
@@ -472,12 +522,13 @@ pub(crate) fn mark_pending_cases(
     client: &mut SpiClient<'_>,
     entity_name: &str,
 ) -> Result<(), MdmError> {
+    let query = if publication_tracking_available(client)? {
+        "UPDATE mdm_steward.policy_cases_v1 SET pending_stewardship = true, pending_since = pg_catalog.statement_timestamp(), action_revision = action_revision + 1 WHERE entity_name = $1::pg_catalog.name AND status = 'open' AND NOT pending_stewardship"
+    } else {
+        "UPDATE mdm_steward.policy_cases_v1 SET pending_stewardship = true, action_revision = action_revision + 1 WHERE entity_name = $1::pg_catalog.name AND status = 'open' AND NOT pending_stewardship"
+    };
     client
-        .update(
-            "UPDATE mdm_steward.policy_cases_v1 SET pending_stewardship = true, action_revision = action_revision + 1 WHERE entity_name = $1::pg_catalog.name AND status = 'open' AND NOT pending_stewardship",
-            None,
-            &[entity_name.into()],
-        )
+        .update(query, None, &[entity_name.into()])
         .map_err(|error| MdmError::Spi(error.to_string()))?;
     Ok(())
 }

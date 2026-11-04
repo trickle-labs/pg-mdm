@@ -234,6 +234,7 @@ pub(crate) fn persist_drop_entity(request: Internal) -> JsonB {
                 "DELETE FROM mdm_internal.identity_aliases WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.identity_splits WHERE entity_id = $1::pg_catalog.uuid",
                 "DELETE FROM mdm_internal.identity_registry WHERE entity_id = $1::pg_catalog.uuid",
+                "DELETE FROM mdm_steward.policy_receipt_publications_v1 WHERE receipt_id IN (SELECT receipt_id FROM mdm_steward.policy_receipts_v1 WHERE binding_id IN (SELECT binding_id FROM mdm_steward.policy_bindings_v1 WHERE entity_id = $1::pg_catalog.uuid))",
                 "DELETE FROM mdm_steward.policy_receipts_v1 WHERE binding_id IN (SELECT binding_id FROM mdm_steward.policy_bindings_v1 WHERE entity_id = $1::pg_catalog.uuid)",
                 "DELETE FROM mdm_internal.policy_binding_runtime WHERE binding_id IN (SELECT binding_id FROM mdm_steward.policy_bindings_v1 WHERE entity_id = $1::pg_catalog.uuid)",
                 "DELETE FROM mdm_steward.policy_bindings_v1 WHERE entity_id = $1::pg_catalog.uuid",

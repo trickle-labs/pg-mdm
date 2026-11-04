@@ -302,6 +302,51 @@ BEGIN
 END
 $$;
 
+CREATE TEMP TABLE e2e_upgrade_pending_snapshot AS
+SELECT case_key, pg_catalog.to_jsonb(c) AS old_state
+FROM mdm_steward.policy_cases_v1 c
+WHERE entity_name = 'policy_qualification' AND status = 'open'
+ORDER BY case_key
+LIMIT 1;
+UPDATE mdm_steward.policy_cases_v1 c
+SET pending_stewardship = true, action_revision = action_revision + 1
+FROM e2e_upgrade_pending_snapshot s
+WHERE c.case_key = s.case_key;
+ALTER EXTENSION pg_mdm UPDATE TO '0.15.0';
+DO $$
+DECLARE snapshot record; expected_state jsonb; actual_state jsonb; pending_since timestamptz;
+BEGIN
+    SELECT * INTO STRICT snapshot FROM e2e_upgrade_pending_snapshot;
+    expected_state := pg_catalog.jsonb_set(snapshot.old_state, '{pending_stewardship}', 'true'::jsonb);
+    expected_state := pg_catalog.jsonb_set(
+        expected_state, '{action_revision}',
+        pg_catalog.to_jsonb((snapshot.old_state->>'action_revision')::bigint + 1));
+    SELECT pg_catalog.to_jsonb(c) - 'pending_since', c.pending_since
+      INTO STRICT actual_state, pending_since
+      FROM mdm_steward.policy_cases_v1 c WHERE c.case_key = snapshot.case_key;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_mdm' AND extversion = '0.15.0')
+       OR actual_state IS DISTINCT FROM expected_state
+       OR pending_since IS NOT NULL
+       OR pg_catalog.to_regclass('mdm_steward.policy_receipt_publications_v1') IS NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_attribute
+           WHERE attrelid = 'mdm_steward.policy_receipts_v1'::pg_catalog.regclass
+             AND attname = 'publication_tracking_started_at'
+             AND attnotnull AND NOT attisdropped
+       ) THEN
+        RAISE EXCEPTION '0.14.2 to 0.15.0 upgrade changed policy data or failed publication tracking: expected %, actual %, pending_since %',
+            expected_state, actual_state, pending_since;
+    END IF;
+END
+$$;
+UPDATE mdm_steward.policy_cases_v1 c
+SET pending_stewardship = (s.old_state->>'pending_stewardship')::boolean,
+    action_revision = (s.old_state->>'action_revision')::bigint,
+    pending_since = NULL
+FROM e2e_upgrade_pending_snapshot s
+WHERE c.case_key = s.case_key;
+DROP TABLE e2e_upgrade_pending_snapshot;
+
 \connect postgres postgres
 CREATE DATABASE upgrade;
 \connect upgrade postgres

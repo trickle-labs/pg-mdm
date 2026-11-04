@@ -22,7 +22,7 @@ fn test_restore_script_integrity() {
     assert!(content.contains("restored binding was not rejected before reconciliation"));
     assert!(content.contains("failed policy entity drop did not preserve complete M2 audit state"));
     assert!(content.contains(
-        "successful policy entity drop left entity, cases, binding, receipt, or runtime rows"
+        "successful policy entity drop left entity, cases, binding, receipt, receipt publication, or runtime rows"
     ));
 }
 

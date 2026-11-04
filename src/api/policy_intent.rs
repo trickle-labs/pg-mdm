@@ -286,7 +286,7 @@ fn grant_binding_role(client: &mut SpiClient<'_>, principal_role: &str) -> Resul
     for sql in [
         format!("GRANT USAGE ON SCHEMA mdm_steward TO {role}"),
         format!(
-            "GRANT SELECT ON TABLE mdm_steward.policy_cases_v1, mdm_steward.policy_receipts_v1 TO {role}"
+            "GRANT SELECT ON TABLE mdm_steward.policy_cases_v1, mdm_steward.policy_receipts_v1, mdm_steward.policy_receipt_publications_v1 TO {role}"
         ),
         format!(
             "GRANT EXECUTE ON FUNCTION mdm_steward.submit_policy_intent(uuid, bytea, bigint, text, jsonb, bigint, bigint, bigint, bigint, bytea, bigint, bytea, text, text, text) TO {role}"

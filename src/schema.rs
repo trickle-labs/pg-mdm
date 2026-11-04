@@ -438,7 +438,10 @@ CREATE TABLE mdm_steward.policy_cases_v1 (
     action_revision bigint NOT NULL CHECK (action_revision > 0),
     pending_stewardship boolean NOT NULL,
     last_observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    pending_since timestamptz,
     UNIQUE (entity_name, issue_key, occurrence),
+    CONSTRAINT policy_cases_v1_pending_since_check
+        CHECK (pending_stewardship OR pending_since IS NULL),
     CHECK (
         permitted_actions = '{}'::text[]
         OR permitted_actions = ARRAY['ASSIGN_QUEUE']::text[]
@@ -506,7 +509,21 @@ CREATE TABLE mdm_steward.policy_receipts_v1 (
     control jsonb,
     resulting_publication_revision bigint,
     created_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
+    publication_tracking_started_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp(),
     UNIQUE (binding_id, request_key)
+);
+
+CREATE INDEX policy_receipts_publication_pending_idx
+    ON mdm_steward.policy_receipts_v1 (case_key, action_revision)
+    WHERE outcome = 'APPLIED_CONTROL';
+
+CREATE TABLE mdm_steward.policy_receipt_publications_v1 (
+    receipt_id uuid PRIMARY KEY REFERENCES mdm_steward.policy_receipts_v1(receipt_id),
+    case_key bigint NOT NULL CHECK (case_key > 0),
+    action_revision bigint NOT NULL CHECK (action_revision > 0),
+    publication_revision bigint NOT NULL CHECK (publication_revision >= 0),
+    publication_state text NOT NULL CHECK (publication_state IN ('PUBLISHED', 'SUPERSEDED_BEFORE_PUBLICATION')),
+    observed_at timestamptz NOT NULL DEFAULT pg_catalog.statement_timestamp()
 );
 
 CREATE TABLE mdm_internal.resolution_facts (
@@ -667,6 +684,7 @@ SELECT pg_catalog.pg_extension_config_dump('mdm_internal.reviews'::pg_catalog.re
 SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_cases_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_bindings_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_receipts_v1'::pg_catalog.regclass, '');
+SELECT pg_catalog.pg_extension_config_dump('mdm_steward.policy_receipt_publications_v1'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.resolution_facts'::pg_catalog.regclass, '');
 SELECT pg_catalog.pg_extension_config_dump('mdm_internal.golden_override_directives'::pg_catalog.regclass, '');
 
@@ -676,6 +694,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA mdm_internal FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_cases_v1 FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_bindings_v1 FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_steward.policy_receipts_v1 FROM PUBLIC;
+REVOKE ALL ON TABLE mdm_steward.policy_receipt_publications_v1 FROM PUBLIC;
 REVOKE ALL ON TABLE mdm_internal.policy_binding_runtime FROM PUBLIC;
 REVOKE ALL ON FUNCTION mdm_internal.validate_golden_override_chain() FROM PUBLIC;
 REVOKE CREATE ON SCHEMA mdm, mdm_out, mdm_steward, mdm_admin, mdm_graph FROM PUBLIC;

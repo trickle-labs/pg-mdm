@@ -18,6 +18,7 @@ fn test_upgrade_scripts_exist() {
     let upgrade_12_13 = root.join("sql").join("pg_mdm--0.12.0--0.13.0.sql");
     let upgrade_13_14 = root.join("sql").join("pg_mdm--0.13.0--0.14.0.sql");
     let upgrade_14_14_1 = root.join("sql").join("pg_mdm--0.14.0--0.14.1.sql");
+    let upgrade_14_2_15_0 = root.join("sql").join("pg_mdm--0.14.2--0.15.0.sql");
 
     assert!(
         upgrade_01_02.is_file(),
@@ -75,6 +76,10 @@ fn test_upgrade_scripts_exist() {
         upgrade_14_14_1.is_file(),
         "0.14.0 -> 0.14.1 upgrade script must exist"
     );
+    assert!(
+        upgrade_14_2_15_0.is_file(),
+        "0.14.2 -> 0.15.0 upgrade script must exist"
+    );
 
     let sql_02_03 = fs::read_to_string(&upgrade_02_03).expect("read 0.2.0 to 0.3.0");
     assert!(sql_02_03.contains("mdm_internal.normalized_value"));
@@ -123,4 +128,13 @@ fn test_upgrade_scripts_exist() {
     assert!(sql_13_14.contains("mdm_internal.policy_binding_runtime"));
     assert!(sql_13_14.contains("mdm_steward.policy_receipts_v1"));
     assert!(sql_13_14.contains("mdm_steward.submit_policy_intent"));
+    let sql_14_2_15_0 = fs::read_to_string(&upgrade_14_2_15_0).expect("read 0.14.2 to 0.15.0");
+    assert!(sql_14_2_15_0.contains("ADD COLUMN pending_since timestamptz"));
+    assert!(sql_14_2_15_0.contains("pending_stewardship OR pending_since IS NULL"));
+    assert!(sql_14_2_15_0.contains("ADD COLUMN publication_tracking_started_at timestamptz"));
+    assert!(sql_14_2_15_0.contains("CREATE TABLE mdm_steward.policy_receipt_publications_v1"));
+    assert!(
+        sql_14_2_15_0
+            .contains("pg_extension_config_dump('mdm_steward.policy_receipt_publications_v1'")
+    );
 }

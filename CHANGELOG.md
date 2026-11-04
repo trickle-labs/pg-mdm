@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.0
+
+- Add proposed MDM-owned pending-publication age and receipt-to-publication correlation; legacy publication history remains unknown after upgrade.
+- Add the 0.14.2 to 0.15.0 upgrade path.
+
 ## 0.14.1
 
 - Admit the checksummed `pg_trickle` 0.108.3 Graph V1.2 v3 capability profile.
