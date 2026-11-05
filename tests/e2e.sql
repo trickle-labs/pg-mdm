@@ -1251,19 +1251,28 @@ BEGIN
         RAISE EXCEPTION 'public source actions must be SECURITY INVOKER';
     END IF;
     IF NOT has_function_privilege('mdm_helper_owner', 'mdm_internal.policy_runtime_epoch()', 'EXECUTE')
-       OR NOT has_table_privilege('mdm_helper_owner', 'pgtrickle.pgt_dependencies', 'SELECT')
-       OR NOT EXISTS (
-           SELECT FROM pg_catalog.pg_class relation
-           CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
-               relation.relacl,
-               pg_catalog.acldefault('r', relation.relowner)
-           )) privilege
-           WHERE relation.oid = 'pgtrickle.pgt_dependencies'::regclass
-             AND privilege.grantee = 'mdm_helper_owner'::regrole
-             AND privilege.privilege_type = 'SELECT'
-             AND privilege.is_grantable
+       OR EXISTS (
+           SELECT FROM (VALUES
+               ('pgtrickle.pgt_dependencies'::regclass::oid),
+               ('pgtrickle.pgt_stream_tables'::regclass::oid),
+               ('pgtrickle.pgt_change_tracking'::regclass::oid)
+           ) AS graph_catalog(relation_oid)
+           WHERE NOT has_table_privilege('mdm_helper_owner', graph_catalog.relation_oid, 'SELECT')
+              OR NOT EXISTS (
+                  SELECT FROM pg_catalog.pg_class relation
+                  CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+                      relation.relacl,
+                      pg_catalog.acldefault('r', relation.relowner)
+                  )) privilege
+                  WHERE relation.oid = graph_catalog.relation_oid
+                    AND privilege.grantee = 'mdm_helper_owner'::regrole
+                    AND privilege.privilege_type = 'SELECT'
+                    AND privilege.is_grantable
+              )
        )
        OR has_table_privilege('mdm_configurator', 'pgtrickle.pgt_dependencies', 'SELECT')
+       OR has_table_privilege('mdm_configurator', 'pgtrickle.pgt_stream_tables', 'SELECT')
+       OR has_table_privilege('mdm_configurator', 'pgtrickle.pgt_change_tracking', 'SELECT')
        OR has_schema_privilege('mdm_administrator', 'mdm_internal', 'USAGE')
        OR EXISTS (
            SELECT FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
@@ -1442,7 +1451,9 @@ WITH proposed AS (
     ) AS definition
 )
 SELECT desired_version = 1 AND changed AND octet_length(definition_digest) = 32 AND octet_length(artifact_digest) = 32
-       AND has_table_privilege('mdm_administrator', 'pgtrickle.pgt_dependencies', 'SELECT') AS v02_create_ok
+       AND has_table_privilege('mdm_administrator', 'pgtrickle.pgt_dependencies', 'SELECT')
+       AND has_table_privilege('mdm_administrator', 'pgtrickle.pgt_stream_tables', 'SELECT')
+       AND has_table_privilege('mdm_administrator', 'pgtrickle.pgt_change_tracking', 'SELECT') AS v02_create_ok
 FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer definition')
 \gset
 \if :v02_create_ok

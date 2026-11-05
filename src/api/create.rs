@@ -280,7 +280,7 @@ fn grant_graph_access(client: &mut SpiClient<'_>, role: &str) -> Result<(), MdmE
     let role = quote_identifier(role);
     client
         .update(
-            &format!("GRANT SELECT ON TABLE pgtrickle.pgt_dependencies TO {role}"),
+            &format!("GRANT SELECT ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables, pgtrickle.pgt_change_tracking TO {role}"),
             None,
             &[],
         )

@@ -40,12 +40,16 @@ JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 WHERE n.nspname = 'mdm_out' AND c.relkind = 'r';
 \gexec
 GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
--- The sealed helper delegates this read only to roles bound to the current graph versions.
-GRANT SELECT ON TABLE pgtrickle.pgt_dependencies TO :"helper_owner" WITH GRANT OPTION;
+-- The sealed helper delegates these graph reads only to current execution roles.
+GRANT SELECT ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables, pgtrickle.pgt_change_tracking TO :"helper_owner" WITH GRANT OPTION;
 SELECT pg_catalog.format(
-    'GRANT SELECT ON TABLE %I.%I TO %I',
+    'GRANT SELECT ON TABLE %I.%I, %I.%I, %I.%I TO %I',
     'pgtrickle',
     'pgt_dependencies',
+    'pgtrickle',
+    'pgt_stream_tables',
+    'pgtrickle',
+    'pgt_change_tracking',
     selected_role.rolname
 )
 FROM (
