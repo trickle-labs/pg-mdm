@@ -1252,6 +1252,17 @@ BEGIN
     END IF;
     IF NOT has_function_privilege('mdm_helper_owner', 'mdm_internal.policy_runtime_epoch()', 'EXECUTE')
        OR NOT has_table_privilege('mdm_helper_owner', 'pgtrickle.pgt_dependencies', 'SELECT')
+       OR NOT EXISTS (
+           SELECT FROM pg_catalog.pg_class relation
+           CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+               relation.relacl,
+               pg_catalog.acldefault('r', relation.relowner)
+           )) privilege
+           WHERE relation.oid = 'pgtrickle.pgt_dependencies'::regclass
+             AND privilege.grantee = 'mdm_helper_owner'::regrole
+             AND privilege.privilege_type = 'SELECT'
+             AND privilege.is_grantable
+       )
        OR has_table_privilege('mdm_configurator', 'pgtrickle.pgt_dependencies', 'SELECT')
        OR has_schema_privilege('mdm_administrator', 'mdm_internal', 'USAGE')
        OR EXISTS (

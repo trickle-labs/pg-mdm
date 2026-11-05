@@ -40,8 +40,22 @@ JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 WHERE n.nspname = 'mdm_out' AND c.relkind = 'r';
 \gexec
 GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
--- The sealed helper uses this catalog for Graph V1 refresh.
-GRANT SELECT ON TABLE pgtrickle.pgt_dependencies TO :"helper_owner";
+-- The sealed helper delegates this read only to roles bound to the current graph versions.
+GRANT SELECT ON TABLE pgtrickle.pgt_dependencies TO :"helper_owner" WITH GRANT OPTION;
+SELECT pg_catalog.format(
+    'GRANT SELECT ON TABLE %I.%I TO %I',
+    'pgtrickle',
+    'pgt_dependencies',
+    selected_role.rolname
+)
+FROM (
+    SELECT DISTINCT binding.execution_role_oid
+    FROM mdm_internal.graph_bindings binding
+    JOIN mdm_internal.entities entity USING (entity_id)
+    WHERE binding.definition_version = entity.desired_version
+) AS current_graph_roles
+JOIN pg_catalog.pg_roles AS selected_role ON selected_role.oid = current_graph_roles.execution_role_oid;
+\gexec
 SELECT pg_catalog.format(
     'GRANT USAGE ON SCHEMA %I TO %I',
     pg_catalog.format('%s_%s', 'pgtrickle', 'changes'),
