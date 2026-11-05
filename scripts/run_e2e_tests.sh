@@ -1048,8 +1048,6 @@ if [[ $stable_rebuild_state != "$rebuilt_publication_state" ]]; then
     echo "FAIL: retry changed recovered publication state: $stable_rebuild_state != $rebuilt_publication_state" >&2
     exit 1
 fi
-docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d graph_conformance \
-    -c 'REVOKE ALL PRIVILEGES ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables, pgtrickle.pgt_change_tracking FROM mdm_administrator CASCADE' >/dev/null
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;

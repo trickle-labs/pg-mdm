@@ -3298,6 +3298,9 @@ BEGIN
 END
 $$;
 
+\connect graph_conformance postgres
+REVOKE ALL PRIVILEGES ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables,
+    pgtrickle.pgt_change_tracking FROM mdm_administrator CASCADE;
 \connect postgres postgres
 DROP DATABASE graph_conformance WITH (FORCE);
 \connect foundation postgres
