@@ -595,6 +595,7 @@ CREATE TABLE public.mdm_graph_publication (
 GRANT USAGE ON SCHEMA pgtrickle TO mdm_administrator;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_administrator;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle TO mdm_administrator;
+REVOKE SELECT ON TABLE pgtrickle.pgt_dependencies FROM mdm_administrator;
 GRANT CREATE ON SCHEMA public TO mdm_administrator;
 GRANT SELECT, MAINTAIN ON public.mdm_graph_source TO mdm_administrator;
 GRANT SELECT, INSERT ON public.mdm_graph_publication TO mdm_administrator;
