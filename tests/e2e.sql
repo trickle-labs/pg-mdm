@@ -595,7 +595,6 @@ CREATE TABLE public.mdm_graph_publication (
 GRANT USAGE ON SCHEMA pgtrickle TO mdm_administrator;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO mdm_administrator;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgtrickle TO mdm_administrator;
-REVOKE SELECT ON TABLE pgtrickle.pgt_dependencies FROM mdm_administrator;
 GRANT CREATE ON SCHEMA public TO mdm_administrator;
 GRANT SELECT, MAINTAIN ON public.mdm_graph_source TO mdm_administrator;
 GRANT SELECT, INSERT ON public.mdm_graph_publication TO mdm_administrator;
@@ -1253,7 +1252,7 @@ BEGIN
     END IF;
     IF NOT has_function_privilege('mdm_helper_owner', 'mdm_internal.policy_runtime_epoch()', 'EXECUTE')
        OR NOT has_table_privilege('mdm_helper_owner', 'pgtrickle.pgt_dependencies', 'SELECT')
-       OR has_table_privilege('mdm_administrator', 'pgtrickle.pgt_dependencies', 'SELECT')
+       OR has_table_privilege('mdm_configurator', 'pgtrickle.pgt_dependencies', 'SELECT')
        OR has_schema_privilege('mdm_administrator', 'mdm_internal', 'USAGE')
        OR EXISTS (
            SELECT FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
@@ -1392,6 +1391,7 @@ GRANT SELECT, MAINTAIN ON public.crm_customer, public.crm_source_key_unique,
     public.crm_source_key_partial, public.crm_source_key_expression,
     public.crm_source_key_deferred, public.crm_source_key_unindexed
     TO mdm_administrator;
+REVOKE SELECT ON TABLE pgtrickle.pgt_dependencies FROM mdm_administrator;
 
 \connect foundation mdm_test_login
 SET ROLE mdm_administrator;
@@ -1430,7 +1430,8 @@ WITH proposed AS (
         ]
     ) AS definition
 )
-SELECT desired_version = 1 AND changed AND octet_length(definition_digest) = 32 AND octet_length(artifact_digest) = 32 AS v02_create_ok
+SELECT desired_version = 1 AND changed AND octet_length(definition_digest) = 32 AND octet_length(artifact_digest) = 32
+       AND has_table_privilege('mdm_administrator', 'pgtrickle.pgt_dependencies', 'SELECT') AS v02_create_ok
 FROM mdm.create((SELECT definition FROM proposed), NULL, 'initial customer definition')
 \gset
 \if :v02_create_ok

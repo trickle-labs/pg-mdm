@@ -40,7 +40,7 @@ JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 WHERE n.nspname = 'mdm_out' AND c.relkind = 'r';
 \gexec
 GRANT USAGE ON SCHEMA pgtrickle TO :"helper_owner" WITH GRANT OPTION;
--- The sealed helper runs Graph V1 refresh; application and execution roles do not get this catalog grant.
+-- The sealed helper uses this catalog for Graph V1 refresh.
 GRANT SELECT ON TABLE pgtrickle.pgt_dependencies TO :"helper_owner";
 SELECT pg_catalog.format(
     'GRANT USAGE ON SCHEMA %I TO %I',

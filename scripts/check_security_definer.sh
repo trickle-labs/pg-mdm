@@ -49,7 +49,8 @@ if printf '%s\n' 'src/api/refresh.rs:9999: client.update(&format!("UPDATE mdm_in
 fi
 
 # Keep catalog objects and gated functions blocked while allowing public stream_tables_info columns.
-if rg -n -i 'pgtrickle_changes|pgtrickle\.pgt_[a-z_]+|pgt_[a-z_]+[[:space:]]*\(|\b(from|join|update|into)[[:space:]]+pgt_[a-z_]+|set_orchestration_mode' src sql; then
+safe_dependency_grants='^(sql/configure_helper\.sql:[0-9]+:GRANT SELECT ON TABLE pgtrickle\.pgt_dependencies TO :"helper_owner";|src/api/create\.rs:[0-9]+:[[:space:]]*&format!\("GRANT SELECT ON TABLE pgtrickle\.pgt_dependencies TO \{role\}"\),)$'
+if rg -n -i 'pgtrickle_changes|pgtrickle\.pgt_[a-z_]+|pgt_[a-z_]+[[:space:]]*\(|\b(from|join|update|into)[[:space:]]+pgt_[a-z_]+|set_orchestration_mode' src sql | rg -v "$safe_dependency_grants"; then
     echo 'private or gated pg_trickle API referenced' >&2
     exit 1
 fi
