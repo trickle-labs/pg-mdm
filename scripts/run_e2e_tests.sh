@@ -1051,6 +1051,8 @@ fi
 docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
     -c 'REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
         REVOKE ALL ON FUNCTION pgtrickle.encode_row_id_v2(text, anyelement) FROM mdm_administrator CASCADE;
+        REVOKE ALL PRIVILEGES ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables,
+            pgtrickle.pgt_change_tracking FROM mdm_administrator CASCADE;
         REVOKE ALL ON SCHEMA mdm_admin, mdm_steward FROM mdm_administrator CASCADE;
         SET ROLE mdm_helper_owner;
         REVOKE ALL ON SCHEMA mdm_admin, mdm_steward FROM mdm_administrator CASCADE;
