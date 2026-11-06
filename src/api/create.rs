@@ -280,6 +280,13 @@ fn grant_graph_access(client: &mut SpiClient<'_>, role: &str) -> Result<(), MdmE
     let role = quote_identifier(role);
     client
         .update(
+            &format!("GRANT SELECT ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables, pgtrickle.pgt_change_tracking TO {role}"),
+            None,
+            &[],
+        )
+        .map_err(|error| MdmError::GraphInstallation(error.to_string()))?;
+    client
+        .update(
             &format!("GRANT USAGE ON SCHEMA pgtrickle TO {role}"),
             None,
             &[],
