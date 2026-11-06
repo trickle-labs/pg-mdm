@@ -58,7 +58,7 @@ if [[ "$image_candidate_key" != "$candidate_key" ]]; then
     echo "FAIL: E2E image candidate key $image_candidate_key differs from requested $candidate_key" >&2
     exit 1
 fi
-docker run --detach --name "$container" -e POSTGRES_PASSWORD=postgres "$image" >/dev/null
+docker run --detach --name "$container" -e POSTGRES_PASSWORD=postgres "$image" postgres -c autovacuum=off >/dev/null
 
 for _ in $(seq 1 60); do
     if docker logs "$container" 2>&1 | grep -q 'PostgreSQL init process complete; ready for start up.' \
@@ -1057,6 +1057,8 @@ docker exec "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d foundation \
         SET ROLE mdm_helper_owner;
         REVOKE ALL ON SCHEMA mdm_admin, mdm_steward FROM mdm_administrator CASCADE;
         REVOKE ALL ON SCHEMA pgtrickle FROM mdm_administrator CASCADE;
+        REVOKE ALL PRIVILEGES ON TABLE pgtrickle.pgt_dependencies, pgtrickle.pgt_stream_tables,
+            pgtrickle.pgt_change_tracking FROM mdm_administrator CASCADE;
         RESET ROLE;
         DROP OWNED BY mdm_administrator;
         DROP ROLE mdm_administrator;
