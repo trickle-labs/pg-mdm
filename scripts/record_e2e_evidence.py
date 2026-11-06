@@ -166,7 +166,7 @@ if set(qualification) != {
     "additional_workloads", "samples",
 }:
     raise SystemExit("incremental qualification fields are incomplete")
-if qualification["schema_version"] != 1 or qualification["pg_trickle_version"] != "0.108.3":
+if qualification["schema_version"] != 1 or qualification["pg_trickle_version"] != "0.108.4":
     raise SystemExit("incremental qualification dependency contract changed")
 if qualification["equivalence_checks"] != 70:
     raise SystemExit("incremental qualification did not complete all rebuild comparisons")
@@ -276,7 +276,7 @@ report = {
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
         "archived_pg_mdm_0_14_0_sha256": sha256_file(ROOT / "sql/archive/pg_mdm--0.14.0.sql"),
         "pg_mdm_package_manifest_sha256": sha256_bytes(package_manifest.encode()),
-        "pg_trickle_version": "0.108.3",
+        "pg_trickle_version": qualification["pg_trickle_version"],
         "pg_trickle_source_commit": producer["PG_TRICKLE_REVISION"],
         "pg_trickle_artifact_url": producer["PG_TRICKLE_URL"],
         "pg_trickle_artifact_sha256": producer["PG_TRICKLE_SHA256"],
