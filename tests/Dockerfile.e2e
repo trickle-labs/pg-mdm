@@ -33,9 +33,9 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     && find /package -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/pg_mdm-package-manifest.sha256
 
 FROM build_tools AS pg_trickle_release
-ARG PG_TRICKLE_REVISION=eb44093bbeca4f276a92733fe2bbc740d8ef254a
+ARG PG_TRICKLE_REVISION=c36783a9889014a01f0a34694a40608975211560
 ARG PG_TRICKLE_URL=https://github.com/trickle-labs/pg-trickle.git
-ARG PG_TRICKLE_SHA256=c869c490fe3f7188b179ad07cf4db61f734350e21dde50eb7cd06e4952ac1487
+ARG PG_TRICKLE_SHA256=b7ac0dd0c97514c081015e30153d1287f2f21ae008a9401ebc3c14073e4b400c
 # GitHub's default archive excludes the lockfile, benches, and build generator.
 RUN git init /pg_trickle_source \
     && cd /pg_trickle_source \
