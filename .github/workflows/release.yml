@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           archive="pg_mdm-${version}-pg18-linux-amd64.tar.gz"
-          docker build --platform linux/amd64 --target builder --tag pg_mdm-release .
+          docker build --platform linux/amd64 --file tests/Dockerfile.e2e --target builder --tag pg_mdm-release .
           container="pg-mdm-package-${GITHUB_RUN_ID}"
           docker create --name "${container}" pg_mdm-release >/dev/null
           trap 'docker rm -f "${container}" >/dev/null 2>&1 || true' EXIT
