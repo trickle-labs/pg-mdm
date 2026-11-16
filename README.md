@@ -1,274 +1,76 @@
 # pg_mdm
 
-**Deterministic entity resolution and golden records, designed to run inside PostgreSQL.**
+**Turn scattered PostgreSQL records into customers, companies, and other entities you can trust.**
+
+Your CRM knows a customer as “Acme Ltd.” Billing knows the same customer as “ACME LIMITED.” Both records matter, but applications need a dependable way to recognize the customer, choose useful values, and explain where those values came from. pg_mdm brings that work into PostgreSQL: you describe your sources and matching rules in SQL, refresh the entity, and query ordinary tables containing **golden records**—the selected field values applications should use for each resolved entity. Companion tables show which source records belong together and which cases need a person's judgment.
+
+pg_mdm combines deterministic matching with durable identity. A customer keeps its `mdm_id` through an ordinary name change, selected values retain their provenance, and a failed refresh leaves the previous complete publication available. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) maintains the changing relational evidence; pg_mdm uses that evidence, your policies, and steward decisions to resolve entities. You can begin with exact matching on a small dataset and grow into controlled definition changes, conservative fuzzy matching, stewardship, and operational recovery without leaving SQL.
 
 > [!IMPORTANT]
-> The v0.14.1 release is qualified with `pg_trickle` 0.108.3. This adapter accepts the exact Graph V1.2 v2 and v3 feature vectors. It consumes Delta V1.1 terminal changes and adds bound stewardship policy intents with durable receipts.
+> The current version is **0.15.0, a demo preview for synthetic/demo data only**, targeting PostgreSQL 18. The [release](https://github.com/trickle-labs/pg-mdm/releases/tag/v0.15.0) is not production-qualified: **do not connect it to a real workload or enable live controls**. The [release qualification gates](https://github.com/trickle-labs/pg-mdm/issues/28) remain blocked. Use a disposable learning environment; the advanced guides describe synthetic-data rehearsals and implemented contracts. The [compatibility reference](docs/reference/compatibility.md) identifies the build inputs and separates current availability from historical evidence.
 
-Most organizations have several records for the same customer, company, supplier, or product. Those records rarely agree perfectly: names are formatted differently, contact details go stale, source systems reuse identifiers, and one weak match can accidentally join two unrelated groups. `pg_mdm` resolves those records into durable real-world entities while keeping every automatic decision deterministic, conservative, and explainable.
+## Start here
 
-The project is built around a deliberate division of responsibility. [`pg_trickle`](https://github.com/trickle-labs/pg-trickle) captures source changes and incrementally maintains relational facts such as normalized values, candidate pairs, and matching evidence. `pg_mdm` decides what those facts mean: which records belong together, which human decisions take precedence, which stable ID survives a merge or split, which value becomes golden, and which uncertain cases need review. In short, **`pg_trickle` maintains changing relational facts; `pg_mdm` decides identity.**
+[Install a local learning environment](docs/how-to/install.md), then follow [Your first customer golden records](docs/tutorials/first-entity.md). The tutorial supplies four customer records, takes you through each SQL statement, and shows the expected result: three customers, including one correctly combined pair. You will then change a source record and see that the customer's identity remains stable. Allow about 30 minutes for the lesson after the environment is ready; building the extension image takes additional time.
 
-## Install v0.15 candidate
+Already have an installation? Start at the [documentation home](docs/README.md) and choose the route that matches your task. The documentation follows [Diátaxis](https://diataxis.fr/): tutorials help you learn through a complete exercise, how-to guides help you finish a particular job, reference pages give precise contracts, and explanations help you understand the design.
 
-The compiler v11 source supports PostgreSQL 18 with the checksum-pinned `pg_trickle` 0.108.3 source repairs in [`DEPENDENCIES.md`](DEPENDENCIES.md). The released pg_mdm 0.14.0 package was qualified with pg_trickle 0.108.0 and does not accept the v3 profile. Install the pinned producer and adapter, add `pg_trickle` to `shared_preload_libraries`, and restart PostgreSQL. Before upgrading pg_trickle to 0.108.3, request a resnapshot for each active output-delta consumer; the next pg_mdm refresh rebuilds its consumer state from the fresh snapshot.
-
-The 0.15.0 candidate adds MDM-owned pending-publication age through a proposed nullable pending_since field and a read-only receipt-to-publication relation. Existing pending decisions and receipt history remain age-unknown. This contract revision and candidate still require project-owner review and M4 qualification.
-
-The 0.15.0 candidate requires `pg_mdm` in `shared_preload_libraries` for policy automation. Pause managed delivery and retain a coherent backup before upgrading either component. After upgrading or restoring, rerun `sql/configure_helper.sql` for the configured helper owner; it grants the sealed helper `SELECT` with grant option on `pgtrickle.pgt_dependencies`, `pgtrickle.pgt_stream_tables`, and `pgtrickle.pgt_change_tracking`, then delegates those reads only to execution roles bound to current graph versions. New graph installations grant them to the selected stream-table owner. Other application roles remain unprivileged. After every PostgreSQL restart, restore or clone, the entity execution role must recheck the environment and explicitly activate each policy binding with its current runtime version. Until then new intents fail without a receipt; an existing matching receipt remains replayable. Without the preload, activation fails closed and pausing remains available. This candidate has not yet completed release qualification.
-
-The extension stores definitions, installs private Graph V1.2 members, consumes Delta V1.1 changes, and publishes PostgreSQL output tables in one transaction. The v0.15 CI suite compares differential and full results, tests affected resolution, and covers rollback, retry, policy intents, upgrade, and restore on PostgreSQL 18.
-
-Build and copy the package:
-
-```bash
-cargo pgrx package --pg-config "$(command -v pg_config)"
-sudo cp target/release/pg_mdm-pg18/*/lib/postgresql/18/lib/pg_mdm.* "$(pg_config --pkglibdir)/"
-sudo cp target/release/pg_mdm-pg18/*/share/postgresql/18/extension/pg_mdm* "$(pg_config --sharedir)/extension/"
-```
-
-Install both extensions as a database administrator:
-
-```sql
-CREATE EXTENSION pg_trickle;
-CREATE EXTENSION pg_mdm;
-
-CREATE ROLE mdm_helper_owner NOLOGIN NOSUPERUSER NOBYPASSRLS;
-```
-
-Assign the protected objects to the helper owner before you grant action access:
-
-```bash
-psql --set=helper_owner=mdm_helper_owner --file=sql/configure_helper.sql my_database
-```
-
-Create application roles outside the extension. Give the administrator role only the actions it needs:
-
-```sql
-CREATE ROLE app_mdm_admin NOLOGIN NOSUPERUSER NOBYPASSRLS;
-CREATE ROLE app_login LOGIN NOSUPERUSER NOBYPASSRLS;
-GRANT app_mdm_admin TO app_login WITH SET TRUE, INHERIT FALSE;
-
-GRANT USAGE ON SCHEMA mdm_admin TO app_mdm_admin;
-GRANT EXECUTE ON FUNCTION mdm_admin.verify_installation() TO app_mdm_admin;
-
-GRANT USAGE ON SCHEMA mdm TO app_mdm_admin;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA mdm TO app_mdm_admin;
-```
-
-Connect as `app_login`, select the action role, and run the check:
-
-```sql
-SET ROLE app_mdm_admin;
-SELECT mdm_admin.verify_installation();
-```
-
-The function rejects superusers, `BYPASSRLS` roles, login-capable helper owners, helper owners with role memberships, and mismatched function and table owners. It records `session_user` as `actor_name` and the selected role as `actor_role_name`. Callers cannot supply either value, the outcome, the status, or the result code.
-
-Run `sql/configure_helper.sql` again after an extension upgrade or a clean logical restore, then reapply action grants. After a logical restore, [rebind the restored entities](#rebind-restored-entities) before using definition actions. PostgreSQL includes `mdm_internal.operations` data in logical dumps. The helper writes only committed success records; a transaction rollback removes its operation row.
-
-`mdm_admin.verify_installation()` returns `MDM_OK` when the helper owner, application role, and required `pg_trickle` capabilities pass validation. Other stable result codes are:
-
-| Code | Meaning |
-|---|---|
-| `MDM_OK` | The installation check succeeded. |
-| `MDM_PGT_CAPABILITY_MISSING` | Graph V1 is absent. |
-| `MDM_PGT_CAPABILITY_VERSION` | Graph V1 has an unsupported major version. |
-| `MDM_PGT_CAPABILITY_INVALID` | The capability response has duplicate or invalid rows. |
-| `MDM_PGT_CAPABILITY_DISABLED` | Graph V1 1.x exists but is disabled. |
-| `MDM_HELPER_OWNER_UNSAFE` | Protected objects do not have the documented helper owner. |
-| `MDM_UNAUTHORIZED` | The authenticated or selected role is unsafe. |
-| `MDM_OPERATION_STATE` | A running operation could not commit as succeeded. |
-| `MDM_INTERNAL` | PostgreSQL SPI returned an unexpected error. |
-
-For a guided example with sample data and expected results, follow the
-[30-minute customer tutorial](TUTORIAL.md).
-
-## Define and refresh an entity
-
-The selected execution role needs schema `USAGE` and table `SELECT, MAINTAIN` on each source. The source owner grants these privileges. `pg-mdm` does not grant access to source tables.
-
-Grant Graph V1 access to the execution role, then create the definition as that role:
-
-```sql
-GRANT USAGE ON SCHEMA pgtrickle TO app_mdm_admin;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgtrickle TO app_mdm_admin;
-GRANT USAGE ON SCHEMA public TO app_mdm_admin;
-GRANT SELECT, MAINTAIN ON public.crm_customer TO app_mdm_admin;
-
-SET ROLE app_mdm_admin;
-SELECT * FROM mdm.create(mdm.entity(
-    name => 'customer',
-    sources => ARRAY[mdm.source(
-        name => 'crm',
-        relation => 'public.crm_customer'::regclass,
-        source_id => ARRAY['id'],
-        mode => 'tracked',
-        fields => '{"name":"display_name","email":"email_address"}'::jsonb,
-        row_changed_at => 'updated_at')],
-    fields => ARRAY[
-        mdm.field(name => 'name', type => 'text', cleaner => 'company_name'),
-        mdm.field(name => 'email', type => 'text', cleaner => 'email')],
-    matches => ARRAY[mdm.match(
-        name => 'same_email',
-        fields => ARRAY['email'],
-        comparison => 'exact',
-        strength => 'identity',
-        evidence_group => 'email')],
-    golden_values => ARRAY[mdm.golden_value(
-        field => 'name', policy => 'prefer_source', sources => ARRAY['crm'])]));
-SELECT mdm.refresh('customer', 'ALLOW');
-RESET ROLE;
-```
-
-Grant consumers access to the three output tables after the first refresh creates them: `mdm_out.customer`, `mdm_out.customer_members`, and `mdm_out.customer_review`. Use `mdm.describe('customer', 'summary')` to inspect the definition and graph state. Use `mdm.preview()` to validate a proposed change before activating it.
-
-`full_policy = 'ALLOW'` lets Graph V1 use FULL when a compiled graph stage has no proven differential plan. Exact Delta V1 ranges are eligible for affected resolution only when both terminal consumers supply complete EXACT ranges. Compiler v11 shares one deduplicated candidate set between pair output and exact statistics. When the graph executes differentially, ordinary insert, update, delete, connect, and split changes must retain complete terminal ranges; an unmatched input change can produce an empty EXACT range. Gaps, invalidations, contract changes, graph transitions, and uncertain limits use the full resolver. `mdm_admin.rebuild()` always uses the full resolver without replacing the identity ledger.
-
-## Roll out compiler v11
-
-Run `scripts/run_e2e_tests.sh` against the exact deployment candidate before
-rollout. Retain the source commit, producer binary checksum, effective graph
-modes, and terminal batch trace. A DIFFERENTIAL mode declaration alone does
-not establish complete output capture.
-
-Keep `full_policy = 'ALLOW'` during the rollout. Use `ERROR` only in qualification tests.
-
-1. Request a resnapshot for each active output-delta consumer, install the patched `pg_trickle` source pinned in `DEPENDENCIES.md` and the adapter containing compiler v11, then restart PostgreSQL.
-2. Pick one entity as the canary. Capture its public output rows and `mdm.describe('<entity>', 'summary')` result.
-3. Grant the entity administrator access to `mdm_admin.recompile(text)` and run `mdm_admin.recompile('<entity>')`.
-4. Run `mdm.refresh('<entity>', 'ALLOW')`. The first refresh after the graph transition uses the full resolver. Confirm that the public rows are unchanged and `delta_lag` is zero.
-5. Apply one representative source change. Confirm that `resolver_strategy` is `affected` and `unexpected_full_fallbacks` is empty.
-6. Repeat steps 2 through 5 for the remaining entities.
-
-Alert when a steady-state refresh reports a full resolver fallback or an unexpected FULL graph node. Recovery refreshes, rebuilds, graph transitions, invalidations, and resnapshots are expected full cases.
-
-Source registration consumes complete output-delta ranges from the `records/*`
-nodes before the downstream graph refresh. The source refresh holds the producer's
-transaction-scoped source locks through registration and publication. Qualified
-ordinary permanent tables without row-level security or inheritance use changed
-encoded keys, including both sides of key changes and soft-delete transitions.
-Empty ranges read no source keys. Bootstrap, rebuild, missing/incomplete capture,
-resnapshots, and other source shapes use complete scans at that same fence.
-Caller source privileges are checked on every refresh, including no-change calls;
-the active-record limit still applies to the whole entity across all sources.
-Source cursors acknowledge only when publication succeeds. This capture claim is
-separate from terminal-output EXACT qualification and affected resolution.
-Synchronizing graph helper tables and checking entity-wide counts still require
-global work.
-
-Affected evaluation loads prior identities, historical memberships, reviews,
-golden provenance, pair facts, and overrides through its closed scope. A remote
-override anchor per field retains inactive-anchor review semantics; override
-edits can require an entity-wide scope. Complete semantic publication assembly,
-canonical digest generation, and retained snapshot copying still do global work.
-`stage_timings_ms` reports `evaluation_state_loading`, `merged_state_construction`,
-`digest_generation`, and `snapshot_copying` separately. The existing diagnostic
-trace records decoded prior rows and closure membership-ID reads against entity
-totals when `mdm.trace_graph_deltas` is enabled.
-
-The [source synchronization evidence](evidence/issue11/README.md) retains key-read
-plans, lifecycle and concurrency checks, and before/after measurements with their
-exact adapter and producer checksums.
-
-The [scoped-state evidence](evidence/issue12/README.md) retains prior-state query
-plans, exact history/digest checks and separate loading, assembly and copying
-measurements. The measured complete refresh did not show an end-to-end speedup.
-
-The [assembled optimization acceptance](evidence/issue8/README.md) retains the
-review-flag repair, same-boundary public-output checks and replacement paired
-publication traces. Published `has_review` reflects open reviews across the
-configured entity, including reviews outside an affected component.
-
-The Docker E2E run also executes `tests/incremental_qualification.sql`. It
-measures 30 affected-refresh samples after five warmups at 128 and 2,048
-records, and compares the complete public publication, durable identities,
-provenance, result digest, and explanation results with an administrative full
-rebuild after every sample. It also covers no-change refreshes, an isolated
-change at 8,192 records, and a dense 32-record component. The retained report
-is observational; it has no machine-dependent timing threshold. Qualification
-sets `pg_trickle.refresh_strategy = 'differential'`; operator runs retain
-`ALLOW` and check the returned node modes and terminal ranges.
-
-The [issue #10 qualification evidence](evidence/issue10/README.md) retains
-producer controls, exact artifact identities, raw samples, recovery results,
-and paired execution measurements.
-
-Use `full_policy = 'ERROR'` only for controlled steady-state qualification
-after bootstrap. Bootstrap, rebuild, transitions, and recovery must retain
-their safe full path. The producer capability contract is retained in
-[`PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md`](PG_TRICKLE_INCREMENTAL_REQUIREMENTS.md).
-
-## Rebind restored entities
-
-Logical dumps preserve entity definitions, source identities, and graph artifacts. Database-local role and relation OIDs are derived bindings and are excluded from dumps.
-
-After restoring the source tables and durable MDM data, run `sql/configure_helper.sql` and reapply action grants. Restore the execution role's source privileges and row-level security policies before rebinding.
-
-Connect as a superuser, grant the stored execution role access to `rebind`, and select that role:
-
-```sql
-GRANT USAGE ON SCHEMA mdm_admin TO app_mdm_admin;
-GRANT EXECUTE ON FUNCTION mdm_admin.rebind(text) TO app_mdm_admin;
-SET ROLE app_mdm_admin;
-SELECT mdm_admin.rebind('customer');
-RESET ROLE;
-```
-
-Repeat the call for each restored entity under its stored execution role. `rebind` requires a superuser-authenticated session, so an application login cannot use it even with the function grant. Source validation runs under the selected role's privileges and row-level security.
-
-Rebinding checks the desired definition's mappings and every retained source identity, including sources removed from the current definition. The portable relation names and frozen key contracts must match. The call replaces derived role and source bindings and records the operation without changing definitions, artifacts, or digests. It also supports an explicitly approved replacement of a role or source table under the same name and contract.
+| Your goal | Where to go |
+| --- | --- |
+| Learn the complete first workflow | [Build your first entity](docs/tutorials/first-entity.md) |
+| Move beyond automatic matching | [Inspect and refine a golden record](docs/tutorials/inspect-and-refine.md) |
+| Model representative source tables | [Model sources and matching rules](docs/how-to/model-sources.md) |
+| Change a definition confidently | [Preview and publish a definition change](docs/how-to/change-a-definition.md) |
+| Resolve an exception | [Steward records and golden values](docs/how-to/steward-records.md) |
+| Run and recover an installation | [Operate, upgrade, and restore](docs/how-to/operate.md) |
+| Build a policy integration | [Automate stewardship controls](docs/how-to/automate-stewardship.md) |
+| Look up an argument or a result | [SQL API](docs/reference/sql-api.md), [definitions](docs/reference/definitions.md), and [outputs](docs/reference/outputs.md) |
+| Diagnose a problem | [Troubleshooting](docs/how-to/troubleshoot.md) |
 
 ## How it works
 
-A user defines an entity such as `customer`, maps columns from PostgreSQL source relations to logical fields, declares which agreements count as identity evidence, and chooses how each golden value should be selected. On refresh, `pg_trickle` updates a private evidence graph and `pg_mdm` runs a conservative resolver over the complete evidence set. The resolver publishes the new membership map, golden records, and review queue in the same transaction as the consumed source frontier, so readers see either the previous complete result or the next complete result, never a half-published state.
+You define an **entity**, such as `customer`, using five building blocks: `source`, `field`, `match`, `golden_value`, and `entity`. A source maps your existing columns to shared fields. Cleaners make values comparable without rewriting the source. Match rules describe which agreements count as evidence, and golden-value policies choose what applications should read. The [first tutorial](docs/tutorials/first-entity.md) provides a complete definition you can run, including the roles and grants it needs.
 
-```text
-PostgreSQL source relations
-            |
-            v
-Private pg_trickle graph
-  normalized values, candidate pairs, evidence
-            |
-            v
-pg_mdm resolver
-  decisions, clustering, stable IDs, golden values
-            |
-            v
-Public PostgreSQL tables
-  mdm_out.<entity>
-  mdm_out.<entity>_members
-  mdm_out.<entity>_review
-```
+After the first successful refresh, each entity has three primary outputs:
 
-The V1 public model uses `source`, `field`, `match`, `entity`, and `golden_value`. Its primary actions are `create`, `describe`, `preview`, `refresh`, and `explain`. Every mastered entity produces three ordinary PostgreSQL tables: one row per resolved entity, a durable mapping from source records to entities, and a review queue for ambiguity or conflict. Consumers can query those tables with SQL and observe their transactionally complete changes through standard PostgreSQL triggers or logical decoding.
+| Table | What it answers |
+| --- | --- |
+| `mdm_out.customer` | “What do we currently know about each customer?” |
+| `mdm_out.customer_members` | “Which source records belong to this customer, including retained inactive membership?” |
+| `mdm_out.customer_review` | “Which ambiguities or conflicts need attention?” |
+
+These are PostgreSQL tables, so applications can join them with existing data and receive explicitly granted read access. Operators use `mdm.describe()` to inspect state, `mdm.preview()` to examine a desired definition, `mdm.refresh()` to publish changes, and `mdm.explain()` to investigate the evidence behind a result. Source changes become visible in the outputs when a refresh succeeds; arrange refresh calls as part of your application or operational schedule.
 
 ## What makes the design different
 
-`pg_mdm` treats candidate discovery as part of correctness, not merely a performance detail. A configured matching rule must examine every pair inside its declared candidate predicates. If an oversized block, missing dependency, unsupported extension version, or resource limit prevents complete evaluation, refresh fails and the previous publication remains readable. The system never turns skipped work into evidence that two records do not match.
+Good entity resolution starts with the meaning of your data. A shared billing email can identify one customer in a carefully chosen dataset and a whole household in another. pg_mdm makes the rules and consequences visible: candidate generation has an explicit boundary, uncertain component growth can produce a review instead of a merge, and human decisions carry reasons and versions. Read [How entity resolution works](docs/explanation/entity-resolution.md) before broadening your first rules, then use [Publication and durable identity](docs/explanation/publication-and-identity.md) to understand changes over time.
 
-Clustering is conservative for the same reason. One matching email or phone number may join two individual records, but a chain of shared values cannot keep growing an established entity without stronger independent support. Explicit steward decisions remain durable, cannot-link decisions are enforced across whole components, and automatic authoritative conflicts go to review. Stable `mdm_id` values follow documented merge and split rules, while every golden value retains the source, policy, tie break, definition version, and publication revision that selected it.
+The current implementation also has boundaries that matter when you adopt it. Golden source preference currently follows canonical source-name order, rather than the order of the `golden_value.sources` array. Incremental resolution can reduce some work, while publication assembly and other stages still perform global work. Policy automation has explicit binding and restart activation requirements. These details are covered beside the relevant examples and in the reference pages, so you can make an informed choice before expanding a deployment.
 
-The design also separates semantic choices from physical execution. Cleaners, candidate predicates, pair decisions, clustering rules, stable-ID reconciliation, and golden-value policies are pinned by version. Indexes, query plans, and maintenance strategies may change without redefining identity, provided they produce the same logical evidence and result. This makes rebuilds, upgrades, explanations, and regression tests part of the product contract rather than afterthoughts.
+## Install v0.15 candidate
+
+The complete, current procedure is in [Install pg_mdm](docs/how-to/install.md). It includes a Docker learning environment, a native installation route, the protected helper owner, and an installation check. For an older checkout, use the documentation shipped with that version. The root [dependency record](DEPENDENCIES.md) contains exact build pins.
+
+## Define and refresh an entity
+
+Use the [first-entity tutorial](docs/tutorials/first-entity.md) for a complete runnable example and [Change a definition](docs/how-to/change-a-definition.md) for an existing deployment. `mdm.create()` records the desired definition; the successful refresh activates and publishes it.
+
+## Roll out compiler v11
+
+The [compiler rollout procedure](docs/how-to/operate.md#roll-out-a-compiler-or-producer-change) retains the canary, full-refresh fallback, delta, and evidence checks from this repository's earlier README. Advanced operators can follow the linked qualification evidence without making it a prerequisite for the first tutorial.
+
+## Rebind restored entities
+
+Follow [Restore and rebind](docs/how-to/operate.md#restore-and-rebind). Restored definitions need database-local role and relation bindings rebuilt under the correct identity before normal entity operations resume.
 
 ## Project status
 
-The v0.14.1 release admits the checksummed `pg_trickle` 0.108.3 artifact; its graph SQL still uses the preserved v2 encoder. Before upgrading to 0.108.3, request resnapshots for active output-delta consumers; pg_mdm rebuilds their state on the next refresh. v0.14 adds policy-intent bindings, atomic control updates, immutable receipts, and fail-closed retry behavior on top of v0.13's differential graph refresh.
-
-The post-V1 capability catalogue is cumulative rather than a replacement for V1. It lists candidate work selected only when a deployment demonstrates the need, while preserving the same five nouns, five actions, and three primary outputs. Each optional feature must declare its dependencies, deterministic semantics, migration path, failure boundary, and retention needs; unsupported combinations fail closed instead of silently producing a weaker answer.
-
-Read the design documents for the normative details:
-
-- [DESIGN_V1.md](DESIGN_V1.md) defines the proposed first open-source release, including its SQL model, algorithms, invariants, security boundary, and acceptance criteria.
-- [DESIGN_V2.md](DESIGN_V2.md) is the post-V1 capability catalogue and dependency order. It is not an approved delivery backlog.
-- [ROADMAP.md](ROADMAP.md) divides the V1 implementation into small development releases and defines the V1.0 release gate.
+The [changelog](CHANGELOG.md), [dependency record](DEPENDENCIES.md), and [compatibility reference](docs/reference/compatibility.md) describe the current implementation and its provenance. [DESIGN_V1.md](DESIGN_V1.md), [DESIGN_V2.md](DESIGN_V2.md), and [ROADMAP.md](ROADMAP.md) retain design proposals, future capabilities, and release gates; they are useful context, but a proposed feature is not an installed API.
 
 ## Contributing
 
-The most useful contributions at this stage are concrete design reviews. A good review identifies a source-system behavior, matching failure, stewardship workflow, PostgreSQL constraint, or operational recovery case that the current contracts do not handle. Proposed changes should preserve complete candidate evaluation, deterministic results, atomic publication, durable identity, and bounded explanation, or state plainly why one of those guarantees needs to change.
-
-Implementation work should follow the V1 release boundary rather than pulling roadmap features into the first compatibility promise. In particular, the public SQL API requires `external_graph_refresh` major 1 through `pgtrickle.integration_capabilities()` and a shared conformance suite for graph contracts, transactional refresh, rollback, concurrency, source boundaries, durable `EXTERNAL` orchestration, clone isolation, and recovery.
+Useful contributions include concrete matching failures, clearer explanations, reproducible installation problems, and recovery cases. When reporting a problem, include the extension versions, source and binary identities when available, the smallest reproducible definition, and the relevant result code. Remove personal data before sharing a fixture. See [Troubleshooting](docs/how-to/troubleshoot.md#prepare-a-useful-problem-report) for a practical checklist. For implementation work, follow [AGENTS.md](AGENTS.md) and use the existing [test commands](justfile) and [CI workflow](.github/workflows/ci.yml).
 
 ## License
 
-`pg_mdm` is licensed under the [Apache License 2.0](LICENSE).
+pg_mdm is licensed under the [Apache License 2.0](LICENSE).
